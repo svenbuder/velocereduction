@@ -1,0 +1,1 @@
+# veloce_luminosa_reduction
