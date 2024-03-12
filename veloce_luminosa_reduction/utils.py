@@ -1,13 +1,36 @@
+from . import config
+
 import numpy as np
 import glob
+from scipy.interpolate import interp1d
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
-
+from astropy.io import fits
 
 def match_month_to_date(date):
     months = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec']
     
     return(months[int(date[2:-2])-1])
+
+def read_veloce_fits_image_and_metadata(file_path):
+
+    # Read relevant information from FITS file
+    metadata = dict()
+    
+    fits_file = fits.open(file_path)
+
+    full_image = fits_file[0].data
+    for key in ['UTMJD','MEANRA','MEANDEC','EXPTIME']:
+        metadata[key] = fits_file[0].header[key]
+    if 'DETA3X' in fits_file[0].header:
+        readout_mode = '4Amp'
+        metadata['READOUT'] = '4Amp'
+    else:
+        readout_mode = '2Amp'
+        metadata['READOUT'] = '2Amp'
+    fits_file.close()
+
+    return(full_image, metadata)
 
 def identify_calibration_and_science_runs(date, raw_data_dir):
     
@@ -107,6 +130,11 @@ def identify_calibration_and_science_runs(date, raw_data_dir):
                         science_runs[run_object] = [run]
                         
     return(calibration_runs, science_runs)
+
+def interpolate_spectrum(wavelength, flux, target_wavelength):
+    """Interpolate the spectrum to a new wavelength grid."""
+    interpolation_function = interp1d(wavelength, flux, bounds_error=False, fill_value="extrapolate")
+    return interpolation_function(target_wavelength)
 
 
 def wavelength_to_rgb(wavelength, gamma=1.0):
