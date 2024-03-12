@@ -2,6 +2,10 @@ impory nump as np
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 
+def match_month_to_night(night = '240219'):
+    months = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec']
+    
+    return(night, months[int(night[2:-2])-1])
 
 
 def wavelength_to_rgb(wavelength, gamma=1.0):
