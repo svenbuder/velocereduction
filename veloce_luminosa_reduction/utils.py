@@ -7,10 +7,28 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 from astropy.io import fits
 
+def radial_velocity_shift(radial_velocity_in_kms, wavelength_array):
+    """
+    shift wavelength array with rv_value in km/s
+    """
+    return(wavelength_array / (1.+radial_velocity_in_kms/299792.458))
+
 def match_month_to_date(date):
     months = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec']
     
     return(months[int(date[2:-2])-1])
+
+def polynomial_function(x, *coeffs):
+    """
+    Polynomial function.
+    :param x: Independent variable (wavelength or pixel number).
+    :param coeffs: Coefficients of the polynomial.
+    :return: Calculated y values.
+    """
+    y = np.zeros_like(x,dtype=float)
+    for i, coeff in enumerate(coeffs):
+        y += coeff * x**i
+    return y
 
 def read_veloce_fits_image_and_metadata(file_path):
 
