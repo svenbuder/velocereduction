@@ -15,8 +15,9 @@ setup(
         'astropy'
     ],
     # Metadata
-    author='Sven buder'
+    author='Sven buder',
     author_email='sven.buder@anu.edu.au',
     description='A package for reducing CCD images from the Veloce echelle spectrograph',
     license='MIT',
-    keywords='astronomy spectroscopy data-reduction'
+    keywords='astronomy spectroscopy data-reduction',
+)
