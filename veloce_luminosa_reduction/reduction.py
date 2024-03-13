@@ -144,7 +144,7 @@ def extract_initial_order_ranges_and_coeffs():
             line = fp.readline()
             cnt += 1
 
-    with open('../veloce_luminosa_reduction/veloce_reference_data/rosso-lc-m65-104-all.txt') as fp:
+    with open('../veloce_luminosa_reduction/veloce_reference_data/rosso-th-m65-104-all.txt') as fp:
         line = fp.readline()
         cnt = 0
         while line:
@@ -156,6 +156,9 @@ def extract_initial_order_ranges_and_coeffs():
                 initial_order_coeffs['ccd_3_order_'+str(order)] = [float(coeff) for coeff in line[10:-1].split(' ')]
             line = fp.readline()
             cnt += 1
+
+    # with open('../veloce_luminosa_reduction/veloce_reference_data/verde-lc-m104-135-all.txt') as fp:
+    # with open('../veloce_luminosa_reduction/veloce_reference_data/rosso-lc-m65-104-all.txt') as fp:
 
     return(initial_order_ranges, initial_order_coeffs)
 
