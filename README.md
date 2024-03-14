@@ -63,7 +63,7 @@ If you want to use the spectrum normaliation feature with synthetic spectra from
 - Korg in Julia
 - juliacall (python package) to use Korg in python
 
-For further information on julia and Korg, take a look at the [https://ajwheeler.github.io/Korg.jl/stable/](Korg Installation Instructions).
+For further information on julia and Korg, take a look at the [Korg Installation Instructions](https://ajwheeler.github.io/Korg.jl/stable/).
 
 ## Contributing
 
