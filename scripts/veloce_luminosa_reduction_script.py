@@ -381,6 +381,7 @@ def process_objects(date, object_name, master_flats, science_runs):
         plt.tight_layout()
         Path(config.working_directory+'reduced_data/'+config.date+'/diagnostic_plots/'+str(run)).mkdir(parents=True, exist_ok=True)
         plt.savefig(config.working_directory+'reduced_data/'+config.date+'/diagnostic_plots/'+str(run)+'/'+config.date+'_'+str(run)+'_'+object_name+'_rainbow.pdf',dpi=200,bbox_inches='tight')
+        plt.savefig(config.working_directory+'reduced_data/'+config.date+'/diagnostic_plots/'+str(run)+'/'+config.date+'_'+str(run)+'_'+object_name+'_rainbow.png',dpi=200,bbox_inches='tight')
         plt.close()
 
         print('\nReduction of '+object_name+' complete')
