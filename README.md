@@ -33,7 +33,7 @@ As this package is still in heavy development, this approach ensures that any mo
 2. With the data in place, proceed to the `scripts/` directory, where you will find Python scripts (`.py`) and Jupyter notebooks (`.ipynb`) designed for data reduction:
 
 ```shell
-python veloce_luminosa_reduction_script.py 240220 Halo11 --working_directory /Users/buder/git/veloce_luminosa_reduction/ --debug
+python veloce_luminosa_reduction_script.py 240219 HIP71683 --working_directory /Users/buder/git/veloce_luminosa_reduction/ --debug
 ```
 
 These scripts perform a series of reduction steps including calibration, spectral extraction, normalisation, and merging. The process is configured to be flexible, catering to different data sets and objectives.
