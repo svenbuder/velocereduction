@@ -125,9 +125,9 @@ def extract_initial_order_ranges_and_coeffs():
             if cnt % 4 == 0:
                 split_lines = line[:-1].split(' ')
                 order = int(split_lines[0])
-                initial_order_ranges['ccd_1_order_'+str(order)] = np.arange(int(split_lines[1]),int(split_lines[2]))
+                initial_order_ranges['ccd_1_order_'+ str(order)] = np.arange(int(split_lines[1]),int(split_lines[2]))
             if cnt % 4 == 1:
-                initial_order_coeffs['ccd_1_order_'+str(order)] = [float(coeff) for coeff in line[10:-1].split(' ')]
+                initial_order_coeffs['ccd_1_order_'+ str(order)] = [float(coeff) for coeff in line[10:-1].split(' ')]
             line = fp.readline()
             cnt += 1
 
@@ -138,9 +138,9 @@ def extract_initial_order_ranges_and_coeffs():
             if cnt % 4 == 0:
                 split_lines = line[:-1].split(' ')
                 order = int(split_lines[0])
-                initial_order_ranges['ccd_2_order_'+str(order)] = np.arange(int(split_lines[1]), int(split_lines[2]))
+                initial_order_ranges['ccd_2_order_'+ str(order)] = np.arange(int(split_lines[1]), int(split_lines[2]))
             if cnt % 4 == 1:
-                initial_order_coeffs['ccd_2_order_'+str(order)] = [float(coeff) for coeff in line[10:-1].split(' ')]
+                initial_order_coeffs['ccd_2_order_'+ str(order)] = [float(coeff) for coeff in line[10:-1].split(' ')]
             line = fp.readline()
             cnt += 1
 
@@ -151,9 +151,13 @@ def extract_initial_order_ranges_and_coeffs():
             if cnt % 4 == 0:
                 split_lines = line[:-1].split(' ')
                 order = int(split_lines[0])
-                initial_order_ranges['ccd_3_order_'+str(order)] = np.arange(int(split_lines[1]), int(split_lines[2]))
+                if order < 100:
+                    order_str = '0'+str(order)
+                else:
+                    order_str = str(order)
+                initial_order_ranges['ccd_3_order_'+ str(order)] = np.arange(int(split_lines[1]), int(split_lines[2]))
             if cnt % 4 == 1:
-                initial_order_coeffs['ccd_3_order_'+str(order)] = [float(coeff) for coeff in line[10:-1].split(' ')]
+                initial_order_coeffs['ccd_3_order_'+ str(order)] = [float(coeff) for coeff in line[10:-1].split(' ')]
             line = fp.readline()
             cnt += 1
 
