@@ -42,11 +42,27 @@ These scripts perform a series of reduction steps including calibration, spectra
 
 3. After running the reduction scripts, the output will be systematically organized in `reduced_data/YYMMDD`, corresponding to each night of observation.
 
-## Key Features
+## Workflow
 
-- **Data Calibration**: Applies master flats and wavelength calibration for accurate spectral reduction.
-- **Spectral Extraction and normalisation**: Extracts and normalizes spectra, with support for synthetic spectrum comparison.
-- **Visualization**: Generates diagnostic plots, including high-resolution rainbow plots, to assess the quality of the reduced spectra.
+### Identification of calibration and science runs + tramlines extractions
+- Identify calibration runs and science runs from log files.
+- For calibration frames, the following are hard-coded to be use:
+   - Flat_60.0 (Azzurro), Flat_1.0 (Verde), Flat_0.1 (Rosso)
+   - FibTh_180.0 (Azzurro), FibTh_60.0 (Verde), FibTh_15.0 (Rosso)
+   - SimLC (Verde), SimLC (Rosso)
+   - Dark not yet implemented
+- Identify overscan region and its RMS, subtract overscan and trim image
+- Join image of same type: calculate median image for calibration runs; co-add images for science runs
+- Extract tramlines: use predefined regions from Chris Tinney to identify pixels for each order that will be co-added
+- Calculate rough SNR: use sqrt(counts) + read noise, where read_noise is calculated from maximum overscan RMS * nr of pixels. For science runs also multiply read noise by nr of runs, since they are co-added.
+- Safe files as minimal*.fits with one extension per order. Each order has a data table with 6x4128 entries for wave (at this stage only placeholder), science, science_noise, flat, thxe, and lc. ccd and orders can be identified from the FITS extension "EXTNAME" in the form of "CCD_3_ORDER_93" for CCD3's 93rd order.
+
+### Wavelength calibration
+- Read in the minimal*.fits
+- Loop over each order and use the preidentified thxe pixel -> wavelength combinations to fit a 4th order polynomial wavelength solution.
+- This is currently a static solution (assuming and hoping that the pixel -> wavelength positions do not change over the years)
+- LC is currently not used to improve wavelength solution
+- Overwrite wave placeholder and save minimal*.fits
 
 ## Dependencies
 
