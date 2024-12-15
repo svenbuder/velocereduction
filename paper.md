@@ -24,6 +24,8 @@ bibliography: paper.bib
 
 Summary text of Veloce. Include citations to @Case2018 for the IFU Fibre feed and @Gilbert2018 for Rosso as well as @Taylor2024 for the upgrade of Verde and Azzurro.
 
+![Example spectrum of alfCen A taken with Veloce.](reduced_data/240219/diagnostic_plots/0141/240219_0141_HIP71683_rainbow.png){ width=50% }
+
 # Statement of need
 
 This is needed for reducing Veloce spectra quickly.
