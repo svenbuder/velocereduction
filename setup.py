@@ -1,18 +1,15 @@
 from setuptools import setup, find_packages
 
 setup(
-    name='veloce_luminosa_reduction',
-    version='0.1',
+    name='VeloceReduction',
+    version='0.2.0',
     packages=find_packages(),
-    entry_points={
-        'console_scripts': [
-            'veloce_luminosa_reduction=scripts.veloce_luminosa_reduction:main',
-        ],
-    },
     # Add other package dependencies as needed
     install_requires=[
         'numpy',
-        'astropy'
+        'astropy',
+        'scipy',
+        'matplotlib'
     ],
     # Metadata
     author='Sven buder',
