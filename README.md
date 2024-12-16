@@ -24,6 +24,13 @@ As this package is still in heavy development, you may need to update the packag
 pip install --upgrade https://github.com/svenbuder/VeloceReduction.git
 ```
 
+These options may fail on computers where you do not have access to `/tmp`. In that case, you have to clone the repository first and then install:
+```shell
+git clone https://github.com/svenbuder/VeloceReduction.git
+cd VeloceReduction
+pip install .
+```
+
 ## Usage Instructions
 
 ### Tutorial
