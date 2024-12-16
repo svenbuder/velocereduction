@@ -31,7 +31,8 @@ def calibrate_wavelength(science_object, create_overview_pdf=False):
                 
                 # Note: Some orders may either not exists or cannot be wavelength calibrated.
                 if order_name not in [
-                    'ccd_2_order_133',
+                    'ccd_1_order_138', # N/A
+                    'ccd_1_order_166', # N/A
                     'ccd_2_order_134',
                     'ccd_2_order_135',
                     'ccd_2_order_136',
@@ -42,8 +43,8 @@ def calibrate_wavelength(science_object, create_overview_pdf=False):
                     'ccd_3_order_65',
                     'ccd_3_order_66',
                     'ccd_3_order_67',
-                    'ccd_3_order_68',
-                    'ccd_3_order_69',
+                    'ccd_3_order_68', # N/A
+                    'ccd_3_order_69', # N/A
                     'ccd_3_order_82',
                     'ccd_3_order_83',
                     'ccd_3_order_84',
@@ -53,11 +54,6 @@ def calibrate_wavelength(science_object, create_overview_pdf=False):
                     'ccd_3_order_88',
                     'ccd_3_order_89',
                     'ccd_3_order_90',
-                    'ccd_3_order_96',
-                    'ccd_3_order_97',
-                    'ccd_3_order_98',
-                    'ccd_3_order_99',
-                    'ccd_3_order_100',
                 ]:
                 
                     try:
