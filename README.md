@@ -9,9 +9,9 @@ Below are two reduced spectra of the solar-like star alpha Centauri A (HIP71683,
   <img src="./VeloceReduction/veloce_reference_data/Veloce_HD140283.png" width="30%"/>
 </p>
 
-> :warning: **Warning:** THIS PACKAGE IS STILL UNDER DEVELOPMENT AND DOES NOT YET INCLUDE ALL NECESSARY FEATURES, AND WILL MOST LIKELY FAIL TO RUN.
-
 ## Installation
+
+> :warning: **Warning:** THIS PACKAGE IS STILL UNDER DEVELOPMENT AND DOES NOT YET INCLUDE ALL NECESSARY FEATURES.
 
 To install this package, we recommend cloning the repository and installing it in development mode to facilitate updates and customization. Please follow the steps below:
 
