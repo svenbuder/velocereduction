@@ -16,5 +16,11 @@ setup(
     author_email='sven.buder@anu.edu.au',
     description='A package for reducing CCD images from the Veloce echelle spectrograph',
     license='MIT',
+    url = "https://github.com/svenbuder/VeloceReduction"
+    classifiers = [
+        "Programming Language :: Python :: 3",
+        "License :: OSI Approved :: MIT License",
+        "Operating System :: OS Independent",
+    ],
     keywords='astronomy spectroscopy data-reduction',
 )

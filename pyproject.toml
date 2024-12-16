@@ -1,29 +1,3 @@
 [build-system]
-requires = [
-    "setuptools>=64",
-    "wheel"
-]
+requires = ["setuptools", "wheel"]
 build-backend = "setuptools.build_meta"
-
-
-[tool.setuptools]
-name = "VeloceReduction"
-version = "0.2.0"
-author = "Sven Buder"
-author_email = "sven.buder@anu.edu.au"
-description = "A package for reducing CCD images from the Veloce echelle spectrograph"
-long_description = file: README.md
-long_description_content_type = "text/markdown"
-url = "https://github.com/svenbuder/VeloceReduction"
-classifiers = [
-    "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: MIT License",
-    "Operating System :: OS Independent",
-]
-packages = setuptools.find_packages()
-install_requires = [
-    "numpy",
-    "scipy",
-    "astropy",
-    "matplotlib"
-]
