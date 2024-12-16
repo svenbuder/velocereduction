@@ -9,7 +9,7 @@ setup(
         'numpy',
         'astropy',
         'scipy',
-        'matplotlib'
+        'matplotlib',
     ],
     # Metadata
     author='Sven buder',
