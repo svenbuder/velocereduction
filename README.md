@@ -94,6 +94,6 @@ This project is licensed under the MIT License - see the LICENSE.md file for det
 Below is are two reduced spectra of the solar-like star alpha Centauri A (HIP71683, [Fe/H] = 0.20 dex) on the left and the metal-poor star HD 140283 (HIP76976, [Fe/H] = -2.48) on right right. You can also find PDF versions of these plots [here](https://github.com/svenbuder/veloce_luminosa_reduction/blob/main/reduced_data/240219/diagnostic_plots/0141/240219_0141_HIP71683_rainbow.pdf) and [here](https://github.com/svenbuder/veloce_luminosa_reduction/blob/main/reduced_data/240220/diagnostic_plots/0161/240220_0161_HIP76976_rainbow.pdf).
 
 <p align="center">
-  <img src="https://github.com/svenbuder/veloce_luminosa_reduction/blob/main/reduced_data/240219/diagnostic_plots/0141/240219_0141_HIP71683_rainbow.png" width="49%"/>
-  <img src="https://github.com/svenbuder/veloce_luminosa_reduction/blob/main/reduced_data/240220/diagnostic_plots/0161/240220_0161_HIP76976_rainbow.png" width="49%"/>
+  <img src="./VeloceReduction/veloce_reference_data/Veloce_alfCenA.png" width="49%"/>
+  <img src="./VeloceReduction/veloce_reference_data/Veloce_HD140283.png" width="49%"/>
 </p>
