@@ -37,7 +37,7 @@ pip install .
 
 The package comes with an interactive tutorial called VeloceReduction_tutorial.
 
-You can either use this tutorial in Jupyter notebook, that is, [VeloceReduction_tutorial.ipynb]](./VeloceReduction_tutorial.ipynb).  
+You can either use this tutorial in Jupyter notebook, that is, [VeloceReduction_tutorial.ipynb](./VeloceReduction_tutorial.ipynb).  
 
 Or use its executable python version from the command line:
 ```bash
