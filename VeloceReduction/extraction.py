@@ -193,7 +193,12 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, LC = False, Sc
             images['ccd_'+str(ccd)] = np.array(np.median(images['ccd_'+str(ccd)],axis=0),dtype=float)
 
         if Flat:
+            # Normalise so that maximum response = 1
             images['ccd_'+str(ccd)] /= np.nanmax(images['ccd_'+str(ccd)])
+            # Ensure that Flat pixels without value are still available as 1.0
+            images['ccd_'+str(ccd)][np.isnan(images['ccd_'+str(ccd)])] = 1.0
+            # Ensure that Flat pixels with negative value or 0.0 exactly are reset to 1.0
+            images['ccd_'+str(ccd)][np.where(images['ccd_'+str(ccd)] <= 0.0)] = 1.0
 
     counts_in_orders = []
     noise_in_orders = []

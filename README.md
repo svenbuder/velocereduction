@@ -35,14 +35,18 @@ pip install .
 
 ### Tutorial
 
-The package comes with an interactive tutorial file, called [VeloceReduction_tutorial.ipynb](./VeloceReduction_tutorial.ipynb).  
+The package comes with an interactive tutorial called VeloceReduction_tutorial.
 
-```python
-config.date = 'YYMMDD'
-config.working_directory = './'
+You can either use this tutorial in Jupyter notebook, that is, [VeloceReduction_tutorial.ipynb]](./VeloceReduction_tutorial.ipynb).  
+
+Or use its executable python version from the command line:
+```bash
+./VeloceReduction_tutorial.py -d 001122 -wd ./
 ```
 
-By defauly, it is automatically reducing the data of a fabricated observing run on 22nd November 2000, that is, date = '001122' following the YYMMDD notation. Data are actually taken from a real observing run of Arcturus (HIP69673).
+The latter version comes with arguments of date `-d` (or `--date`) in the YYMMDD format and the working directory `-wd` (or `--working_directory`) as well as the `-h` (or `--help`) options.
+
+By default, a hard-coded example with `-d 001122` and `-wd ./` is used to run an example reduction of Arcturs (HIP69673) with minimum files provided as part of the package.
 
 ### Expected format of observations directory
 

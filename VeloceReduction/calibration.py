@@ -1,4 +1,6 @@
 import numpy as np
+np.seterr(divide='ignore', invalid='ignore')
+
 from scipy.optimize import curve_fit
 from astropy.io import fits
 

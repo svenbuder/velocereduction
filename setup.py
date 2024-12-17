@@ -11,6 +11,7 @@ setup(
         'scipy',
         'matplotlib',
     ],
+    scripts=['./VeloceReduction_tutorial.py'],
     # Metadata
     author='Sven buder',
     author_email='sven.buder@anu.edu.au',
