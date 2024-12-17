@@ -31,11 +31,6 @@ def calibrate_wavelength(science_object, create_overview_pdf=False):
                 
                 # Note: Some orders may either not exists or cannot be wavelength calibrated.
                 if order_name not in [
-                    'ccd_2_order_136',
-                    'ccd_2_order_137',
-                    'ccd_2_order_138',
-                    'ccd_2_order_139',
-                    'ccd_2_order_140',
                     'ccd_3_order_82',
                     'ccd_3_order_83',
                     'ccd_3_order_84',
