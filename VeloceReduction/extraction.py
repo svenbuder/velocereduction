@@ -60,9 +60,7 @@ def substract_overscan(full_image,metadata):
 
         overscan_median['q4'] = int(np.median(overscan))
         overscan_rms['q4'] = np.std(overscan - np.median(overscan))
-        print(quadrant4)
         quadrant4 -= overscan_median['q4']
-        print(quadrant4)
 
         trimmed_image = np.hstack([np.vstack([quadrant1,quadrant2]),np.vstack([quadrant4,quadrant3])]).clip(min=0)
 
@@ -107,7 +105,7 @@ def substract_overscan(full_image,metadata):
     #     plt.show()
     #     plt.close()
 
-    return(trimmed_image, overscan_median, overscan_rms)
+    return(trimmed_image, overscan_median, overscan_rms, metadata['READOUT'])
 
 def extract_initial_order_ranges_and_coeffs():
 
@@ -182,7 +180,7 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, LC = False, Sc
         
         for run in runs:
             full_image, metadata = read_veloce_fits_image_and_metadata(config.working_directory+'observations/'+config.date+'/ccd_'+str(ccd)+'/'+config.date[-2:]+match_month_to_date(config.date)+str(ccd)+run+'.fits')
-            trimmed_image, os_median, os_rms = substract_overscan(full_image, metadata)
+            trimmed_image, os_median, os_rms, readout_mode = substract_overscan(full_image, metadata)
             images['ccd_'+str(ccd)].append(trimmed_image)
         
         # For science: sum counts
@@ -232,7 +230,16 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, LC = False, Sc
         # Save the flux from each tramlines in a row; give NaN values to regions without flux
         order_counts = np.zeros(np.shape(images['ccd_'+str(ccd)])[1]); order_counts[:] = np.nan
         order_noise = np.zeros(np.shape(images['ccd_'+str(ccd)])[1]); order_noise[:] = np.nan
-        for x_index, x in enumerate(initial_order_ranges[order]):
+
+        # Because of the extended overscan region in 4Amplifier readout mode, we have to adjust which region we are using the extract the orders from.
+        if readout_mode == '2Amp':
+            order_ranges_adjusted_for_readout_mode = initial_order_ranges[order]
+        elif readout_mode == '4Amp':
+            order_ranges_adjusted_for_readout_mode = initial_order_ranges[order][16:-16]
+        else:
+            raise ValueError('Cannot handle readout_mode other than 2Amp or 4Amp')
+
+        for x_index, x in enumerate(order_ranges_adjusted_for_readout_mode):
             
             counts_in_pixels_to_be_summed = images['ccd_'+str(ccd)][x,order_xrange_begin[x_index]:order_xrange_end[x_index]]
             

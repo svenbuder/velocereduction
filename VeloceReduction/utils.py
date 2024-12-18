@@ -147,6 +147,8 @@ def identify_calibration_and_science_runs(date, raw_data_dir):
                     else:
                         science_runs[run_object] = [run]
                         
+    print('\nThe following science observations were identified: '+', '.join(list(science_runs.keys())))
+
     return(calibration_runs, science_runs)
 
 def interpolate_spectrum(wavelength, flux, target_wavelength):

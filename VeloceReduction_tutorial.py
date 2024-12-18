@@ -51,7 +51,8 @@ def parse_arguments():
 def get_script_input():
     if 'ipykernel' in sys.modules:
         # Assume default values if inside Jupyter
-        jupyter_date = "001122"
+#         jupyter_date = "001122"
+        jupyter_date = "231121"
         jupyter_working_directory = "./"
         print("Running in a Jupyter notebook. Using predefined values")
         args = argparse.Namespace(date=jupyter_date, working_directory=jupyter_working_directory)
@@ -149,7 +150,7 @@ for science_object in list(science_runs.keys()):
             col6_def = fits.Column(name='thxe',    format='E', array=master_thxe[ext_index,:])
             col7_def = fits.Column(name='lc',      format='E', array=master_lc[ext_index,:])
 
-            hdu = fits.BinTableHDU.from_columns([col1_def, col2_def, col3_def, col4_def, col5_def, col6_def, col7_def], name=science_object+'_'+ext_name.lower())
+            hdu = fits.BinTableHDU.from_columns([col1_def, col2_def, col3_def, col4_def, col5_def, col6_def, col7_def], name=ext_name.lower())
 
             # Append the HDU to the HDU list
             hdul.append(hdu)
@@ -172,7 +173,7 @@ for science_object in list(science_runs.keys()):
 for science_object in list(science_runs.keys()):
     try:
         calibrate_wavelength(science_object, create_overview_pdf=False)
-        print('Succesfully calibrated wavelength for '+science_object)
+        print('Succesfully calibrated wavelength without diagnostic plots for '+science_object)
     except:
         print('Failed to calibrate wavelength for '+science_object)
 
@@ -180,7 +181,12 @@ for science_object in list(science_runs.keys()):
 # In[ ]:
 
 
-
+for science_object in list(science_runs.keys()):
+    try:
+        calibrate_wavelength(science_object, create_overview_pdf=True)
+        print('Succesfully calibrated wavelength with diagnostic plots for '+science_object)
+    except:
+        print('Failed to calibrate wavelength for '+science_object)
 
 
 # In[ ]:
