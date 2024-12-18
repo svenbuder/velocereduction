@@ -30,6 +30,7 @@ def calibrate_wavelength(science_object, create_overview_pdf=False):
             for order in range(1,len(file)):
 
                 order_name = file[order].header['EXTNAME'].lower()[len(science_object)+1:]
+                print(order, order_name)
                 
                 try:
 
@@ -43,7 +44,8 @@ def calibrate_wavelength(science_object, create_overview_pdf=False):
                         thxe_pixels_and_wavelengths[:,1],
                         p0 = [np.median(thxe_pixels_and_wavelengths[:,1]), 0.05, 0.0, 0.0, 0.0]
                     )
-                    wavelength_solution_vacuum = polynomial_function(np.arange(len(file[order].data['WAVE_VAC'])),*wavelength_solution_vacuum_coefficients)
+
+                    wavelength_solution_vacuum = polynomial_function(np.arange(len(file[order].data['WAVE_VAC'])) - 2064,*wavelength_solution_vacuum_coefficients)
                     file[order].data['WAVE_VAC'] = wavelength_solution_vacuum*10. # report Å, not nm.
 
                     # Using conversion from Birch, K. P., & Downs, M. J. 1994, Metro, 31, 315

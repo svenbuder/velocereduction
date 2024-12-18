@@ -64,7 +64,7 @@ def substract_overscan(full_image,metadata):
         quadrant4 -= overscan_median['q4']
         print(quadrant4)
 
-        science_image = np.hstack([np.vstack([quadrant1,quadrant2]),np.vstack([quadrant4,quadrant3])]).clip(min=0)
+        trimmed_image = np.hstack([np.vstack([quadrant1,quadrant2]),np.vstack([quadrant4,quadrant3])]).clip(min=0)
 
     if metadata['READOUT'] == '2Amp':
 
