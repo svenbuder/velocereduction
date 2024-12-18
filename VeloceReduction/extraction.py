@@ -246,12 +246,12 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, LC = False, Sc
             order_counts[initial_order_ranges[order][0] + x_index] = np.sum(counts_in_pixels_to_be_summed,axis=0)
             
             # We are making the quick assumption that the read noise is simply the maximum overscan RMS
-            read_noise = np.max([os_rms[region] for region in os_rms.keys()])*np.sqrt(len(counts_in_pixels_to_be_summed))
+            total_read_noise = np.max([os_rms[region] for region in os_rms.keys()])*np.sqrt(len(counts_in_pixels_to_be_summed))
 
             # For science: multiply read noise with nr of runs,
             # since we are coadding frames, rather than using median
             if Science:
-                read_noise*np.sqrt(len(runs))
+                total_read_noise *= np.sqrt(len(runs))
 
             if tramline_debug & Science & (x_index == 2000):
                 print(order)
@@ -266,8 +266,8 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, LC = False, Sc
                 plt.show()
                 plt.close()
                 
-            # noise = sqrt(flux) + read_noise * nr of pixels * nr of runs/exposures
-            order_noise[initial_order_ranges[order][0] + x_index] = np.sqrt(np.sum(counts_in_pixels_to_be_summed,axis=0)) + read_noise
+            # noise = sqrt(flux + pixel_read_noise**2 * nr of pixels * nr of exposures)
+            order_noise[initial_order_ranges[order][0] + x_index] = np.sqrt(np.sum(counts_in_pixels_to_be_summed,axis=0) + total_read_noise**2)
 
         counts_in_orders.append(order_counts)
         noise_in_orders.append(order_noise)
