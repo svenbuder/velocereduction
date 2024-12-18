@@ -171,8 +171,20 @@ for science_object in list(science_runs.keys()):
 
 for science_object in list(science_runs.keys()):
     try:
-        calibrate_wavelength(science_object, create_overview_pdf=True)
+        calibrate_wavelength(science_object, create_overview_pdf=False)
         print('Succesfully calibrated wavelength for '+science_object)
     except:
         print('Failed to calibrate wavelength for '+science_object)
+
+
+# In[ ]:
+
+
+
+
+
+# In[ ]:
+
+
+
 

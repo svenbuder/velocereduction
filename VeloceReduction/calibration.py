@@ -30,7 +30,6 @@ def calibrate_wavelength(science_object, create_overview_pdf=False):
             for order in range(1,len(file)):
 
                 order_name = file[order].header['EXTNAME'].lower()[len(science_object)+1:]
-                print(order, order_name)
                 
                 try:
 
