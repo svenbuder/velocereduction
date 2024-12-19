@@ -22,6 +22,8 @@ from pathlib import Path
 import sys
 import argparse
 
+import matplotlib.pyplot as plt
+
 # VeloceReduction modules and function
 from VeloceReduction import config
 from VeloceReduction.utils import identify_calibration_and_science_runs, polynomial_function
@@ -97,7 +99,8 @@ master_flat, noise = extract_orders(
     ccd1_runs = calibration_runs['Flat_60.0'][:1],
     ccd2_runs = calibration_runs['Flat_1.0'][:1],
     ccd3_runs = calibration_runs['Flat_0.1'][:1],
-    Flat = True
+    Flat = True,
+    #debug_overscan=True
 )
 
 # Extract Master ThXe
@@ -130,7 +133,8 @@ for science_object in list(science_runs.keys()):
             ccd1_runs = science_runs[science_object],
             ccd2_runs = science_runs[science_object],
             ccd3_runs = science_runs[science_object],
-            Science=True
+            Science=True,
+            #debug_overscan=True
         )
 
         # Create a primary HDU and HDU list
@@ -144,11 +148,11 @@ for science_object in list(science_runs.keys()):
             # Define the columns with appropriate formats
             col1_def = fits.Column(name='wave_vac',format='E', array=np.arange(len(science[ext_index,:]),dtype=float))
             col2_def = fits.Column(name='wave_air',format='E', array=np.arange(len(science[ext_index,:]),dtype=float))
-            col3_def = fits.Column(name='science', format='E', array=science[ext_index,:])
-            col4_def = fits.Column(name='science_noise',   format='E', array=science_noise[ext_index,:])
+            col3_def = fits.Column(name='science', format='E', array=science[ext_index,:]/master_flat[ext_index,:])
+            col4_def = fits.Column(name='science_noise',   format='E', array=science_noise[ext_index,:]/master_flat[ext_index,:])
             col5_def = fits.Column(name='flat',    format='E', array=master_flat[ext_index,:])
-            col6_def = fits.Column(name='thxe',    format='E', array=master_thxe[ext_index,:])
-            col7_def = fits.Column(name='lc',      format='E', array=master_lc[ext_index,:])
+            col6_def = fits.Column(name='thxe',    format='E', array=master_thxe[ext_index,:]/master_flat[ext_index,:])
+            col7_def = fits.Column(name='lc',      format='E', array=master_lc[ext_index,:]/master_flat[ext_index,:])
 
             hdu = fits.BinTableHDU.from_columns([col1_def, col2_def, col3_def, col4_def, col5_def, col6_def, col7_def], name=ext_name.lower())
 
@@ -156,8 +160,9 @@ for science_object in list(science_runs.keys()):
             hdul.append(hdu)
 
         # Save to a new FITS file with an extension for each order
-        Path(config.working_directory+'reduced_data/'+config.date+'/'+science_object).mkdir(parents=True, exist_ok=True)    
-        hdul.writeto(config.working_directory+'reduced_data/'+config.date+'/'+science_object+'/veloce_spectra_'+science_object+'_'+config.date+'.fits', overwrite=True)
+        Path(config.working_directory+'reduced_data/'+config.date+'/'+science_object).mkdir(parents=True, exist_ok=True)
+        spectrum_filename = 'veloce_spectra_'+science_object+'_'+config.date+'.fits'
+        hdul.writeto(config.working_directory+'reduced_data/'+config.date+'/'+science_object+'/'+spectrum_filename, overwrite=True)
 
         print('Successfully extracted '+science_object)
 

@@ -58,11 +58,11 @@ def calibrate_wavelength(science_object, create_overview_pdf=False):
                 #print('Calibrated wavelength for '+file[order].header['EXTNAME'])
 
                 if create_overview_pdf:
-                    f, gs = plt.subplots(4,1,figsize=(15,10),sharex=True)
+                    f, gs = plt.subplots(5,1,figsize=(15,10),sharex=True)
                     f.suptitle(config.date+' '+science_object+' '+file[order].header['EXTNAME'])
 
                     ax = gs[0]
-                    ax.plot(file[order].data['SCIENCE']/file[order].data['FLAT'], lw=1)
+                    ax.plot(file[order].data['SCIENCE'], lw=1)
                     ax.set_yscale('log')
                     ax.set_ylabel('Science')
 
@@ -79,21 +79,20 @@ def calibrate_wavelength(science_object, create_overview_pdf=False):
                     ax.set_ylabel('Science Signal-to-Noise')
 
                     ax = gs[2]
-                    ax.plot(file[order].data['THXE']/file[order].data['FLAT'], lw=1)
+                    ax.plot(file[order].data['FLAT'], lw=1)
+                    ax.set_ylabel('Flat')
+
+                    ax = gs[3]
+                    ax.plot(file[order].data['THXE'], lw=1)
                     ax.set_yscale('log')
                     ax.set_ylabel('ThXe')
 
-                    ax = gs[3]
-                    ax.plot(file[order].data['LC']/file[order].data['FLAT'], lw=0.5)
+                    ax = gs[4]
+                    ax.plot(file[order].data['LC'], lw=0.5)
                     ax.set_yscale('log')
                     ax.set_ylabel('Lc')
                     ax.set_xlabel('Pixel')
                     ax.set_xticks(ticks,labels=ticks,rotation=90)
-
-                    wavelength = file[order].data['WAVE_AIR']
-                    science = file[order].data['SCIENCE']/file[order].data['FLAT']
-                    thxe = file[order].data['THXE']/file[order].data['FLAT']
-                    lc = file[order].data['LC']/file[order].data['FLAT']
 
                     pdf.savefig()
                     plt.close()

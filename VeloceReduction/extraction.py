@@ -1,12 +1,26 @@
 import numpy as np
+import matplotlib.pyplot as plt
+
 from . import config
 from .utils import read_veloce_fits_image_and_metadata, match_month_to_date, polynomial_function
 
-def substract_overscan(full_image,metadata):
+def substract_overscan(full_image, metadata, debug_overscan = False):
 
     # Identify overscan region and subtract overscan while reporting median overscan and overscan root-mean-square
     overscan_median = dict()
     overscan_rms = dict()
+    
+    if debug_overscan:
+        plt.figure()
+        plt.hist(full_image.flatten(),bins=np.linspace(975,1025,100))
+        plt.show()
+        plt.close()
+
+        plt.figure(figsize=(10,10))
+        s = plt.imshow(full_image, vmin=975, vmax = 1025)
+        plt.colorbar(s)
+        plt.show()
+        plt.close()
 
     if metadata['READOUT'] == '4Amp':
 
@@ -19,8 +33,11 @@ def substract_overscan(full_image,metadata):
         overscan[:2120,2112:2112+32] = True
         overscan = full_image[overscan]
 
+        # We report the median overscan
         overscan_median['q1'] = int(np.median(overscan))
-        overscan_rms['q1'] = np.std(overscan - np.median(overscan))
+        # And we calculate a robust standard deviation, i.e.,
+        # half the difference between 16th and 84th percentile
+        overscan_rms['q1'] = np.diff(np.percentile(overscan,q=[16,84]))/2
         quadrant1 -= overscan_median['q1']
 
         # Quadrant 2: 2120: and :2112
@@ -33,7 +50,7 @@ def substract_overscan(full_image,metadata):
         overscan = full_image[overscan]
 
         overscan_median['q2'] = int(np.median(overscan))
-        overscan_rms['q2'] = np.std(overscan - np.median(overscan))
+        overscan_rms['q2'] = np.diff(np.percentile(overscan,q=[16,84]))/2
         quadrant2 = (quadrant2 - overscan_median['q2'])
 
         # Quadrant 3: 2120: and 2112:
@@ -46,7 +63,7 @@ def substract_overscan(full_image,metadata):
         overscan = full_image[overscan]
 
         overscan_median['q3'] = int(np.median(overscan))
-        overscan_rms['q3'] = np.std(overscan - np.median(overscan))
+        overscan_rms['q3'] = np.diff(np.percentile(overscan,q=[16,84]))/2
         quadrant3 -= overscan_median['q3']
 
         # Quadrant 4: :2120 and 2112:
@@ -59,7 +76,7 @@ def substract_overscan(full_image,metadata):
         overscan = full_image[overscan]
 
         overscan_median['q4'] = int(np.median(overscan))
-        overscan_rms['q4'] = np.std(overscan - np.median(overscan))
+        overscan_rms['q4'] = np.diff(np.percentile(overscan,q=[16,84]))/2
         quadrant4 -= overscan_median['q4']
 
         trimmed_image = np.hstack([np.vstack([quadrant1,quadrant2]),np.vstack([quadrant4,quadrant3])]).clip(min=0)
@@ -75,7 +92,7 @@ def substract_overscan(full_image,metadata):
         overscan[:,2112-32:2112] = True # right
         overscan = full_image[overscan]
         overscan_median['q1'] = int(np.median(overscan))
-        overscan_rms['q1'] = np.std(overscan - np.median(overscan))
+        overscan_rms['q1'] = np.diff(np.percentile(overscan,q=[16,84]))/2
         quadrant1 -= overscan_median['q1']
 
         # Quadrant 2: 2088: and :2112
@@ -87,23 +104,20 @@ def substract_overscan(full_image,metadata):
         overscan[:,-32:] = True # left        
         overscan = full_image[overscan]
         overscan_median['q2'] = int(np.median(overscan))
-        overscan_rms['q2'] = np.std(overscan - np.median(overscan))
+        overscan_rms['q2'] = np.diff(np.percentile(overscan,q=[16,84]))/2
         quadrant2 = (quadrant2 - overscan_median['q2'])
 
         trimmed_image = np.hstack([quadrant1,quadrant2]).clip(min=0)
 
-    # if config.debug:
-    #     plt.figure(figsize=(10,10))
-    #     s = plt.imshow(full_image,vmax=2200)
-    #     plt.colorbar(s)
-    #     plt.show()
-    #     plt.close()
-
-    #     plt.figure(figsize=(10,10))
-    #     s = plt.imshow(trimmed_image,vmax=1200)
-    #     plt.colorbar(s)
-    #     plt.show()
-    #     plt.close()
+    if debug_overscan:
+        plt.figure(figsize=(10,10))
+        s = plt.imshow(trimmed_image, vmin = -5, vmax = 100)
+        plt.colorbar(s)
+        plt.show()
+        plt.close()
+        
+    if debug_overscan:
+        print(overscan_median, overscan_rms, metadata['READOUT'])
 
     return(trimmed_image, overscan_median, overscan_rms, metadata['READOUT'])
 
@@ -161,7 +175,7 @@ def extract_initial_order_ranges_and_coeffs():
 
     return(initial_order_ranges, initial_order_coeffs)
 
-def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, LC = False, Science = False, tramline_debug = False):
+def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, LC = False, Science = False, debug_tramlines = False, debug_overscan=False):
     
     # Extract initial order ranges and coefficients
     initial_order_ranges, initial_order_coeffs = extract_initial_order_ranges_and_coeffs()
@@ -180,7 +194,7 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, LC = False, Sc
         
         for run in runs:
             full_image, metadata = read_veloce_fits_image_and_metadata(config.working_directory+'observations/'+config.date+'/ccd_'+str(ccd)+'/'+config.date[-2:]+match_month_to_date(config.date)+str(ccd)+run+'.fits')
-            trimmed_image, os_median, os_rms, readout_mode = substract_overscan(full_image, metadata)
+            trimmed_image, os_median, os_rms, readout_mode = substract_overscan(full_image, metadata, debug_overscan)
             images['ccd_'+str(ccd)].append(trimmed_image)
         
         # For science: sum counts
@@ -201,7 +215,7 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, LC = False, Sc
     counts_in_orders = []
     noise_in_orders = []
     
-    if tramline_debug:
+    if debug_tramlines:
         plt.figure(figsize=(15,15))
         s = plt.imshow(images['ccd_2'], vmin = 1, vmax = 20, cmap='Greys',aspect=5)
         plt.colorbar(s)
@@ -222,7 +236,7 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, LC = False, Sc
         order_xrange_begin = np.array(polynomial_function(np.arange(np.shape(images['ccd_'+str(ccd)])[0]),*initial_order_coeffs[order])+left,dtype=int)
         order_xrange_end   = np.array(polynomial_function(np.arange(np.shape(images['ccd_'+str(ccd)])[0]),*initial_order_coeffs[order])+right,dtype=int)
 
-        if tramline_debug:
+        if debug_tramlines:
             if ccd == '2':
                 plt.plot(order_xrange_begin,np.arange(len(order_xrange_begin)),c='C0',lw=0.5)
                 plt.plot(order_xrange_end,np.arange(len(order_xrange_begin)),c='C1',lw=0.5)
@@ -253,7 +267,7 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, LC = False, Sc
             if Science:
                 total_read_noise *= np.sqrt(len(runs))
 
-            if tramline_debug & Science & (x_index == 2000):
+            if debug_tramlines & Science & (x_index == 2000):
                 print(order)
                 print('x_index:      ',2000)
                 print('sum(counts):  ',np.sum(counts_in_pixels_to_be_summed,axis=0))
@@ -272,7 +286,7 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, LC = False, Sc
         counts_in_orders.append(order_counts)
         noise_in_orders.append(order_noise)
 
-    if tramline_debug:
+    if debug_tramlines:
         plt.xlim(2500,4200)
         plt.ylim(2000,2500)
         plt.show()
