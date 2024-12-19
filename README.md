@@ -99,7 +99,10 @@ reduced_data/                                               # Directory where th
 - Identify overscan region and its RMS, subtract overscan and trim image
 - Join image of same type: calculate median image for calibration runs; co-add images for science runs
 - Extract tramlines: use predefined regions from Chris Tinney to identify pixels for each order that will be co-added
-- Calculate rough SNR: use sqrt(counts) + read noise, where read_noise is calculated from maximum overscan RMS * nr of pixels. For science runs also multiply read noise by nr of runs, since they are co-added.
+- Calculate rough SNR: use sqrt(counts + total_read noise^2), where read_noise is calculated from maximum overscan RMS (across full CCD) * sqrt(nr of pixels). For science runs also multiply read noise by sqrt(nr of runs), since they are co-added. Using the summed signal $S = \sum_{px=1}^{n_{px}} \sum_{exp=1}^{n_{exp}} S_{px,exp}$ across the number of pixels $n_{px}$ and $n_{exp}$ exposures, and $N_{read,px}$ is the readout noise for a single pixel, we calculate the total noise $N$ in a wavelength data point as:
+  
+$$N = \sqrt{S + N_{read,px}^2 * n_{px} * n_{exp}},$$  
+
 - Safe files as veloce_spectra_SCIENCENAME_YYMMDD.fits with one extension per order. Each order has a data table with 6x4128 entries for wave (at this stage only placeholder), science, science_noise, flat, thxe, and lc. ccd and orders can be identified from the FITS extension "EXTNAME" in the form of "CCD_3_ORDER_93" for CCD3's 93rd order.
 
 ### Wavelength calibration
