@@ -2,7 +2,9 @@ from . import config
 
 import numpy as np
 import glob
+from scipy.special import wofz
 from scipy.interpolate import interp1d
+from scipy.optimize import curve_fit
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 from astropy.io import fits
@@ -11,6 +13,72 @@ from astropy.coordinates import SkyCoord, EarthLocation
 import astropy.units as u
 SSO = EarthLocation.of_site('Siding Spring Observatory')
 
+def radial_velocity_from_line_shift(line_centre_observed, line_centre_rest):
+    return((line_centre_observed - line_centre_rest) / line_centre_rest * 299792.458)
+
+def voigt_absorption_profile(wavelength, line_centre, line_depth, sigma, gamma):
+    """
+    Returns the Voigt line shape at wavelengths `wavelength` for an absorption line with a continuum.
+
+    Parameters:
+        wavelength : array-like
+            Wavelength array over which to compute the Voigt profile.
+        line_centre : float
+            Central wavelength of the absorption line.
+        line_depth : float
+            The depth of the absorption relative to the continuum.
+        sigma : float
+            Gaussian standard deviation.
+        gamma : float
+            Lorentzian half-width at half-maximum (HWHM).
+    """
+    z = ((wavelength - line_centre) + 1j*gamma) / (sigma*np.sqrt(2))
+    profile = wofz(z).real
+    profile = profile / max(profile)  # Normalize profile to max 1
+    return 1 - line_depth * profile
+
+def fit_voigt_absorption_profile(wavelength, flux, initial_guess):
+    """
+    Fit a Gaussian to a spectrum.
+
+    :param wavelength: Wavelength array.
+    :param flux: Flux array.
+    :param initial_guess: Initial guess for the Gaussian fit.
+
+    :return: Fitted Gaussian parameters.
+    """
+
+    # Fit a Gaussian to the spectrum
+    popt, pcov = curve_fit(voigt_absorption_profile, wavelength, flux, p0=initial_guess)
+    return (popt, pcov)
+
+def gaussian_absorption_profile(wavelength, line_centre, line_depth, line_sigma):
+    """
+    Gaussian function.
+
+    :param wavelength: Wavelength array.
+    :param line_centre: Centre of the Gaussian line.
+    :param line_sigma: Sigma of the Gaussian line.
+    :param line_depth: Depth of the Gaussian line.
+
+    :return: Gaussian line.
+    """
+    return 1 - line_depth * np.exp(-0.5 * ((wavelength - line_centre) / line_sigma) ** 2)
+
+def fit_gaussian_absorption_profile(wavelength, flux, initial_guess):
+    """
+    Fit a Gaussian to a spectrum.
+
+    :param wavelength: Wavelength array.
+    :param flux: Flux array.
+    :param initial_guess: Initial guess for the Gaussian fit.
+
+    :return: Fitted Gaussian parameters.
+    """
+
+    # Fit a Gaussian to the spectrum
+    popt, pcov = curve_fit(gaussian_absorption_profile, wavelength, flux, p0=initial_guess)
+    return (popt, pcov)
 
 def calculate_barycentric_velocity_correction(science_header):
     """
