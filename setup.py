@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='VeloceReduction',
-    version='0.2.0',
+    version='0.3.0',
     packages=find_packages(),
     # Add other package dependencies as needed
     install_requires=[
