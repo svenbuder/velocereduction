@@ -114,8 +114,9 @@ $$N = \sqrt{S + N_{read,px}^2 * n_{px} * n_{exp}},$$
 - Loop over each order and use the preidentified thxe pixel -> wavelength combinations to fit a 4th order polynomial wavelength solution in vacuum (WAVE_VAC).
 - This is currently a static solution (assuming and hoping that the pixel -> wavelength positions do not change over the years)
 - Optional (but activated by default): Apply barycentric velocity correction based on FITS header information on position and observing time (Ra, Dec, UTMJD)
-- Calculate the wavelength also in air (WAVE_AIR).
+- Optional (but activated by default): Fit Voigt line profiles to Halpha and two of the CaT lines to estimate rough radial velocity and at to FITS header (VRAD and E_VRAD).
 - LC is currently not used to improve wavelength solution
+- Calculate the wavelength also in air (WAVE_AIR).
 - Overwrite WAVE_VAC and WAVE_AIR placeholders and update veloce_spectra_SCIENCENAME_YYMMDD.fits
 
 ## Dependencies
