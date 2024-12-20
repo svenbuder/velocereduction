@@ -74,7 +74,7 @@ def plot_wavelength_calibrated_order_data(order, science_object, file, overview_
     """
     
     f, gs = plt.subplots(5,1,figsize=(15,10),sharex=True)
-    f.suptitle(config.date+' '+science_object+' '+file[order].header['EXTNAME']+ ' Baryc. Vel. Correction: '+"{:.2f}".fornat(np.round(file[0].header['BARYVEL'],2))+' km/s')
+    f.suptitle(config.date+' '+science_object+' '+file[order].header['EXTNAME']+ ' Baryc. Vel. Correction: '+"{:.2f}".format(np.round(file[0].header['BARYVEL'],2))+' km/s')
 
     ax = gs[0]
     ax.plot(file[order].data['SCIENCE'], lw=1)
