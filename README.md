@@ -134,6 +134,8 @@ Sven Buder (ANU, sven.buder@anu.edu.au)
 
 Contributions to enhance and expand this package are highly encouraged. Please feel free to fork the repository, make your improvements, and submit a pull request.
 
+Upon launching a pull request, a GitHub Action to run through an test reduction in python for the made-up night 001122 to reduce 2 actual observations of Arcturus (HIP 69673) is started. Succesfully passing this test is a requirement for merging your file changes into the main branch.
+
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](./LICENSE) file for details.
