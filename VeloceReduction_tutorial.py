@@ -26,9 +26,7 @@ import matplotlib.pyplot as plt
 
 # VeloceReduction modules and function
 from VeloceReduction import config
-from VeloceReduction.utils import identify_calibration_and_science_runs, polynomial_function
-from VeloceReduction.extraction import extract_orders, extract_initial_order_ranges_and_coeffs
-from VeloceReduction.calibration import calibrate_wavelength
+import VeloceReduction as VR
 
 
 # ## Adjust Date and Directory (possibly via argument parser)
@@ -52,9 +50,16 @@ def parse_arguments():
 
 def get_script_input():
     if 'ipykernel' in sys.modules:
+        
         # Assume default values if inside Jupyter
-#         jupyter_date = "001122"
-        jupyter_date = "231121"
+        jupyter_date = "001122"
+        
+        # 2Amp example
+        #jupyter_date = "240219"
+        
+        # 4Amp example
+        # jupyter_date = "231121"
+        
         jupyter_working_directory = "./"
         print("Running in a Jupyter notebook. Using predefined values")
         args = argparse.Namespace(date=jupyter_date, working_directory=jupyter_working_directory)
@@ -78,7 +83,7 @@ print(f"Date: {args.date}, Working Directory: {args.working_directory}")
 
 
 # Extract the Calibration and Science data from the night log
-calibration_runs, science_runs = identify_calibration_and_science_runs(config.date, config.working_directory+'observations/')
+calibration_runs, science_runs = VR.utils.identify_calibration_and_science_runs(config.date, config.working_directory+'observations/')
 
 
 # ## Extract orders and save in initial FITS files with an extension per order.
@@ -87,7 +92,7 @@ calibration_runs, science_runs = identify_calibration_and_science_runs(config.da
 
 
 # Extract initial order ranges and coefficients
-initial_order_ranges, initial_order_coeffs = extract_initial_order_ranges_and_coeffs()
+initial_order_ranges, initial_order_coeffs = VR.extraction.extract_initial_order_ranges_and_coeffs()
 
 
 # In[ ]:
@@ -95,7 +100,7 @@ initial_order_ranges, initial_order_coeffs = extract_initial_order_ranges_and_co
 
 # Extract Master Flat
 print('Extracting Master Flat')
-master_flat, noise = extract_orders(
+master_flat, noise = VR.extraction.extract_orders(
     ccd1_runs = calibration_runs['Flat_60.0'][:1],
     ccd2_runs = calibration_runs['Flat_1.0'][:1],
     ccd3_runs = calibration_runs['Flat_0.1'][:1],
@@ -105,7 +110,7 @@ master_flat, noise = extract_orders(
 
 # Extract Master ThXe
 print('Extracting Master ThXe')
-master_thxe, noise = extract_orders(
+master_thxe, noise = VR.extraction.extract_orders(
     ccd1_runs = calibration_runs['FibTh_180.0'][:1],
     ccd2_runs = calibration_runs['FibTh_60.0'][:1],
     ccd3_runs = calibration_runs['FibTh_15.0'][:1]
@@ -113,7 +118,7 @@ master_thxe, noise = extract_orders(
 
 # Extract Master LC
 print('Extracting Master LC')
-master_lc, noise = extract_orders(
+master_lc, noise = VR.extraction.extract_orders(
     ccd1_runs = calibration_runs['SimLC'][-1:],
     ccd2_runs = calibration_runs['SimLC'][-1:],
     ccd3_runs = calibration_runs['SimLC'][-1:],
@@ -129,7 +134,7 @@ master_lc, noise = extract_orders(
 for science_object in list(science_runs.keys()):
     print('Extracting '+science_object)
     try:
-        science, science_noise = extract_orders(
+        science, science_noise, science_header = VR.extraction.extract_orders(
             ccd1_runs = science_runs[science_object],
             ccd2_runs = science_runs[science_object],
             ccd3_runs = science_runs[science_object],
@@ -139,6 +144,12 @@ for science_object in list(science_runs.keys()):
 
         # Create a primary HDU and HDU list
         primary_hdu = fits.PrimaryHDU()
+        header = primary_hdu.header
+        header['OBJECT']  = (science_header['OBJECT'], 'Name of observed object in night log')
+        header['UTMJD']   = (science_header['UTMJD'],  'Modified Julian Date of observation')
+        header['MEANRA']  = (science_header['MEANRA'], 'Mean Right Ascension of observed object')
+        header['MEANDEC'] = (science_header['MEANDEC'],'Mean Declination of observed object')        
+        header['BARYVEL'] = ('None',                   'Applied barycentric velocity correction')
         hdul = fits.HDUList([primary_hdu])
 
         # Loop over your extension names and corresponding data arrays
@@ -164,10 +175,10 @@ for science_object in list(science_runs.keys()):
         spectrum_filename = 'veloce_spectra_'+science_object+'_'+config.date+'.fits'
         hdul.writeto(config.working_directory+'reduced_data/'+config.date+'/'+science_object+'/'+spectrum_filename, overwrite=True)
 
-        print('Successfully extracted '+science_object)
+        print('  -> Successfully extracted '+science_object)
 
     except:
-        print('Failed to extract '+science_object)
+        print('  -> Failed to extract '+science_object)
 
 
 # ## Wavelength calibration
@@ -176,22 +187,22 @@ for science_object in list(science_runs.keys()):
 
 
 for science_object in list(science_runs.keys()):
-    try:
-        calibrate_wavelength(science_object, create_overview_pdf=False)
-        print('Succesfully calibrated wavelength without diagnostic plots for '+science_object)
-    except:
-        print('Failed to calibrate wavelength for '+science_object)
+#     try:
+    VR.calibration.calibrate_wavelength(science_object, correct_barycentric_velocity=True, create_overview_pdf=False)
+    print('  -> Succesfully calibrated wavelength without diagnostic plots for '+science_object)
+#     except:
+#         print('  -> Failed to calibrate wavelength for '+science_object)
 
 
 # In[ ]:
 
 
 for science_object in list(science_runs.keys()):
-    try:
-        calibrate_wavelength(science_object, create_overview_pdf=True)
-        print('Succesfully calibrated wavelength with diagnostic plots for '+science_object)
-    except:
-        print('Failed to calibrate wavelength for '+science_object)
+#     try:
+    VR.calibration.calibrate_wavelength(science_object, correct_barycentric_velocity=True, create_overview_pdf=True)
+    print('  -> Succesfully calibrated wavelength with diagnostic plots for '+science_object)
+#     except:
+#         print('  -> Failed to calibrate wavelength for '+science_object)
 
 
 # In[ ]:

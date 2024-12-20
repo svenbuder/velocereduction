@@ -6,14 +6,45 @@ from scipy.interpolate import interp1d
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 from astropy.io import fits
+from astropy.time import Time
+from astropy.coordinates import SkyCoord, EarthLocation
+import astropy.units as u
+SSO = EarthLocation.of_site('Siding Spring Observatory')
 
-def radial_velocity_shift(radial_velocity_in_kms, wavelength_array):
+
+def calculate_barycentric_velocity_correction(science_header):
     """
-    shift wavelength array with rv_value in km/s
+    Calculate the barycentric velocity correction for a given observation (Ra, Dec, UT MJD) at Siding Spring Observatory (SSO).
+
+    :param science_header: Header of the science FITS file.
+
+    :return: Barycentric velocity correction in km/s.
     """
-    return(wavelength_array / (1.+radial_velocity_in_kms/299792.458))
+    object_coordinates = SkyCoord(ra = science_header['MEANRA'], dec = science_header['MEANDEC'], frame="icrs", unit="deg")
+    vbary_corr_kms = object_coordinates.radial_velocity_correction( 
+        kind='barycentric', 
+        obstime = Time(val=science_header['UTMJD'],format='mjd', scale='utc'),
+        location=SSO
+    ).to(u.km/u.s).value
+    return vbary_corr_kms
+
+def velocity_shift(velocity_in_kms, wavelength_array):
+    """
+    Shift wavelength array with rv_value in km/s.
+    :param velocity_in_kms: Radial velocity in km/s.
+    :param wavelength_array: Wavelength array to be shifted.
+    :return: Shifted wavelength array.
+    """
+    return(wavelength_array / (1.+velocity_in_kms/299792.458))
 
 def match_month_to_date(date):
+    """
+    Match the month to the date.
+
+    :param date: Date in the format 'YYYYMMDD'.
+
+    :return: Month in string format.
+    """
     months = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec']
     
     return(months[int(date[2:-2])-1])
@@ -21,8 +52,10 @@ def match_month_to_date(date):
 def polynomial_function(x, *coeffs):
     """
     Polynomial function.
+
     :param x: Independent variable (wavelength or pixel number).
     :param coeffs: Coefficients of the polynomial.
+
     :return: Calculated y values.
     """
     y = np.zeros_like(x,dtype=float)
@@ -31,6 +64,13 @@ def polynomial_function(x, *coeffs):
     return y
 
 def read_veloce_fits_image_and_metadata(file_path):
+    """
+    Read the relevant information from a FITS file.
+
+    :param file_path: Path to the FITS file.
+    
+    :return: Full image and metadata.
+    """
 
     # Read relevant information from FITS file
     metadata = dict()
@@ -38,7 +78,7 @@ def read_veloce_fits_image_and_metadata(file_path):
     fits_file = fits.open(file_path)
 
     full_image = fits_file[0].data
-    for key in ['UTMJD','MEANRA','MEANDEC','EXPTIME']:
+    for key in ['OBJECT','UTMJD','MEANRA','MEANDEC','EXPTIME']:
         metadata[key] = fits_file[0].header[key]
     if 'DETA3X' in fits_file[0].header:
         readout_mode = '4Amp'
@@ -51,6 +91,14 @@ def read_veloce_fits_image_and_metadata(file_path):
     return(full_image, metadata)
 
 def identify_calibration_and_science_runs(date, raw_data_dir):
+    """
+    Identify calibration and science runs from the log file.
+
+    :param date: Date in the format 'YYYYMMDD'.
+    :param raw_data_dir: Path to the raw data directory.
+    
+    :return: Dictionaries with calibration and science runs.
+    """
     
     print('\n=============================================')
     print('\nIdentifying calibration and science runs now\n')
@@ -152,7 +200,16 @@ def identify_calibration_and_science_runs(date, raw_data_dir):
     return(calibration_runs, science_runs)
 
 def interpolate_spectrum(wavelength, flux, target_wavelength):
-    """Interpolate the spectrum to a new wavelength grid."""
+    """
+    Interpolate a spectrum to a target wavelength array.
+
+    :param wavelength: Wavelength array of the input spectrum.
+    :param flux: Flux array of the input spectrum.
+    :param target_wavelength: Target wavelength array.
+    
+    :return: Interpolated flux array
+    """
+
     interpolation_function = interp1d(wavelength, flux, bounds_error=False, fill_value=(1.0,1.0), kind='cubic')
     return interpolation_function(target_wavelength)
 

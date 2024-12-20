@@ -5,6 +5,15 @@ from . import config
 from .utils import read_veloce_fits_image_and_metadata, match_month_to_date, polynomial_function
 
 def substract_overscan(full_image, metadata, debug_overscan = False):
+    """
+    Substract overscan from the full image.
+
+    :param full_image: The full image.
+    :param metadata: The metadata of the image.
+    :param debug_overscan: Whether to show debug plots.
+    
+    :return: The trimmed image, the median overscan, the overscan RMS, and the readout mode.
+    """
 
     # Identify overscan region and subtract overscan while reporting median overscan and overscan root-mean-square
     overscan_median = dict()
@@ -122,6 +131,11 @@ def substract_overscan(full_image, metadata, debug_overscan = False):
     return(trimmed_image, overscan_median, overscan_rms, metadata['READOUT'])
 
 def extract_initial_order_ranges_and_coeffs():
+    """
+    Extract the initial order ranges and coefficients from the reference data.
+
+    :return: Dictionaries with initial order ranges and coefficients.
+    """
 
     initial_order_ranges = dict()
     initial_order_coeffs = dict()
@@ -176,6 +190,20 @@ def extract_initial_order_ranges_and_coeffs():
     return(initial_order_ranges, initial_order_coeffs)
 
 def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, LC = False, Science = False, debug_tramlines = False, debug_overscan=False):
+    """
+    Extract the orders from the CCDs.
+
+    :param ccd1_runs: The runs for CCD 1.
+    :param ccd2_runs: The runs for CCD 2.
+    :param ccd3_runs: The runs for CCD 3.
+    :param Flat: Whether to extract the orders for the flat.
+    :param LC: Whether to extract the orders for the laser comb.
+    :param Science: Whether to extract the orders for the science.
+    :param debug_tramlines: Whether to show debug plots.
+    :param debug_overscan: Whether to show debug plots.
+
+    :return: The counts in the orders and the noise in the orders. If Science is True, also the metadata.
+    """
     
     # Extract initial order ranges and coefficients
     initial_order_ranges, initial_order_coeffs = extract_initial_order_ranges_and_coeffs()
@@ -292,4 +320,7 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, LC = False, Sc
         plt.show()
         plt.close()
         
-    return(np.array(counts_in_orders),np.array(noise_in_orders))
+    if Science:
+        return(np.array(counts_in_orders),np.array(noise_in_orders),metadata)
+    else:
+        return(np.array(counts_in_orders),np.array(noise_in_orders))
