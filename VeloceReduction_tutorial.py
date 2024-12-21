@@ -58,7 +58,7 @@ def get_script_input():
         #jupyter_date = "240219"
         
         # 4Amp example
-        # jupyter_date = "231121"
+        #jupyter_date = "231121"
         
         jupyter_working_directory = "./"
         print("Running in a Jupyter notebook. Using predefined values")
@@ -145,30 +145,43 @@ for science_object in list(science_runs.keys()):
         # Create a primary HDU and HDU list
         primary_hdu = fits.PrimaryHDU()
         header = primary_hdu.header
-        header['OBJECT']  = (science_header['OBJECT'], 'Name of observed object in night log')
-        header['UTMJD']   = (science_header['UTMJD'],  'Modified Julian Date of observation')
-        header['MEANRA']  = (science_header['MEANRA'], 'Mean Right Ascension of observed object')
-        header['MEANDEC'] = (science_header['MEANDEC'],'Mean Declination of observed object')        
-        header['BARYVEL'] = ('None',                   'Applied barycentric velocity correction')
-        header['VRAD']    = ('None',                   'Radial velocity estimate')
-        header['E_VRAD']  = ('None',                   'Uncertainty of radial velocity estimate')
+        header['OBJECT']             = (science_header['OBJECT'], 'Name of observed object in night log')
+        header['HIERARCH SOURCE_ID'] = (-1,                       'Gaia DR3 source_id')
+        header['HIERARCH TMASS_ID']  = ('HHMMSSSS-DDMMSSS',       'Identifier in 2MASS catalog')
+        header['UTMJD']              = (science_header['UTMJD'],  'Modified Julian Date of observation')
+        header['MEANRA']             = (science_header['MEANRA'], 'Mean Right Ascension of observed object')
+        header['MEANDEC']            = (science_header['MEANDEC'],'Mean Declination of observed object')        
+        header['BARYVEL']            = ('None',                   'Applied barycentric velocity correction')
+        header['VRAD']               = ('None',                   'Radial velocity estimate')
+        header['E_VRAD']             = ('None',                   'Uncertainty of radial velocity estimate')
         hdul = fits.HDUList([primary_hdu])
 
         # Loop over your extension names and corresponding data arrays
         for ext_index, ext_name in enumerate(initial_order_coeffs):
             # Create an ImageHDU object for each extension
-
+            
+            # Apply flat-field calibration to science
+            science[ext_index,:] /= master_flat[ext_index,:]
+            science_noise[ext_index,:] /= master_flat[ext_index,:]
+            
+            # Apply rough renormalisation with outlier-robuster 99th percenile
+            science_99percentile = np.nanpercentile(science[ext_index,:],q=99)
+            science[ext_index,:] /= science_99percentile
+            science_noise[ext_index,:] /= science_99percentile            
+            
             # Define the columns with appropriate formats
             col1_def = fits.Column(name='wave_vac',format='E', array=np.arange(len(science[ext_index,:]),dtype=float))
             col2_def = fits.Column(name='wave_air',format='E', array=np.arange(len(science[ext_index,:]),dtype=float))
-            col3_def = fits.Column(name='science', format='E', array=science[ext_index,:]/master_flat[ext_index,:])
-            col4_def = fits.Column(name='science_noise',   format='E', array=science_noise[ext_index,:]/master_flat[ext_index,:])
+            col3_def = fits.Column(name='science', format='E', array=science[ext_index,:])
+            col4_def = fits.Column(name='science_noise',   format='E', array=science_noise[ext_index,:])
             col5_def = fits.Column(name='flat',    format='E', array=master_flat[ext_index,:])
             col6_def = fits.Column(name='thxe',    format='E', array=master_thxe[ext_index,:]/master_flat[ext_index,:])
             col7_def = fits.Column(name='lc',      format='E', array=master_lc[ext_index,:]/master_flat[ext_index,:])
 
+            # Combine columns to BinTable and add header from primary
             hdu = fits.BinTableHDU.from_columns([col1_def, col2_def, col3_def, col4_def, col5_def, col6_def, col7_def], name=ext_name.lower())
-
+            hdu.header.extend(header.copy(strip=True), unique=True)
+            
             # Append the HDU to the HDU list
             hdul.append(hdu)
 

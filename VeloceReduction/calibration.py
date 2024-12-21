@@ -82,11 +82,12 @@ def plot_wavelength_calibrated_order_data(order, science_object, file, overview_
 
     ax = gs[0]
     ax.plot(file[order].data['SCIENCE'], lw=1)
-    ax.set_yscale('log')
     ax.set_ylabel('Science')
+    ax.set_ylim(-0.1,1.2)
 
     ticks = np.arange(0,len(wavelength_to_plot),100)
-    ax.set_xticks(ticks,labels=ticks,rotation=90)
+    ax.set_xticks(ticks)
+    ax.set_xticklabels(ticks,rotation=90)
     ax.set_xlim(ticks[0],ticks[-1])   
     ax2 = ax.twiny()
     ax2.set_xticks(ticks-ticks[0])
@@ -111,7 +112,8 @@ def plot_wavelength_calibrated_order_data(order, science_object, file, overview_
     ax.set_yscale('log')
     ax.set_ylabel('Lc')
     ax.set_xlabel('Pixel')
-    ax.set_xticks(ticks,labels=ticks,rotation=90)
+    ax.set_xticks(ticks,)
+    ax.set_xticklabels(ticks,rotation=90)
 
     overview_pdf.savefig()
     plt.close()
@@ -236,6 +238,7 @@ def calibrate_wavelength(science_object, correct_barycentric_velocity=True, fit_
             file[0].header['E_VRAD'] = rv_std
 
             plt.tight_layout()
+            plt.savefig(input_output_directory+'/veloce_spectra_'+science_object+'_'+config.date+'_rough_rv_estimate.pdf',bbox_inches='tight')
             plt.show()
             plt.close()
 
