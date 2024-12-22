@@ -30,7 +30,7 @@ jobs:
           # PDF. Note, this should be the same directory as the input
           # paper.md
           path: paper.pdf
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
       - name: TeX
         uses: docker://openjournals/paperdraft:latest
         with:
@@ -45,6 +45,6 @@ jobs:
         env:
           GIT_SHA: $GITHUB_SHA
           JOURNAL: joss
-      - uses: actions/upload-artifact@v2
+      - uses: actions/upload-artifact@v4
         with:
           path: joss_paper
