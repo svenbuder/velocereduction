@@ -3,8 +3,8 @@ name: Generate JOSS Paper Draft on Release
 on:
   push:
     paths:
-      - paper.md
-      - paper.bib
+      - joss_paper/paper.md
+      - joss_paper/paper.bib
       - .github/workflows/draft-pdf.yml
   release:
     types: [created]
@@ -30,3 +30,21 @@ jobs:
           # PDF. Note, this should be the same directory as the input
           # paper.md
           path: paper.pdf
+      - uses: actions/checkout@v2
+      - name: TeX
+        uses: docker://openjournals/paperdraft:latest
+        with:
+          args: joss_paper/paper.md --to=latex --output=paper.tex
+        env:
+          GIT_SHA: $GITHUB_SHA
+          JOURNAL: joss
+      - name: PDF
+        uses: docker://openjournals/paperdraft:latest
+        with:
+          args: joss_paper/paper.md
+        env:
+          GIT_SHA: $GITHUB_SHA
+          JOURNAL: joss
+      - uses: actions/upload-artifact@v2
+        with:
+          path: joss_paper
