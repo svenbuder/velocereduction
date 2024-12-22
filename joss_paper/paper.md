@@ -22,7 +22,7 @@ bibliography: paper.bib
 
 # Summary
 
-`VeloceReduction` is a Python package designed for the reduction of stellar spectra from the IFU fibre-fed [Veloce](https://aat.anu.edu.au/science/instruments/current/veloce/overview) spectrograph [@Case2018] and its Rosso [@Gilbert2018], Verde, and Azzurro [@Taylor2024] detectors. Utilizing both science and calibration images, this package automates the processing of observational data from a given night. It handles data across all 110 echelle orders of the Veloce spectrograph, which covers a spectral range from 390 nm to 940 nm as shown in \autoref{fig:example_spectrum}. The package automatically handles observations via 2 and 4 Amplifier readout.
+`VeloceReduction` is a Python package designed for the reduction of stellar spectra from the IFU fibre-fed [Veloce](https://aat.anu.edu.au/science/instruments/current/veloce/overview) spectrograph [@Case2018] and its Rosso [@Gilbert2018], Verde, and Azzurro [@Taylor2024] detectors. Utilizing both science and calibration images, this package automates the processing of observational data from a given night. It handles data across all 110 echelle orders of the Veloce spectrograph, which covers a spectral range from 390 nm to 940 nm as shown in \autoref{fig:example_spectrum}. The package automatically handles observations via 2 and 4 Amplifier readout (2Amp and 4Amp).
 
 ![Example spectrum of alfCen A taken with Veloce.\label{fig:example_spectrum}](VeloceReduction/veloce_reference_data/Veloce_alfCenA.png){ width=50% }
 
