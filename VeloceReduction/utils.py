@@ -205,6 +205,7 @@ def identify_calibration_and_science_runs(date, raw_data_dir):
     calibration_runs['Flat_10.0'] = []
     calibration_runs['Flat_60.0'] = []
     calibration_runs['Bstar'] = []
+    calibration_runs['Bias'] = []
     # 'Dark' to be added depending on exposure times
 
     science_runs = dict()
@@ -216,6 +217,8 @@ def identify_calibration_and_science_runs(date, raw_data_dir):
         # Identify runs via their numeric value
         run = line[:4]
         if not run.isnumeric():
+            pass
+        elif (('CRAP' in line) | ('crap' in line) | ('Crap' in line)):
             pass
         else:
 
@@ -240,6 +243,8 @@ def identify_calibration_and_science_runs(date, raw_data_dir):
             if ccd == '3':
                 if run_object == 'SimLC':
                     calibration_runs['SimLC'].append(run)
+                elif run_object == 'Bias':
+                    calibration_runs['Bias'].append(run)
                 elif run_object == 'FlatField-Quartz':
                     calibration_runs['Flat_'+exposure_time].append(run)
                 elif run_object == 'ARC-ThAr':
@@ -255,14 +260,20 @@ def identify_calibration_and_science_runs(date, raw_data_dir):
                         calibration_runs['Dark_'+exposure_time].append(run)
                     else:
                         calibration_runs['Dark_'+exposure_time] = [run]
-                elif run_object in ['56139','105435','127972']:
-                    calibration_runs['Bstar'].append(run)            
+                elif run_object in [
+                    "10144","14228","37795","47670","50013","56139","89080","91465","93030","98718","105435","105937","106490","108248","108249","108483",
+                    "109026","109668","110879","118716","120324","121263","121743","121790","122451","125238","127972","129116","132058","134481","136298",
+                    "136504","138690","139365","142669","143018","143118","143275","144470","157246","158094","158427","158926","160578","165024","169022",
+                    "175191","209952"
+                    ]:
+                    calibration_runs['Bstar'].append([run, run_object])
                 else:
                     if run_object in science_runs.keys():
                         science_runs[run_object].append(run)
                     else:
                         science_runs[run_object] = [run]
                         
+    print('\nThe following Bstars were identified: '+', '.join(list(np.array(calibration_runs['Bstar'])[:,1])))
     print('\nThe following science observations were identified: '+', '.join(list(science_runs.keys())))
 
     return(calibration_runs, science_runs)

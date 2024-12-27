@@ -55,10 +55,12 @@ def get_script_input():
         jupyter_date = "001122"
         
         # 2Amp example
-        #jupyter_date = "240219"
+#         jupyter_date = "240219"
         
         # 4Amp example
-        #jupyter_date = "231121"
+        jupyter_date = "231121"
+        
+#         jupyter_date = "240201"
         
         jupyter_working_directory = "./"
         print("Running in a Jupyter notebook. Using predefined values")
