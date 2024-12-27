@@ -58,7 +58,7 @@ def get_script_input():
 #         jupyter_date = "240219"
         
         # 4Amp example
-        jupyter_date = "231121"
+#         jupyter_date = "231121"
         
 #         jupyter_date = "240201"
         

@@ -273,7 +273,10 @@ def identify_calibration_and_science_runs(date, raw_data_dir):
                     else:
                         science_runs[run_object] = [run]
                         
-    print('\nThe following Bstars were identified: '+', '.join(list(np.array(calibration_runs['Bstar'])[:,1])))
+    if len(calibration_runs['Bstar']) > 0:
+        print('\nThe following Bstar observations were identified: '+', '.join(list(np.array(calibration_runs['Bstar'])[:,1])))
+    else:
+        print('\nNo Bstar observations were identified.')
     print('\nThe following science observations were identified: '+', '.join(list(science_runs.keys())))
 
     return(calibration_runs, science_runs)
