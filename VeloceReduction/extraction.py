@@ -327,14 +327,19 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, LC = False, Sc
         return(np.array(counts_in_orders),np.array(noise_in_orders))
 
 
-def find_tramline_beginning_and_ending(x_pixels, previous_beginning, previous_ending, tolerance=2, tolerance_to_previous=3):
+def find_tramline_beginning_and_ending(x_index, x_pixels, previous_beginning, previous_ending, expected_tramline_width = 38, tolerance=2, tolerance_to_previous=3, debug=False):
     """
-    Find the tramline beginning and ending.
+    Find the tramline beginning and ending for a given position of x_pixels above a threshold.
+    Basically: Identify significant gaps that we expect to be those between the main tramline and the outer fibres left and right of it.
     
+    :param x_index: Index of the row we are currently investigating
     :param x_pixels: The x pixels, that is, pixels within the region of the tramline above a certain threshold
     :param previous_beginning: The beginning of the previous row.
     :param previous_ending: The ending of the previous row.
+    :expected_tramline_width: Expected tramline width (typically 38-45)
     :param tolerance: The tolerance for identifying a "gap" (between main tramline and the outer fibres).
+    :param tolerance_to_previous: The tolerance for difference to previous row's beginning/ending.
+    :param debug: Whether to show debug plots/prints.
 
     :return: The main tramline beginning and ending as a 2-tuple.
     """
@@ -342,9 +347,19 @@ def find_tramline_beginning_and_ending(x_pixels, previous_beginning, previous_en
     # Calculate differences between pixels above the threshold (which wis used as input for x_pixels)
     differences = [x_pixels[i+1] - x_pixels[i] for i in range(len(x_pixels) - 1)]
 
+    if debug:
+        print('x_index:')
+        print(x_index)
+        print('x_pixels:')
+        print(x_pixels)
+        print('differences')
+        print(differences)
+
     # Initialise tramline_beginning and tramline_ending as nans    
     tramline_beginning = np.nan
-    if x_pixels[-1] < 1:
+    if len(x_pixels) < 1:
+        return(np.nan, np.nan)
+    elif x_pixels[-1] < 1:
         return(np.nan, np.nan)
     tramline_ending = np.nan
     
@@ -360,12 +375,18 @@ def find_tramline_beginning_and_ending(x_pixels, previous_beginning, previous_en
             if current_gap > tolerance:
                 if np.isnan(tramline_beginning):
                     tramline_beginning = x_pixels[i+1]
-                # Add tramline_ending, if it is ~38, so < 40 from the tramline_beginning
-                elif x_pixels[i]+1 - tramline_beginning < 40:
+                # Add tramline_ending, if it is ~expected_tramline_width, so < expected_tramline_width +- 4 from the tramline_beginning
+                elif np.abs((x_pixels[i]+1 - tramline_beginning) - expected_tramline_width) <= 4:
                     tramline_ending = x_pixels[i]+1
                     current_gap = 0
                 else:
+                    if debug:
+                        print('Not using: ',x_pixels[i]+1, x_pixels[i]+1 - tramline_beginning, 'expected: ',expected_tramline_width-3,expected_tramline_width+3)
                     current_gap = 0
+                    
+    if debug:
+        print('x_index Initial Beginning/End')
+        print(x_index, tramline_beginning, tramline_ending)
                     
     # Force new beginning to be close to beginning of previous pixel within tolerance_to_previous
     if (np.abs(previous_beginning - tramline_beginning) > tolerance_to_previous):
@@ -374,92 +395,67 @@ def find_tramline_beginning_and_ending(x_pixels, previous_beginning, previous_en
     # but only if the previous tramline_beginning is not too close to the left edge
     elif np.isnan(tramline_beginning):
         if previous_beginning > 2:
+            if debug:
+                print('-> tramline_beginning = previous_beginning')
             tramline_beginning = previous_beginning
         else:
+            if debug:
+                print('-> beginning too far left')
             return(np.nan, np.nan)
 
     # Force new ending to be close to ending of previous pixel within tolerance_to_previous
-    if (np.abs(previous_ending - tramline_ending) > tolerance_to_previous):
+    if (np.abs(previous_ending - tramline_ending) > tolerance_to_previous) & (previous_ending - tramline_beginning < expected_tramline_width+3):
+        if debug:
+            print('Difference previous_ending - tramline_ending above tolerance of '+str(tolerance_to_previous)+' and previous ending within expected_tramline_width')
         tramline_ending = previous_ending
     # Replace with previous, if we could not find a tramline_ending
     # but only if the previous tramline_ending is not too close to the left edge
     elif np.isnan(tramline_ending):
         if previous_ending > 2:
+            if debug:
+                print('-> tramline_ending = previous_ending')
             tramline_ending = previous_ending
         else:
+            if debug:
+                print('-> ending too far left 1')
             return(np.nan, np.nan)
     # If the tramline ending is too close to left edge, we return nans
-    elif tramline_ending <= 38+3:
+    elif tramline_ending <= expected_tramline_width+3:
+        if debug:
+            print('-> ending too far left 2')
         return(np.nan, np.nan)
     
     # Make sure that the tramlines are reasonably wide.
-    # We expect a tramline with width 38.
-    if tramline_ending - tramline_beginning < 38:
+    # We expect a tramline with width expected_tramline_width within tolerance.
+    if tramline_ending - tramline_beginning < expected_tramline_width-4:
+        if debug:
+            print('-> not wide enough', tramline_ending - tramline_beginning)
         return(np.nan, np.nan)
 
+    if debug:
+        print('-> end, ',tramline_beginning, tramline_ending)
+    
     return(tramline_beginning, tramline_ending)
 
-def optimise_tramline_polynomial(overscan_subtracted_images, order, readout_mode, buffer, overwrite=False):
+def optimise_tramline_polynomial(overscan_subtracted_images, order, readout_mode, overwrite=False, debug=False):
     """
     Optimise the tramline polynomial for beginning and ending for a given order and readout mode.
 
     :param overscan_subtracted_images: The overscan subtracted images.
     :param order: The order.
     :param readout_mode: The readout mode.
+    :param overwrite: Whether to overwrite a potentially existing file
+        VeloceReduction/tramline_information/tramlines_begin_end_'+order+'.txt
+    :param debug: Whether to show debug plots.
 
-    :return: None, but tramline 5th order polynomial coefficients  are saved to file: 
-    VeloceReduction/tramline_information/tramlines_begin_end_'+order+'.txt
-
+    :return: The tramline beginning and ending polynomial fit coefficients as 2 arrays.
     """
 
     if readout_mode != '2Amp':
         raise ValueError('Can only handle 2Amp readout mode')
 
     ccd = order[4]
-
-    # # Define buffer for beginning and ending of the CCD
-    # buffer = dict()
-    # buffer['ccd_3_order_65'] = [105,50]
-    # buffer['ccd_3_order_66'] = [105,50]
-    # buffer['ccd_3_order_67'] = [105,50]
-    # buffer['ccd_3_order_68'] = [105,50]
-    # buffer['ccd_3_order_69'] = [105,50]
-    # buffer['ccd_3_order_70'] = [105,50]
-    # buffer['ccd_3_order_71'] = [105,50]
-    # buffer['ccd_3_order_72'] = [105,50]
-    # buffer['ccd_3_order_73'] = [105,50]
-    # buffer['ccd_3_order_74'] = [105,50]
-    # buffer['ccd_3_order_75'] = [105,50]
-    # buffer['ccd_3_order_76'] = [105,50]
-    # buffer['ccd_3_order_77'] = [105,50]
-    # buffer['ccd_3_order_78'] = [105,50]
-    # buffer['ccd_3_order_79'] = [105,50]
-    # buffer['ccd_3_order_80'] = [105,50]
-    # buffer['ccd_3_order_81'] = [105,50]
-    # buffer['ccd_3_order_82'] = [105,50]
-    # buffer['ccd_3_order_83'] = [115,50]
-    # buffer['ccd_3_order_84'] = [115,50]
-    # buffer['ccd_3_order_85'] = [130,50]
-    # buffer['ccd_3_order_86'] = [135,50]
-    # buffer['ccd_3_order_87'] = [135,50]
-    # buffer['ccd_3_order_88'] = [155,100]
-    # buffer['ccd_3_order_89'] = [190,100]
-    # buffer['ccd_3_order_90'] = [230,100]
-    # buffer['ccd_3_order_91'] = [230,100]
-    # buffer['ccd_3_order_92'] = [300,100]
-    # buffer['ccd_3_order_93'] = [310,100]
-    # buffer['ccd_3_order_94'] = [330,125]
-    # buffer['ccd_3_order_95'] = [350,125]
-    # buffer['ccd_3_order_96'] = [370,125]
-    # buffer['ccd_3_order_97'] = [360,125]
-    # buffer['ccd_3_order_98'] = [410,125]
-    # buffer['ccd_3_order_99'] = [370,150]
-    # buffer['ccd_3_order_100'] = [375,150]
-    # buffer['ccd_3_order_101'] = [580,150]
-    # buffer['ccd_3_order_102'] = [400,150]
-    # buffer['ccd_3_order_103'] = [710,150]
-    # buffer['ccd_3_order_104'] = [1600,150]
-
+    
     adjusted_order_pixel = []
     adjusted_order_beginning = []
     adjusted_order_ending = []
@@ -470,22 +466,137 @@ def optimise_tramline_polynomial(overscan_subtracted_images, order, readout_mode
     # initial_order_ranges[order] are the initial orders reported by C.Tinney with slight adjustments.
     initial_order_ranges, initial_order_coeffs = extract_initial_order_ranges_and_coeffs()
 
-    left = -65
-    right = 10
-    if ccd == '2':
+    if ccd == '3':
+        left = -65
+        right = 10
+    elif ccd == '2':
         left = -60
-        right = 25
+        right = 15
+    elif ccd == '1':
+        left = -65
+        right = 15
 
     order_xrange_begin = np.array(polynomial_function(np.arange(np.shape(overscan_subtracted_images['ccd_'+str(ccd)])[0]),*initial_order_coeffs[order])+left,dtype=int)
     order_xrange_end   = np.array(polynomial_function(np.arange(np.shape(overscan_subtracted_images['ccd_'+str(ccd)])[0]),*initial_order_coeffs[order])+right,dtype=int)
 
+    # Define buffer for beginning and ending of the CCD to avoid issues with tramlines at the edges
+    buffer = dict()
+    buffer['ccd_1_order_138'] = [200,320]
+    buffer['ccd_1_order_139'] = [125,550]
+    buffer['ccd_1_order_140'] = [125,350]
+    buffer['ccd_1_order_141'] = [125,250]
+    buffer['ccd_1_order_142'] = [125,250]
+    buffer['ccd_1_order_143'] = [125,250]
+    buffer['ccd_1_order_144'] = [125,250]
+    buffer['ccd_1_order_145'] = [125,250]
+    buffer['ccd_1_order_146'] = [125,250]
+    buffer['ccd_1_order_147'] = [225,250]
+    buffer['ccd_1_order_148'] = [150,250]
+    buffer['ccd_1_order_149'] = [225,250]
+    buffer['ccd_1_order_150'] = [325,250]
+    buffer['ccd_1_order_151'] = [500,250]
+    buffer['ccd_1_order_152'] = [800,250]
+    buffer['ccd_1_order_153'] = [1150,250]
+    buffer['ccd_1_order_154'] = [1350,800]
+    buffer['ccd_1_order_155'] = [1530,850]
+    buffer['ccd_1_order_156'] = [1650,1220]
+    buffer['ccd_1_order_157'] = [1650,1300]
+    buffer['ccd_1_order_158'] = [1500,1350]
+    buffer['ccd_1_order_159'] = [1500,1200]
+    buffer['ccd_1_order_160'] = [1500,1200]
+    buffer['ccd_1_order_161'] = [1500,1200]
+    buffer['ccd_1_order_162'] = [1500,1500]
+    buffer['ccd_1_order_163'] = [1600,1200]
+    buffer['ccd_1_order_164'] = [1600,1250]
+    buffer['ccd_1_order_165'] = [1560,1350]
+    buffer['ccd_1_order_166'] = [1600,1500]
+    buffer['ccd_1_order_167'] = [1500,1200]
+    buffer['ccd_2_order_103'] = [105,450]
+    buffer['ccd_2_order_104'] = [110,100]
+    buffer['ccd_2_order_105'] = [110,100]
+    buffer['ccd_2_order_106'] = [110,100]
+    buffer['ccd_2_order_107'] = [110,100]
+    buffer['ccd_2_order_108'] = [110,100]
+    buffer['ccd_2_order_109'] = [110,100]
+    buffer['ccd_2_order_110'] = [110,100]
+    buffer['ccd_2_order_111'] = [100,100]
+    buffer['ccd_2_order_112'] = [100,100]
+    buffer['ccd_2_order_113'] = [100,100]
+    buffer['ccd_2_order_114'] = [100,100]
+    buffer['ccd_2_order_115'] = [110,100]
+    buffer['ccd_2_order_116'] = [130,100]
+    buffer['ccd_2_order_117'] = [130,100]
+    buffer['ccd_2_order_118'] = [130,100]
+    buffer['ccd_2_order_119'] = [150,100]
+    buffer['ccd_2_order_120'] = [190,100]
+    buffer['ccd_2_order_121'] = [220,100]
+    buffer['ccd_2_order_122'] = [170,100]
+    buffer['ccd_2_order_123'] = [200,100]
+    buffer['ccd_2_order_124'] = [200,100]
+    buffer['ccd_2_order_125'] = [220,100]
+    buffer['ccd_2_order_126'] = [200,100]
+    buffer['ccd_2_order_127'] = [260,100]
+    buffer['ccd_2_order_128'] = [240,100]
+    buffer['ccd_2_order_129'] = [250,110]
+    buffer['ccd_2_order_130'] = [250,120]
+    buffer['ccd_2_order_131'] = [280,120]
+    buffer['ccd_2_order_132'] = [260,110]
+    buffer['ccd_2_order_133'] = [270,120]
+    buffer['ccd_2_order_134'] = [330,125]
+    buffer['ccd_2_order_135'] = [365,125]
+    buffer['ccd_2_order_136'] = [300,145]
+    buffer['ccd_2_order_137'] = [360,100]
+    buffer['ccd_2_order_138'] = [500,170]
+    buffer['ccd_2_order_139'] = [550,290]
+    buffer['ccd_2_order_140'] = [1700,650]
+    buffer['ccd_3_order_65'] = [105,50]
+    buffer['ccd_3_order_66'] = [105,50]
+    buffer['ccd_3_order_67'] = [105,70]
+    buffer['ccd_3_order_68'] = [105,50]
+    buffer['ccd_3_order_69'] = [105,50]
+    buffer['ccd_3_order_70'] = [105,50]
+    buffer['ccd_3_order_71'] = [125,50]
+    buffer['ccd_3_order_72'] = [105,50]
+    buffer['ccd_3_order_73'] = [105,50]
+    buffer['ccd_3_order_74'] = [105,50]
+    buffer['ccd_3_order_75'] = [105,50]
+    buffer['ccd_3_order_76'] = [105,50]
+    buffer['ccd_3_order_77'] = [105,50]
+    buffer['ccd_3_order_78'] = [105,50]
+    buffer['ccd_3_order_79'] = [105,50]
+    buffer['ccd_3_order_80'] = [105,50]
+    buffer['ccd_3_order_81'] = [105,50]
+    buffer['ccd_3_order_82'] = [105,50]
+    buffer['ccd_3_order_83'] = [115,50]
+    buffer['ccd_3_order_84'] = [115,50]
+    buffer['ccd_3_order_85'] = [130,50]
+    buffer['ccd_3_order_86'] = [135,50]
+    buffer['ccd_3_order_87'] = [135,50]
+    buffer['ccd_3_order_88'] = [155,100]
+    buffer['ccd_3_order_89'] = [190,100]
+    buffer['ccd_3_order_90'] = [230,100]
+    buffer['ccd_3_order_91'] = [230,100]
+    buffer['ccd_3_order_92'] = [300,100]
+    buffer['ccd_3_order_93'] = [310,100]
+    buffer['ccd_3_order_94'] = [330,125]
+    buffer['ccd_3_order_95'] = [350,125]
+    buffer['ccd_3_order_96'] = [370,125]
+    buffer['ccd_3_order_97'] = [360,125]
+    buffer['ccd_3_order_98'] = [410,125]
+    buffer['ccd_3_order_99'] = [370,150]
+    buffer['ccd_3_order_100'] = [375,150]
+    buffer['ccd_3_order_101'] = [580,150]
+    buffer['ccd_3_order_102'] = [400,150]
+    buffer['ccd_3_order_103'] = [710,150]
+    buffer['ccd_3_order_104'] = [1600,150]
+
     f, ax = plt.subplots(figsize=(15,15))
-    ax.set_title(order)
-    ax.imshow(np.log10(overscan_subtracted_images['ccd_'+str(ccd)]),cmap='Greys')
-    ax.plot(order_xrange_begin,np.arange(len(order_xrange_begin)),c='C3',lw=0.5)
-    ax.plot(order_xrange_end,np.arange(len(order_xrange_begin)),c='C3',lw=0.5)
-    ax.axhline(buffer[order][0])
-    ax.axhline(image_dimensions[0]-buffer[order][1])
+    ax.set_title('Tramline Extraction for '+order, fontsize=20)
+    ax.imshow(np.log10(overscan_subtracted_images['ccd_'+str(ccd)]),cmap='Greys', label = 'Flat Exposure')
+    ax.plot(order_xrange_begin,np.arange(len(order_xrange_begin)),c='C3',lw=0.5, label = 'Initial Search Region')
+    ax.plot(order_xrange_end,np.arange(len(order_xrange_begin)),c='C3',lw=0.5, label = '_nolegend_')
+    ax.axhline(buffer[order][0], label = 'Edge Buffer Region')
+    ax.axhline(image_dimensions[0]-buffer[order][1], label = '_nolegend_')
     ax.set_aspect(1/10)
 
     # Because of the extended overscan region in 4Amplifier readout mode, we have to adjust which region we are using the extract the orders from.
@@ -505,22 +616,66 @@ def optimise_tramline_polynomial(overscan_subtracted_images, order, readout_mode
         if (x_index >= buffer[order][0]) & (x_index <= image_dimensions[0] - buffer[order][1]):
             x_pixels_to_be_tested_for_tramline = np.arange(order_xrange_begin[x_index],order_xrange_end[x_index])
             x_pixels_to_be_tested_for_tramline = x_pixels_to_be_tested_for_tramline[x_pixels_to_be_tested_for_tramline >= 0]
+            x_pixels_to_be_tested_for_tramline = x_pixels_to_be_tested_for_tramline[x_pixels_to_be_tested_for_tramline < image_dimensions[1]]
             x_pixel_values_to_be_tested_for_tramline = overscan_subtracted_images['ccd_'+str(ccd)][x,x_pixels_to_be_tested_for_tramline]
 
             if len(x_pixel_values_to_be_tested_for_tramline) > 0:
 
-                # We assume that flat measurements should be ~50% of the maximum
-                threshold = 0.5*np.nanmax(x_pixel_values_to_be_tested_for_tramline)
+                # We assume that flat measurements should be ~halfway between minimum and maximum
+                threshold = 0.5*(
+                    np.nanmin(x_pixel_values_to_be_tested_for_tramline)+
+                    np.nanmax(x_pixel_values_to_be_tested_for_tramline)
+                )
+                # The right side of CCD 2 with order 130-140 gets less dominant exposure -> lower threshold
+                if (ccd == '2') & (order[-2] in ['3','4']):
+                    threshold = 0.4*(
+                        np.nanmin(x_pixel_values_to_be_tested_for_tramline)+
+                        np.nanmax(x_pixel_values_to_be_tested_for_tramline)
+                    )
                 above_threshold = np.where(x_pixel_values_to_be_tested_for_tramline > threshold)[0]
+                
+                if debug:
+                    f2, ax2 = plt.subplots()
+                    ax2.plot(
+                        x_pixels_to_be_tested_for_tramline,
+                        x_pixel_values_to_be_tested_for_tramline
+                    )
+                    ax2.plot(
+                        x_pixels_to_be_tested_for_tramline[above_threshold],
+                        threshold*np.ones(len(x_pixel_values_to_be_tested_for_tramline[above_threshold])),
+                        c = 'C3'
+                    )
+                    ax2.set_ylim(0,1.1*np.max(x_pixel_values_to_be_tested_for_tramline))
+                    plt.tight_layout()
+                    plt.show()
+                
+                if debug:
+                    debug_find_tramline_row = True
+                else:
+                    debug_find_tramline_row = False
 
+                # We expect slightly different widths for each tramlines in the different CCDs
+                if ccd == '3':
+                    expected_tramline_width = 38
+                elif ccd == '2':
+                    expected_tramline_width = 44
+                elif ccd == '1':
+                    expected_tramline_width = 45
+        
                 if x_index == buffer[order][0]:
                     tramline_beginning = np.nan
                     tramline_ending = np.nan
                 tramline_beginning, tramline_ending = find_tramline_beginning_and_ending(
+                    x_index,
                     x_pixels_to_be_tested_for_tramline[above_threshold],
                     previous_beginning = tramline_beginning,
-                    previous_ending = tramline_ending
+                    previous_ending = tramline_ending,
+                    expected_tramline_width = expected_tramline_width,
+                    debug = debug_find_tramline_row
                 )
+                
+                if debug_find_tramline_row:
+                    print(x_index, tramline_beginning, tramline_ending, tramline_ending-tramline_beginning)
 
                 x_pixels_tramline = []
                 if np.isfinite(tramline_beginning) & np.isfinite(tramline_ending):
@@ -537,15 +692,17 @@ def optimise_tramline_polynomial(overscan_subtracted_images, order, readout_mode
         polynomial_function,
         adjusted_order_pixel,
         adjusted_order_beginning,
-        p0 = [np.median(adjusted_order_beginning),0,0,0,0]
+        p0 = [np.median(adjusted_order_beginning),1.3e-02,-2.8e-05,9.3e-11,-2.7e-14],
+        bounds=([0,0,-1e-4,0,-6e13],[image_dimensions[0],0.125,0,3e-9,0])
     )[0]
     order_ending_fit = curve_fit(
         polynomial_function,
         adjusted_order_pixel,
         adjusted_order_ending,
-        p0 = [np.median(adjusted_order_ending),0,0,0,0]
+        p0 = [np.median(adjusted_order_ending),1.3e-02,-2.8e-05,9.3e-11,-2.7e-14],
+        bounds=([0,0,-1e-4,0,-6e13],[image_dimensions[0],0.125,0,3e-9,0])
     )[0]
-
+    
     if overwrite:
         np.savetxt('VeloceReduction/tramline_information/tramlines_begin_end_'+order+'.txt',
                 np.array([
@@ -575,24 +732,28 @@ def optimise_tramline_polynomial(overscan_subtracted_images, order, readout_mode
     ax.plot(
         adjusted_order_beginning,
         adjusted_order_pixel,
-        c = 'C1'
+        c = 'C1',
+        label = 'Identified Tramline Beginning/Ending'
     )
     ax.plot(
         np.round(polynomial_function(np.arange(image_dimensions[0]), *order_beginning_fit),0),
         np.arange(image_dimensions[0]),
         c = 'C0',
-        ls = 'dashed'
+        ls = 'dashed',
+        label = 'Polynomial Fit to Tramline Beginning/Ending'
     )
     ax.plot(
         adjusted_order_ending,
         adjusted_order_pixel,
-        c = 'C1'
+        c = 'C1',
+        label = '_nolegend_'
     )
     ax.plot(
         np.round(polynomial_function(np.arange(image_dimensions[0]), *order_ending_fit),0),
         np.arange(image_dimensions[0]),
         c = 'C0',
-        ls = 'dashed'
+        ls = 'dashed',
+        label = '_nolegend_'
     )
 
     try:
@@ -603,5 +764,16 @@ def optimise_tramline_polynomial(overscan_subtracted_images, order, readout_mode
     except:
         pass
 
+    print(order)
+    print(order_beginning_fit)
+    print(order_ending_fit)
+    
+    plt.xlabel('X Pixels (Zoom)',fontsize=15)
+    plt.ylabel('Y Pixels',fontsize=15)
+    plt.legend(loc = 'upper left',fontsize=15)
+    if (order == 'ccd_1_order_141') & overwrite:
+        plt.savefig('joss_paper/tramline_extraction_example_'+order+'.png',dpi=100,bbox_inches='tight')
     plt.show()
     plt.close()
+    
+    return(order_beginning_fit, order_ending_fit)
