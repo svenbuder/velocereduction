@@ -399,7 +399,7 @@ def find_tramline_beginning_and_ending(x_pixels, previous_beginning, previous_en
 
     return(tramline_beginning, tramline_ending)
 
-def optimise_tramline_polynomial(overscan_subtracted_images, order, readout_mode, overwrite=False):
+def optimise_tramline_polynomial(overscan_subtracted_images, order, readout_mode, buffer, overwrite=False):
     """
     Optimise the tramline polynomial for beginning and ending for a given order and readout mode.
 
@@ -417,48 +417,48 @@ def optimise_tramline_polynomial(overscan_subtracted_images, order, readout_mode
 
     ccd = order[4]
 
-    # Define buffer for beginning and ending of the CCD
-    buffer = dict()
-    buffer['ccd_3_order_65'] = [105,50]
-    buffer['ccd_3_order_66'] = [105,50]
-    buffer['ccd_3_order_67'] = [105,50]
-    buffer['ccd_3_order_68'] = [105,50]
-    buffer['ccd_3_order_69'] = [105,50]
-    buffer['ccd_3_order_70'] = [105,50]
-    buffer['ccd_3_order_71'] = [105,50]
-    buffer['ccd_3_order_72'] = [105,50]
-    buffer['ccd_3_order_73'] = [105,50]
-    buffer['ccd_3_order_74'] = [105,50]
-    buffer['ccd_3_order_75'] = [105,50]
-    buffer['ccd_3_order_76'] = [105,50]
-    buffer['ccd_3_order_77'] = [105,50]
-    buffer['ccd_3_order_78'] = [105,50]
-    buffer['ccd_3_order_79'] = [105,50]
-    buffer['ccd_3_order_80'] = [105,50]
-    buffer['ccd_3_order_81'] = [105,50]
-    buffer['ccd_3_order_82'] = [105,50]
-    buffer['ccd_3_order_83'] = [115,50]
-    buffer['ccd_3_order_84'] = [115,50]
-    buffer['ccd_3_order_85'] = [130,50]
-    buffer['ccd_3_order_86'] = [135,50]
-    buffer['ccd_3_order_87'] = [135,50]
-    buffer['ccd_3_order_88'] = [155,100]
-    buffer['ccd_3_order_89'] = [190,100]
-    buffer['ccd_3_order_90'] = [230,100]
-    buffer['ccd_3_order_91'] = [230,100]
-    buffer['ccd_3_order_92'] = [300,100]
-    buffer['ccd_3_order_93'] = [310,100]
-    buffer['ccd_3_order_94'] = [330,125]
-    buffer['ccd_3_order_95'] = [350,125]
-    buffer['ccd_3_order_96'] = [370,125]
-    buffer['ccd_3_order_97'] = [360,125]
-    buffer['ccd_3_order_98'] = [410,125]
-    buffer['ccd_3_order_99'] = [370,150]
-    buffer['ccd_3_order_100'] = [375,150]
-    buffer['ccd_3_order_101'] = [580,150]
-    buffer['ccd_3_order_102'] = [400,150]
-    buffer['ccd_3_order_103'] = [710,150]
-    buffer['ccd_3_order_104'] = [1600,150]
+    # # Define buffer for beginning and ending of the CCD
+    # buffer = dict()
+    # buffer['ccd_3_order_65'] = [105,50]
+    # buffer['ccd_3_order_66'] = [105,50]
+    # buffer['ccd_3_order_67'] = [105,50]
+    # buffer['ccd_3_order_68'] = [105,50]
+    # buffer['ccd_3_order_69'] = [105,50]
+    # buffer['ccd_3_order_70'] = [105,50]
+    # buffer['ccd_3_order_71'] = [105,50]
+    # buffer['ccd_3_order_72'] = [105,50]
+    # buffer['ccd_3_order_73'] = [105,50]
+    # buffer['ccd_3_order_74'] = [105,50]
+    # buffer['ccd_3_order_75'] = [105,50]
+    # buffer['ccd_3_order_76'] = [105,50]
+    # buffer['ccd_3_order_77'] = [105,50]
+    # buffer['ccd_3_order_78'] = [105,50]
+    # buffer['ccd_3_order_79'] = [105,50]
+    # buffer['ccd_3_order_80'] = [105,50]
+    # buffer['ccd_3_order_81'] = [105,50]
+    # buffer['ccd_3_order_82'] = [105,50]
+    # buffer['ccd_3_order_83'] = [115,50]
+    # buffer['ccd_3_order_84'] = [115,50]
+    # buffer['ccd_3_order_85'] = [130,50]
+    # buffer['ccd_3_order_86'] = [135,50]
+    # buffer['ccd_3_order_87'] = [135,50]
+    # buffer['ccd_3_order_88'] = [155,100]
+    # buffer['ccd_3_order_89'] = [190,100]
+    # buffer['ccd_3_order_90'] = [230,100]
+    # buffer['ccd_3_order_91'] = [230,100]
+    # buffer['ccd_3_order_92'] = [300,100]
+    # buffer['ccd_3_order_93'] = [310,100]
+    # buffer['ccd_3_order_94'] = [330,125]
+    # buffer['ccd_3_order_95'] = [350,125]
+    # buffer['ccd_3_order_96'] = [370,125]
+    # buffer['ccd_3_order_97'] = [360,125]
+    # buffer['ccd_3_order_98'] = [410,125]
+    # buffer['ccd_3_order_99'] = [370,150]
+    # buffer['ccd_3_order_100'] = [375,150]
+    # buffer['ccd_3_order_101'] = [580,150]
+    # buffer['ccd_3_order_102'] = [400,150]
+    # buffer['ccd_3_order_103'] = [710,150]
+    # buffer['ccd_3_order_104'] = [1600,150]
 
     adjusted_order_pixel = []
     adjusted_order_beginning = []
@@ -472,6 +472,9 @@ def optimise_tramline_polynomial(overscan_subtracted_images, order, readout_mode
 
     left = -65
     right = 10
+    if ccd == '2':
+        left = -60
+        right = 25
 
     order_xrange_begin = np.array(polynomial_function(np.arange(np.shape(overscan_subtracted_images['ccd_'+str(ccd)])[0]),*initial_order_coeffs[order])+left,dtype=int)
     order_xrange_end   = np.array(polynomial_function(np.arange(np.shape(overscan_subtracted_images['ccd_'+str(ccd)])[0]),*initial_order_coeffs[order])+right,dtype=int)
@@ -591,8 +594,12 @@ def optimise_tramline_polynomial(overscan_subtracted_images, order, readout_mode
         c = 'C0',
         ls = 'dashed'
     )
+
     try:
-        ax.set_xlim(np.nanmin(adjusted_order_beginning) - 20, np.nanmax(adjusted_order_ending) + 20)
+        ax.set_xlim(
+            np.nanmax([np.nanmin([np.nanmin(order_xrange_begin),np.nanmin(adjusted_order_beginning)]) - 20,-20]), 
+            np.nanmin([np.nanmax([np.nanmax(order_xrange_end),np.nanmax(adjusted_order_ending)]) + 20, image_dimensions[1] + 20])
+            )
     except:
         pass
 
