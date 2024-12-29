@@ -1,19 +1,33 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
+import glob
 
 from . import config
 from .utils import read_veloce_fits_image_and_metadata, match_month_to_date, polynomial_function
 
 def substract_overscan(full_image, metadata, debug_overscan = False):
     """
-    Substract overscan from the full image.
+    Subtracts the overscan from a given full astronomical image to correct for the CCD readout bias. This function 
+    utilizes metadata to identify the overscan region and calculates its median value and RMS (Root Mean Square) 
+    to adjust the image data accordingly. The corrected image is then trimmed to remove the overscan regions.
 
-    :param full_image: The full image.
-    :param metadata: The metadata of the image.
-    :param debug_overscan: Whether to show debug plots.
-    
-    :return: The trimmed image, the median overscan, the overscan RMS, and the readout mode.
+    If the debug_overscan flag is set to True, debug plots showing the overscan region, the calculated median overscan,
+    and its effect on the image before and after subtraction will be displayed for visual inspection.
+
+    Parameters:
+        full_image (ndarray):   A 2D numpy array representing the full CCD image including overscan regions.
+        metadata (dict):        A dictionary containing metadata of the image, which should include keys for overscan 
+                                region coordinates and other necessary CCD characteristics.
+        debug_overscan (bool):  A boolean flag that, when set to True, enables the display of debug plots.
+
+    Returns:
+        tuple: A tuple containing:
+            - trimmed_image (ndarray):  The image after overscan subtraction, with overscan regions removed.
+            - median_overscan (float):  The median value of the overscan region used for the correction.
+            - overscan_rms (float):     The root mean square of the overscan region, indicating noise level.
+            - readout_mode (str):       The readout mode of the CCD as extracted from the metadata, indicating how the 
+                                        image data was read from the sensor.
     """
 
     # Identify overscan region and subtract overscan while reporting median overscan and overscan root-mean-square
@@ -131,15 +145,33 @@ def substract_overscan(full_image, metadata, debug_overscan = False):
 
     return(trimmed_image, overscan_median, overscan_rms, metadata['READOUT'])
 
-def extract_initial_order_ranges_and_coeffs():
+def read_in_order_tramlines_tinney():
     """
-    Extract the initial order ranges and coefficients from the reference data.
+    Reads in the optimized tramline information for each spectroscopic order from C. Tinney's data files.
+    The tramline information specifies the pixel locations at the beginning and end of each order on the CCDs.
 
-    :return: Dictionaries with initial order ranges and coefficients.
+    CCD Files:
+        - CCD1 (Azzurro): Orders 138-167 are read from 'azzurro-th-m138-167-all.txt'
+        - CCD2 (Verde): Orders 104-139 are read from 'verde-th-m104-139-all.txt'
+        - CCD3 (Rosso): Orders 65-104 are read from 'rosso-th-m65-104-all.txt'
+
+    Each order's tramline information is stored in two dictionaries:
+        - order_tramline_beginnings: Contains the beginning pixel of each order.
+        - order_tramline_endings: Contains the ending pixel of each order.
+        
+    The keys for these dictionaries are formatted as 'ccd_{ccd}_{order}', where:
+        - {ccd} is the CCD identifier (1, 2, or 3).
+        - {order} is the spectral order number.
+
+    Returns:
+        tuple: A tuple containing three dictionaries:
+            - order_tramline_ranges: Contains the range (start and end) of tramlines for each order.
+            - order_tramline_beginnings: Dictionary with starting tramline positions.
+            - order_tramline_endings: Dictionary with ending tramline positions.
     """
-
-    initial_order_ranges = dict()
-    initial_order_coeffs = dict()
+    order_ranges = dict()
+    order_beginning_coefficients = dict()
+    order_ending_coefficients = dict()
 
     with open('./VeloceReduction/veloce_reference_data/azzurro-th-m138-167-all.txt') as fp:
         line = fp.readline()
@@ -148,9 +180,11 @@ def extract_initial_order_ranges_and_coeffs():
             if cnt % 4 == 0:
                 split_lines = line[:-1].split(' ')
                 order = int(split_lines[0])
-                initial_order_ranges['ccd_1_order_'+ str(order)] = np.arange(int(split_lines[1]),int(split_lines[2]))
+                order_ranges['ccd_1_order_'+ str(order)] = np.arange(int(split_lines[1]),int(split_lines[2]))
             if cnt % 4 == 1:
-                initial_order_coeffs['ccd_1_order_'+ str(order)] = [float(coeff) for coeff in line[10:-1].split(' ')]
+                order_beginning_coefficients['ccd_1_order_'+ str(order)] = [float(coeff) for coeff in line[10:-1].split(' ')]
+                order_beginning_coefficients['ccd_1_order_'+ str(order)][0] -= 45
+                order_ending_coefficients['ccd_1_order_'+ str(order)] = [float(coeff) for coeff in line[10:-1].split(' ')]
             line = fp.readline()
             cnt += 1
 
@@ -161,9 +195,11 @@ def extract_initial_order_ranges_and_coeffs():
             if cnt % 4 == 0:
                 split_lines = line[:-1].split(' ')
                 order = int(split_lines[0])
-                initial_order_ranges['ccd_2_order_'+ str(order)] = np.arange(int(split_lines[1]), int(split_lines[2]))
+                order_ranges['ccd_2_order_'+ str(order)] = np.arange(int(split_lines[1]), int(split_lines[2]))
             if cnt % 4 == 1:
-                initial_order_coeffs['ccd_2_order_'+ str(order)] = [float(coeff) for coeff in line[10:-1].split(' ')]
+                order_beginning_coefficients['ccd_2_order_'+ str(order)] = [float(coeff) for coeff in line[10:-1].split(' ')]
+                order_beginning_coefficients['ccd_2_order_'+ str(order)][0] -= 45
+                order_ending_coefficients['ccd_2_order_'+ str(order)] = [float(coeff) for coeff in line[10:-1].split(' ')]
             line = fp.readline()
             cnt += 1
 
@@ -178,37 +214,106 @@ def extract_initial_order_ranges_and_coeffs():
                     order_str = '0'+str(order)
                 else:
                     order_str = str(order)
-                initial_order_ranges['ccd_3_order_'+ str(order)] = np.arange(int(split_lines[1]), int(split_lines[2]))
+                order_ranges['ccd_3_order_'+ str(order)] = np.arange(int(split_lines[1]), int(split_lines[2]))
             if cnt % 4 == 1:
-                initial_order_coeffs['ccd_3_order_'+ str(order)] = [float(coeff) for coeff in line[10:-1].split(' ')]
+                order_beginning_coefficients['ccd_3_order_'+ str(order)] = [float(coeff) for coeff in line[10:-1].split(' ')]
+                order_beginning_coefficients['ccd_3_order_'+ str(order)][0] -= 45
+                order_ending_coefficients['ccd_3_order_'+ str(order)] = [float(coeff) for coeff in line[10:-1].split(' ')]
             line = fp.readline()
             cnt += 1
 
-    # To Do: also read in information for laser comb.
+    # We could also use the laser comb position.
     # with open('./VeloceReduction/veloce_reference_data/verde-lc-m104-135-all.txt') as fp:
     # with open('./VeloceReduction/veloce_reference_data/rosso-lc-m65-104-all.txt') as fp:
+    # For now, we simply assume that the laser comb position is just slightly offset from the order_ending
+    # (so that we can simply use the order_ending_coefficients).
 
-    return(initial_order_ranges, initial_order_coeffs)
+    return(order_ranges, order_beginning_coefficients, order_ending_coefficients)
 
-def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, LC = False, Science = False, debug_tramlines = False, debug_overscan=False):
+def read_in_order_tramlines():
     """
-    Extract the orders from the CCDs.
+    Reads in optimized tramline information specifying the pixel positions for the beginning and ending of each 
+    spectroscopic order across three CCDs. The data is read from text files and used to populate three dictionaries 
+    with pixel information for each order.
 
-    :param ccd1_runs: The runs for CCD 1.
-    :param ccd2_runs: The runs for CCD 2.
-    :param ccd3_runs: The runs for CCD 3.
-    :param Flat: Whether to extract the orders for the flat.
-    :param LC: Whether to extract the orders for the laser comb.
-    :param Science: Whether to extract the orders for the science.
-    :param debug_tramlines: Whether to show debug plots.
-    :param debug_overscan: Whether to show debug plots.
+    CCD Orders Handled:
+        - CCD1 handles orders 138 to 167.
+        - CCD2 handles orders 103 to 140.
+        - CCD3 handles orders 65 to 104.
 
-    :return: The counts in the orders and the noise in the orders. If Science is True, also the metadata.
+    Each order's data is loaded from a corresponding file in the format:
+    './VeloceReduction/tramline_information/tramlines_begin_end_ccd_{ccd}_order_{order}.txt'
+
+    The function constructs three dictionaries:
+        - order_tramline_ranges: Maps 'ccd_{ccd}_{order}' to a range of pixel indices (0 to 4111).
+        - order_tramline_beginning_coefficients: Coefficients for 5th order polynomial for starting pixel positions for tramlines.
+        - order_tramline_ending_coefficients: Coefficients for 5th order polynomial for ending pixel positions for tramlines.
+
+    Returns:
+        tuple: Contains three dictionaries:
+            - order_tramline_ranges (dict): Mapping of each spectroscopic order to its full pixel range.
+            - order_tramline_beginning_coefficients (dict): Mapping of each order to the beginning pixel positions of its tramlines.
+            - order_tramline_ending_coefficients (dict): Mapping of each order to the ending pixel positions of its tramlines.
+
+    Each dictionary key is formatted as 'ccd_{ccd}_{order}', where '{ccd}' is the CCD number (1, 2, or 3),
+    and '{order}' is the specific order number on that CCD.
     """
-    
-    # Extract initial order ranges and coefficients
-    initial_order_ranges, initial_order_coeffs = extract_initial_order_ranges_and_coeffs()
 
+    order_tramline_ranges = dict()
+    order_tramline_beginning_coefficients = dict()
+    order_tramline_ending_coefficients = dict()
+
+    for ccd in ['1','2','3']:
+        if ccd == '1': orders = np.arange(138,167+1)
+        if ccd == '2': orders = np.arange(103,140+1)
+        if ccd == '3': orders = np.arange(65,104+1)
+
+        for order in orders:
+            order_tramline_ranges['ccd_'+ccd+'_order_'+str(order)]      = np.arange(4112)
+
+            tramline_information = np.loadtxt('./VeloceReduction/tramline_information/tramlines_begin_end_ccd_'+ccd+'_order_'+str(order)+'.txt')
+            order_tramline_beginning_coefficients['ccd_'+ccd+'_order_'+str(order)] = tramline_information[0,:-1] # neglecting the buffer info in last cell
+            order_tramline_ending_coefficients['ccd_'+ccd+'_order_'+str(order)]    = tramline_information[1,:-1] # neglecting the buffer info in last cell
+
+    return(order_tramline_ranges, order_tramline_beginning_coefficients, order_tramline_ending_coefficients)
+
+def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlines_based_on_flat = False, LC = False, Science = False, use_tinney_ranges = False, debug_tramlines = False, debug_overscan=False):
+    """
+    Extracts spectroscopic orders from CCD images for various types of Veloce CCD images
+    using predefined tramline ranges and providing detailed debug information.
+
+    Parameters:
+        ccd1_runs (list): List of observation runs for CCD 1.
+        ccd2_runs (list): List of observation runs for CCD 2.
+        ccd3_runs (list): List of observation runs for CCD 3.
+        Flat (bool): Set to True to extract orders for flat field images.
+        update_tramlines_based_on_flat (bool): Set to True to update tramline information based on flat field images. Can only be activated if Flat == True.
+        LC (bool): Set to True to extract orders for laser comb calibration images.
+        Science (bool): Set to True to extract orders for science observations.
+        use_tinney_ranges (bool): Set to True to use tramline ranges specified by Chris Tinney.
+        debug_tramlines (bool): Set to True to display debug plots for tramline extraction.
+        debug_overscan (bool): Set to True to display debug plots for overscan correction.
+
+    Returns:
+        tuple: A tuple containing:
+            - counts_in_orders (np.array): An array of extracted counts in the orders.
+            - noise_in_orders (np.array): An array of noise measurements in the orders.
+            - metadata (dict, optional): Metadata related to the science observations, included only if `Science` is True.
+
+    Depending on the flag settings, this function processes CCD data differently:
+        - `Flat` affects the data normalization methods.
+        - `LC` determines the calibration regime applied.
+        - `Science` enables additional metadata extraction.
+    """
+
+    if (not Flat) & (update_tramlines_based_on_flat):
+        raise ValueError('Cannot update tramlines based on flat field images if Flat is False')
+
+    order_ranges, order_beginning_coefficients, order_ending_coefficients = read_in_order_tramlines()
+
+    if use_tinney_ranges:
+        # Extract initial order ranges and coefficients
+        order_ranges, order_beginning_coefficients, order_ending_coefficients = read_in_order_tramlines_tinney()    
 
     # Extract Images from CCDs 1-3
     images = dict()
@@ -241,44 +346,57 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, LC = False, Sc
             # Ensure that Flat pixels with negative value or 0.0 exactly are reset to 1.0
             images['ccd_'+str(ccd)][np.where(images['ccd_'+str(ccd)] <= 0.0)] = 1.0
 
+            if update_tramlines_based_on_flat:
+                for order in list(order_beginning_coefficients):
+                    optimise_tramline_polynomial(
+                        overscan_subtracted_images = images['ccd_'+str(ccd)], 
+                        order = order,
+                        readout_mode = readout_mode,
+                        overwrite = True,
+                        debug = False
+                    )
+                # Read in the overwritten tramline information
+                order_ranges, order_beginning_coefficients, order_ending_coefficients = read_in_order_tramlines()
+
     counts_in_orders = []
     noise_in_orders = []
     
     if debug_tramlines:
-        plt.figure(figsize=(15,15))
-        s = plt.imshow(images['ccd_2'], vmin = 1, vmax = 20, cmap='Greys',aspect=5)
-        plt.colorbar(s)
+        f, gs = plt.subplots(1,3,figsize=(12,4))
+        for panel_index in [0,1,2]:
+            if Flat: vmin = 0; vmax = 0.1
+            elif LC: vmin = 1; vmax = 10
+            else: vmin = 1; vmax = 50
+            s = gs[panel_index].imshow(images['ccd_'+str(panel_index+1)], vmin=vmin, vmax=vmax, cmap='Greys')
+            gs[panel_index].set_title('CCD '+str(panel_index+1))
+            plt.colorbar(s, ax=gs[panel_index-1])
+            gs[panel_index].set_xlim(0,np.shape(images['ccd_'+str(panel_index+1)])[1])
+            gs[panel_index].set_ylim(np.shape(images['ccd_'+str(panel_index+1)])[0],0)
     
-    for order in initial_order_coeffs:
+    for order in order_beginning_coefficients.keys():
         ccd = order[4]
 
-        # Identify the tramline ranges for each order
-        # initial_order_ranges[order] are the initial orders reported by C.Tinney.
-        left = -45
-        right = 0
-        if LC & (ccd == '3'):
-            left = 0
-            right = 10
-        if LC & (ccd == '2'):
-            left = 8
-            right = 20
-        order_xrange_begin = np.array(polynomial_function(np.arange(np.shape(images['ccd_'+str(ccd)])[0]),*initial_order_coeffs[order])+left,dtype=int)
-        order_xrange_end   = np.array(polynomial_function(np.arange(np.shape(images['ccd_'+str(ccd)])[0]),*initial_order_coeffs[order])+right,dtype=int)
-
-        if debug_tramlines:
-            if ccd == '2':
-                plt.plot(order_xrange_begin,np.arange(len(order_xrange_begin)),c='C0',lw=0.5)
-                plt.plot(order_xrange_end,np.arange(len(order_xrange_begin)),c='C1',lw=0.5)
-        
-        # Save the flux from each tramlines in a row; give NaN values to regions without flux
+        # Prepare to the flux from each tramlines in a row; give NaN values to regions without flux
         order_counts = np.zeros(np.shape(images['ccd_'+str(ccd)])[1]); order_counts[:] = np.nan
         order_noise = np.zeros(np.shape(images['ccd_'+str(ccd)])[1]); order_noise[:] = np.nan
 
+        order_xrange_begin = np.array(polynomial_function(np.arange(np.shape(images['ccd_'+str(ccd)])[0]),*order_beginning_coefficients[order]),dtype=int)
+        order_xrange_end   = np.array(polynomial_function(np.arange(np.shape(images['ccd_'+str(ccd)])[0]),*order_ending_coefficients[order]),dtype=int)
+
+        # If we are using the LC, use the region 11+-6 pixels to the right of the end of the main tramline
+        if LC:
+            order_xrange_begin = np.array(polynomial_function(np.arange(np.shape(images['ccd_'+str(ccd)])[0]),*order_ending_coefficients[order])+5,dtype=int)
+            order_xrange_end   = np.array(polynomial_function(np.arange(np.shape(images['ccd_'+str(ccd)])[0]),*order_ending_coefficients[order])+17,dtype=int)
+
+        if debug_tramlines:
+            gs[int(ccd)-1].plot(order_xrange_begin,np.arange(len(order_xrange_begin)),c='C0',lw=0.1)
+            gs[int(ccd)-1].plot(order_xrange_end,np.arange(len(order_xrange_begin)),c='C1',lw=0.1)
+        
         # Because of the extended overscan region in 4Amplifier readout mode, we have to adjust which region we are using the extract the orders from.
         if readout_mode == '2Amp':
-            order_ranges_adjusted_for_readout_mode = initial_order_ranges[order]
+            order_ranges_adjusted_for_readout_mode = order_ranges[order]
         elif readout_mode == '4Amp':
-            order_ranges_adjusted_for_readout_mode = initial_order_ranges[order][16:-16]
+            order_ranges_adjusted_for_readout_mode = order_ranges[order][16:-16]
         else:
             raise ValueError('Cannot handle readout_mode other than 2Amp or 4Amp')
 
@@ -286,7 +404,7 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, LC = False, Sc
             
             counts_in_pixels_to_be_summed = images['ccd_'+str(ccd)][x,order_xrange_begin[x_index]:order_xrange_end[x_index]]
             
-            order_counts[initial_order_ranges[order][0] + x_index] = np.sum(counts_in_pixels_to_be_summed,axis=0)
+            order_counts[order_ranges[order][0] + x_index] = np.sum(counts_in_pixels_to_be_summed,axis=0)
             
             # We are making the quick assumption that the read noise is simply the maximum overscan RMS
             total_read_noise = np.max([os_rms[region] for region in os_rms.keys()])*np.sqrt(len(counts_in_pixels_to_be_summed))
@@ -301,7 +419,7 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, LC = False, Sc
                 print('x_index:      ',2000)
                 print('sum(counts):  ',np.sum(counts_in_pixels_to_be_summed,axis=0))
                 print('sqrt(counts): ',np.sqrt(np.sum(counts_in_pixels_to_be_summed,axis=0)))
-                print('read noise:   ',read_noise)
+                print('read noise:   ',total_read_noise)
                 print('counts:       ',counts_in_pixels_to_be_summed)
                 plt.figure()
                 plt.title(order)
@@ -310,14 +428,23 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, LC = False, Sc
                 plt.close()
                 
             # noise = sqrt(flux + pixel_read_noise**2 * nr of pixels * nr of exposures)
-            order_noise[initial_order_ranges[order][0] + x_index] = np.sqrt(np.sum(counts_in_pixels_to_be_summed,axis=0) + total_read_noise**2)
+            order_noise[order_ranges[order][0] + x_index] = np.sqrt(np.sum(counts_in_pixels_to_be_summed,axis=0) + total_read_noise**2)
 
         counts_in_orders.append(order_counts)
         noise_in_orders.append(order_noise)
 
     if debug_tramlines:
-        plt.xlim(2500,4200)
-        plt.ylim(2000,2500)
+        if Flat:
+            type='_flat'
+        elif Science:
+            type='_science'
+        elif LC:
+            type='_lc'
+        else:
+            type=''
+        
+        plt.tight_layout()
+        plt.savefig('./VeloceReduction/tramline_information/debug_tramlines'+type+'.pdf',dpi=400,bb_inches='tight')
         plt.show()
         plt.close()
         
@@ -329,19 +456,22 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, LC = False, Sc
 
 def find_tramline_beginning_and_ending(x_index, x_pixels, previous_beginning, previous_ending, expected_tramline_width = 38, tolerance=2, tolerance_to_previous=3, debug=False):
     """
-    Find the tramline beginning and ending for a given position of x_pixels above a threshold.
-    Basically: Identify significant gaps that we expect to be those between the main tramline and the outer fibres left and right of it.
-    
-    :param x_index: Index of the row we are currently investigating
-    :param x_pixels: The x pixels, that is, pixels within the region of the tramline above a certain threshold
-    :param previous_beginning: The beginning of the previous row.
-    :param previous_ending: The ending of the previous row.
-    :expected_tramline_width: Expected tramline width (typically 38-45)
-    :param tolerance: The tolerance for identifying a "gap" (between main tramline and the outer fibres).
-    :param tolerance_to_previous: The tolerance for difference to previous row's beginning/ending.
-    :param debug: Whether to show debug plots/prints.
+    Calculates the beginning and ending positions of a tramline for a specific row based on pixel intensity data that exceeds a certain threshold. 
+    This function identifies significant gaps likely representing the space between the main tramline and outer fibers.
 
-    :return: The main tramline beginning and ending as a 2-tuple.
+    Parameters:
+        x_index (int): Index of the row currently being analyzed.
+        x_pixels (array): Array of pixel positions within the tramline region above a specified intensity threshold.
+        previous_beginning (int): Beginning pixel index of the tramline in the previous row.
+        previous_ending (int): Ending pixel index of the tramline in the previous row.
+        expected_tramline_width (int, optional): Expected width of the tramline, typically ranging from 38 to 45 pixels. Default is 38.
+        tolerance (int, optional): Tolerance level for identifying significant gaps between the main tramline and outer fibers, measured in pixels. Default is 2.
+        tolerance_to_previous (int, optional): Tolerance for deviations from the previous row's tramline positions, measured in pixels. Default is 3.
+        debug (bool, optional): If True, enables debug outputs for troubleshooting the tramline detection process.
+
+    Returns:
+        tuple (int, int): A tuple containing the beginning and ending pixel indices of the tramline for the current row.
+                          Returns (np.nan, np.nan) if the calculated tramline positions are outside of the defined tolerances or if other validity tests fail.
     """
 
     # Calculate differences between pixels above the threshold (which wis used as input for x_pixels)
@@ -439,16 +569,23 @@ def find_tramline_beginning_and_ending(x_index, x_pixels, previous_beginning, pr
 
 def optimise_tramline_polynomial(overscan_subtracted_images, order, readout_mode, overwrite=False, debug=False):
     """
-    Optimise the tramline polynomial for beginning and ending for a given order and readout mode.
+    Optimizes the polynomial coefficients for defining the beginning and ending of tramlines in spectroscopic data
+    for a given order and readout mode. This function fits polynomials to tramline boundaries based on
+    overscan-subtracted images.
 
-    :param overscan_subtracted_images: The overscan subtracted images.
-    :param order: The order.
-    :param readout_mode: The readout mode.
-    :param overwrite: Whether to overwrite a potentially existing file
-        VeloceReduction/tramline_information/tramlines_begin_end_'+order+'.txt
-    :param debug: Whether to show debug plots.
+    Parameters:
+        overscan_subtracted_images (list of ndarray): A list of 2D arrays, each representing an overscan-subtracted image.
+        order (int or str): The spectral order to be processed.
+        readout_mode (str): The readout mode used during image acquisition, affecting the fitting process.
+        overwrite (bool, optional): If True, overwrites the existing polynomial coefficient file located at 
+            'VeloceReduction/tramline_information/tramlines_begin_end_{order}.txt'. Default is False.
+        debug (bool, optional): If True, displays debug plots that illustrate the polynomial fitting process and 
+            the derived tramline boundaries. Default is False.
 
-    :return: The tramline beginning and ending polynomial fit coefficients as 2 arrays.
+    Returns:
+        tuple of arrays: Returns a tuple containing two arrays:
+            - The first array contains the polynomial coefficients for the tramline beginning.
+            - The second array contains the polynomial coefficients for the tramline ending.
     """
 
     if readout_mode != '2Amp':
@@ -462,22 +599,16 @@ def optimise_tramline_polynomial(overscan_subtracted_images, order, readout_mode
 
     image_dimensions = np.shape(overscan_subtracted_images['ccd_'+str(ccd)])
 
-    # Identify the rough (too wide) tramline ranges for each order
-    # initial_order_ranges[order] are the initial orders reported by C.Tinney with slight adjustments.
-    initial_order_ranges, initial_order_coeffs = extract_initial_order_ranges_and_coeffs()
+    # Identify the rough (too wide) tramline ranges for each order as reported by C.Tinney (with slight adjustments).
+    order_ranges, order_beginning_coeffs, order_ending_coeffs = read_in_order_tramlines_tinney()
 
-    if ccd == '3':
-        left = -65
-        right = 10
-    elif ccd == '2':
-        left = -60
-        right = 15
-    elif ccd == '1':
-        left = -65
-        right = 15
+    # leave option to adjust beginning and end of tramlines.
+    # Set left and right adjustment to 0 by default
+    left = 0
+    right = 0
 
-    order_xrange_begin = np.array(polynomial_function(np.arange(np.shape(overscan_subtracted_images['ccd_'+str(ccd)])[0]),*initial_order_coeffs[order])+left,dtype=int)
-    order_xrange_end   = np.array(polynomial_function(np.arange(np.shape(overscan_subtracted_images['ccd_'+str(ccd)])[0]),*initial_order_coeffs[order])+right,dtype=int)
+    order_xrange_begin = np.array(polynomial_function(np.arange(np.shape(overscan_subtracted_images['ccd_'+str(ccd)])[0]),*order_beginning_coeffs[order])+left,dtype=int)
+    order_xrange_end   = np.array(polynomial_function(np.arange(np.shape(overscan_subtracted_images['ccd_'+str(ccd)])[0]),*order_ending_coeffs[order])+right,dtype=int)
 
     # Define buffer for beginning and ending of the CCD to avoid issues with tramlines at the edges
     buffer = dict()
@@ -601,9 +732,9 @@ def optimise_tramline_polynomial(overscan_subtracted_images, order, readout_mode
 
     # Because of the extended overscan region in 4Amplifier readout mode, we have to adjust which region we are using the extract the orders from.
     if readout_mode == '2Amp':
-        order_ranges_adjusted_for_readout_mode = initial_order_ranges[order]
+        order_ranges_adjusted_for_readout_mode = order_ranges[order]
     elif readout_mode == '4Amp':
-        order_ranges_adjusted_for_readout_mode = initial_order_ranges[order][16:-16]
+        order_ranges_adjusted_for_readout_mode = order_ranges[order][16:-16]
     else:
         raise ValueError('Cannot handle readout_mode other than 2Amp or 4Amp')
 
@@ -704,7 +835,7 @@ def optimise_tramline_polynomial(overscan_subtracted_images, order, readout_mode
     )[0]
     
     if overwrite:
-        np.savetxt('VeloceReduction/tramline_information/tramlines_begin_end_'+order+'.txt',
+        np.savetxt('./VeloceReduction/tramline_information/tramlines_begin_end_'+order+'.txt',
                 np.array([
                     ['#c0', 'c1', 'c2', 'c3', 'c4','buffer_pixel'],
                     np.concatenate((order_beginning_fit,[buffer[order][0]])),
@@ -713,7 +844,7 @@ def optimise_tramline_polynomial(overscan_subtracted_images, order, readout_mode
                 fmt='%s')
     else:
         try:
-            old_order_beginning, old_order_ending = np.loadtxt('VeloceReduction/tramline_information/tramlines_begin_end_'+order+'.txt')
+            old_order_beginning, old_order_ending = np.loadtxt('./VeloceReduction/tramline_information/tramlines_begin_end_'+order+'.txt')
             old_buffer = [old_order_beginning[-1],old_order_ending[-1]]
             old_order_beginning = old_order_beginning[:-1]
             old_order_ending = old_order_ending[:-1]
