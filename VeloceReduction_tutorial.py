@@ -28,6 +28,9 @@ import matplotlib.pyplot as plt
 from VeloceReduction import config
 import VeloceReduction as VR
 
+from scipy.optimize import curve_fit
+from VeloceReduction.utils import polynomial_function
+
 
 # ## Adjust Date and Directory (possibly via argument parser)
 
@@ -93,8 +96,8 @@ calibration_runs, science_runs = VR.utils.identify_calibration_and_science_runs(
 # In[ ]:
 
 
-# Extract initial order ranges and coefficients
-initial_order_ranges, initial_order_coeffs = VR.extraction.extract_initial_order_ranges_and_coeffs()
+# Extract order ranges and coefficients
+order_ranges, order_beginning_coeffs, order_ending_coeffs = VR.extraction.read_in_order_tramlines()
 
 
 # In[ ]:
@@ -107,7 +110,11 @@ master_flat, noise = VR.extraction.extract_orders(
     ccd2_runs = calibration_runs['Flat_1.0'][:1],
     ccd3_runs = calibration_runs['Flat_0.1'][:1],
     Flat = True,
-    #debug_overscan=True
+    update_tramlines_based_on_flat = False, # Would update and overwrite
+    # ./VeloceReduction/tramline_information/tramline_begin_end_ccd_*_oder_*.txt
+    debug_overscan = False,
+    debug_tramlines = False # Would create a tramlines trace PDF under
+    # ./VeloceReduction/tramline_information/debug_tramlines_flat.pdf
 )
 
 # Extract Master ThXe
@@ -115,7 +122,9 @@ print('Extracting Master ThXe')
 master_thxe, noise = VR.extraction.extract_orders(
     ccd1_runs = calibration_runs['FibTh_180.0'][:1],
     ccd2_runs = calibration_runs['FibTh_60.0'][:1],
-    ccd3_runs = calibration_runs['FibTh_15.0'][:1]
+    ccd3_runs = calibration_runs['FibTh_15.0'][:1],
+    debug_tramlines = False # Would create a tramlines trace PDF under
+    # ./VeloceReduction/tramline_information/debug_tramlines.pdf
 )
 
 # Extract Master LC
@@ -125,7 +134,8 @@ master_lc, noise = VR.extraction.extract_orders(
     ccd2_runs = calibration_runs['SimLC'][-1:],
     ccd3_runs = calibration_runs['SimLC'][-1:],
     LC = True,
-    # tramline_debug = True
+    debug_tramlines = False # Would create a tramlines trace PDF under
+    # ./VeloceReduction/tramline_information/debug_tramlines_lc.pdf
 )
 
 
@@ -141,7 +151,9 @@ for science_object in list(science_runs.keys()):
             ccd2_runs = science_runs[science_object],
             ccd3_runs = science_runs[science_object],
             Science=True,
-            #debug_overscan=True
+            debug_tramlines = False, # Would create a tramlines trace PDF under
+            # ./VeloceReduction/tramline_information/debug_tramlines_science.pdf
+            debug_overscan=False
         )
 
         # Create a primary HDU and HDU list
@@ -159,17 +171,17 @@ for science_object in list(science_runs.keys()):
         hdul = fits.HDUList([primary_hdu])
 
         # Loop over your extension names and corresponding data arrays
-        for ext_index, ext_name in enumerate(initial_order_coeffs):
+        for ext_index, ext_name in enumerate(order_beginning_coeffs):
             # Create an ImageHDU object for each extension
             
             # Apply flat-field calibration to science
             science[ext_index,:] /= master_flat[ext_index,:]
             science_noise[ext_index,:] /= master_flat[ext_index,:]
             
-            # Apply rough renormalisation with outlier-robuster 99th percenile
-            science_99percentile = np.nanpercentile(science[ext_index,:],q=99)
+            # Apply rough renormalisation with outlier-robuster 99th percenile of ~middle of order
+            science_99percentile = np.nanpercentile(science[ext_index,1500:2500],q=99)
             science[ext_index,:] /= science_99percentile
-            science_noise[ext_index,:] /= science_99percentile            
+            science_noise[ext_index,:] /= science_99percentile
             
             # Define the columns with appropriate formats
             col1_def = fits.Column(name='wave_vac',format='E', array=np.arange(len(science[ext_index,:]),dtype=float))

@@ -269,7 +269,7 @@ def read_in_order_tramlines():
         if ccd == '3': orders = np.arange(65,104+1)
 
         for order in orders:
-            order_tramline_ranges['ccd_'+ccd+'_order_'+str(order)]      = np.arange(4112)
+            order_tramline_ranges['ccd_'+ccd+'_order_'+str(order)] = np.arange(4112)
 
             tramline_information = np.loadtxt('./VeloceReduction/tramline_information/tramlines_begin_end_ccd_'+ccd+'_order_'+str(order)+'.txt')
             order_tramline_beginning_coefficients['ccd_'+ccd+'_order_'+str(order)] = tramline_information[0,:-1] # neglecting the buffer info in last cell
@@ -414,18 +414,18 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
             if Science:
                 total_read_noise *= np.sqrt(len(runs))
 
-            if debug_tramlines & Science & (x_index == 2000):
-                print(order)
-                print('x_index:      ',2000)
-                print('sum(counts):  ',np.sum(counts_in_pixels_to_be_summed,axis=0))
-                print('sqrt(counts): ',np.sqrt(np.sum(counts_in_pixels_to_be_summed,axis=0)))
-                print('read noise:   ',total_read_noise)
-                print('counts:       ',counts_in_pixels_to_be_summed)
-                plt.figure()
-                plt.title(order)
-                plt.plot(counts_in_pixels_to_be_summed)
-                plt.show()
-                plt.close()
+            # if debug_tramlines & Science & (x_index == 2000):
+            #     print(order)
+            #     print('x_index:      ',2000)
+            #     print('sum(counts):  ',np.sum(counts_in_pixels_to_be_summed,axis=0))
+            #     print('sqrt(counts): ',np.sqrt(np.sum(counts_in_pixels_to_be_summed,axis=0)))
+            #     print('read noise:   ',total_read_noise)
+            #     print('counts:       ',counts_in_pixels_to_be_summed)
+            #     plt.figure()
+            #     plt.title(order)
+            #     plt.plot(counts_in_pixels_to_be_summed)
+            #     plt.show()
+            #     plt.close()
                 
             # noise = sqrt(flux + pixel_read_noise**2 * nr of pixels * nr of exposures)
             order_noise[order_ranges[order][0] + x_index] = np.sqrt(np.sum(counts_in_pixels_to_be_summed,axis=0) + total_read_noise**2)
