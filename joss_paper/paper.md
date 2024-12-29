@@ -26,7 +26,7 @@ bibliography: paper.bib
 
 Utilizing both science and calibration images, this package automates the processing of observational data from a given night for the échelle orders as shown in \autoref{fig:example_tramline}.
 
-![Example of an échelle order extraction of order 141 in CCD1 (Azzurro).\label{fig:example_tramline}](tramline_extraction_example_ccd_1_order_141.png){ width=50% }
+![Example of the tracing of orders/tramlines with flat calibration exposures for échelle order 141 in CCD1 (Azzurro).\label{fig:example_tramline}](tramline_extraction_example_ccd_1_order_141.png){ width=95% }
 
 It handles data across all 110 echelle orders of the Veloce spectrograph, which covers a spectral range from 390 nm to 940 nm as shown in \autoref{fig:example_spectrum}. The package automatically handles observations via 2 and 4 Amplifier readout (2Amp and 4Amp).
 
