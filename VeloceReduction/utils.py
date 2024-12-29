@@ -37,16 +37,17 @@ def voigt_absorption_profile(wavelength, line_centre, line_depth, sigma, gamma):
     profile = profile / max(profile)  # Normalize profile to max 1
     return 1 - line_depth * profile
 
-def fit_voigt_absorption_profile(wavelength, flux, initial_guess):
+def fit_voigt_absorption_profile(wavelength, flux, initial_guess, bounds=None):
     """
     Fits a Voigt absorption profile to a given spectrum. The Voigt profile is a convolution of a Gaussian and a Lorentzian,
     commonly used to model the broadening of spectral lines due to both Doppler and natural (pressure or collisional) effects.
 
     Parameters:
-        wavelength (array): The array of wavelength data points across which the spectrum is measured.
-        flux (array): The array of flux measurements corresponding to each wavelength.
-        initial_guess (tuple): A tuple of initial guess parameters for the Voigt profile fit. Typically, this includes
-                               parameters like the center wavelength, amplitude, Gaussian sigma, and Lorentzian gamma.
+        wavelength (array):                 The array of wavelength data points across which the spectrum is measured.
+        flux (array):                       The array of flux measurements corresponding to each wavelength.
+        initial_guess (list):               A list of initial guess parameters for the Voigt profile fit:
+                                            [line_centre, line_depth, sigma, gamma]
+        bounds (tuple or list, optional):   Bounds to be used when calling curve_fit optimization.
 
     Returns:
         tuple: A tuple containing the fitted parameters of the Voigt profile. These parameters include the position (center wavelength),
@@ -54,7 +55,10 @@ def fit_voigt_absorption_profile(wavelength, flux, initial_guess):
     """
 
     # Fit a Voigt Profile to the spectrum
-    popt, pcov = curve_fit(voigt_absorption_profile, wavelength, flux, p0=initial_guess)
+    if bounds is not None:
+        popt, pcov = curve_fit(voigt_absorption_profile, wavelength, flux, p0=initial_guess, bounds=bounds)
+    else:
+        popt, pcov = curve_fit(voigt_absorption_profile, wavelength, flux, p0=initial_guess)
     return (popt, pcov)
 
 def gaussian_absorption_profile(wavelength, line_centre, line_depth, line_sigma):
@@ -77,20 +81,18 @@ def gaussian_absorption_profile(wavelength, line_centre, line_depth, line_sigma)
     """
     return 1 - line_depth * np.exp(-0.5 * ((wavelength - line_centre) / line_sigma) ** 2)
 
-def fit_gaussian_absorption_profile(wavelength, flux, initial_guess):
+def fit_gaussian_absorption_profile(wavelength, flux, initial_guess, bounds=None):
     """
     Fits a Gaussian absorption profile to given spectroscopic data. This function employs a curve fitting
     method to optimize the parameters of a Gaussian model to best match the observed data, useful in spectral analysis
     where features exhibit Gaussian-shaped absorption due to Doppler broadening or other effects.
 
     Parameters:
-        wavelength (array): The array of wavelength data points at which the flux is measured. This array
-                            should correspond to the spectral data's domain.
-        flux (array): The array of observed flux values at each wavelength. This array represents the spectral
-                      data's range.
-        initial_guess (tuple or list): Initial estimates for the Gaussian parameters. Typically, this includes
-                                       guesses for the center (mean), depth (amplitude), and standard deviation (sigma)
-                                       of the Gaussian profile.
+        wavelength (array):                 The array of wavelength data points across which the spectrum is measured.
+        flux (array):                       The array of flux measurements corresponding to each wavelength.
+        initial_guess (list):               A list of initial guess parameters for the Gaussian fit:
+                                            [line_centre, line_depth, line_sigma]
+        bounds (tuple or list, optional):   Bounds to be used when calling curve_fit optimization.
 
     Returns:
         tuple: 
@@ -103,7 +105,10 @@ def fit_gaussian_absorption_profile(wavelength, flux, initial_guess):
     """
 
     # Fit a Gaussian to the spectrum
-    popt, pcov = curve_fit(gaussian_absorption_profile, wavelength, flux, p0=initial_guess)
+    if bounds is not None:
+        popt, pcov = curve_fit(gaussian_absorption_profile, wavelength, flux, p0=initial_guess, bounds=bounds)
+    else:
+        popt, pcov = curve_fit(gaussian_absorption_profile, wavelength, flux, p0=initial_guess)
     return (popt, pcov)
 
 def calculate_barycentric_velocity_correction(science_header):

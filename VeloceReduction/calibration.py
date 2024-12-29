@@ -286,8 +286,17 @@ def calibrate_wavelength(science_object, correct_barycentric_velocity=True, fit_
                     wavelength_to_fit,
                     flux_to_fit,
                     # initial_guess: [line_centre, amplitude, sigma, gamma]
-                    initial_guess = [line_centre, 0.5, 0.5, 0.5]
+                    initial_guess = [line_centre, 0.5, 0.5, 0.5],
+                    # Let's assume an absolute RV below 500 km/s and otherwise (hopefully) reasonable estimates for the line profile.
+                    bounds = (
+                        [line_centre * (1-500./299792.), 0.1, 0.0, 0.0],
+                        [line_centre * (1+500./299792.), 1.0, 10, 10]
+                    )
                 )
+                if voigt_profile_parameters[2] == 10:
+                    print('  -> Warning: Voigt profile fit hit upper boundary (10) for sigma')
+                if voigt_profile_parameters[3] == 10:
+                    print('  -> Warning: Voigt profile fit hit upper boundary (10) for gamma')
 
                 rv_voigt = radial_velocity_from_line_shift(voigt_profile_parameters[0], line_centre)
                 e_line_centre = np.sqrt(np.diag(voigt_profile_covariances))[0]
