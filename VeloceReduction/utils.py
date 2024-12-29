@@ -39,41 +39,67 @@ def voigt_absorption_profile(wavelength, line_centre, line_depth, sigma, gamma):
 
 def fit_voigt_absorption_profile(wavelength, flux, initial_guess):
     """
-    Fit a Gaussian to a spectrum.
+    Fits a Voigt absorption profile to a given spectrum. The Voigt profile is a convolution of a Gaussian and a Lorentzian,
+    commonly used to model the broadening of spectral lines due to both Doppler and natural (pressure or collisional) effects.
 
-    :param wavelength: Wavelength array.
-    :param flux: Flux array.
-    :param initial_guess: Initial guess for the Gaussian fit.
+    Parameters:
+        wavelength (array): The array of wavelength data points across which the spectrum is measured.
+        flux (array): The array of flux measurements corresponding to each wavelength.
+        initial_guess (tuple): A tuple of initial guess parameters for the Voigt profile fit. Typically, this includes
+                               parameters like the center wavelength, amplitude, Gaussian sigma, and Lorentzian gamma.
 
-    :return: Fitted Gaussian parameters.
+    Returns:
+        tuple: A tuple containing the fitted parameters of the Voigt profile. These parameters include the position (center wavelength),
+               amplitude, Gaussian sigma, and Lorentzian gamma.
     """
 
-    # Fit a Gaussian to the spectrum
+    # Fit a Voigt Profile to the spectrum
     popt, pcov = curve_fit(voigt_absorption_profile, wavelength, flux, p0=initial_guess)
     return (popt, pcov)
 
 def gaussian_absorption_profile(wavelength, line_centre, line_depth, line_sigma):
     """
-    Gaussian function.
+    Calculates the Gaussian absorption profile for a given set of spectroscopic data. This function models the
+    absorption feature using a Gaussian function, which is characterized by a center, depth, and width (sigma).
 
-    :param wavelength: Wavelength array.
-    :param line_centre: Centre of the Gaussian line.
-    :param line_sigma: Sigma of the Gaussian line.
-    :param line_depth: Depth of the Gaussian line.
+    Parameters:
+        wavelength (array): Array of wavelength data points at which the absorption profile is evaluated.
+        line_centre (float): The central wavelength of the Gaussian absorption feature.
+        line_depth (float): The depth of the Gaussian line, representing the maximum amount of light absorbed at the line center.
+        line_sigma (float): The standard deviation of the Gaussian distribution, determining the width of the absorption line.
 
-    :return: Gaussian line.
+    Returns:
+        array: An array representing the Gaussian absorption profile across the input wavelength array. The profile
+               is calculated as 1 minus the Gaussian function, representing the absorption from a continuum level of 1.
+
+    This function is particularly useful for simulating or fitting spectral data where absorption features are expected
+    to follow a Gaussian distribution due to Doppler broadening or instrumental effects.
     """
     return 1 - line_depth * np.exp(-0.5 * ((wavelength - line_centre) / line_sigma) ** 2)
 
 def fit_gaussian_absorption_profile(wavelength, flux, initial_guess):
     """
-    Fit a Gaussian to a spectrum.
+    Fits a Gaussian absorption profile to given spectroscopic data. This function employs a curve fitting
+    method to optimize the parameters of a Gaussian model to best match the observed data, useful in spectral analysis
+    where features exhibit Gaussian-shaped absorption due to Doppler broadening or other effects.
 
-    :param wavelength: Wavelength array.
-    :param flux: Flux array.
-    :param initial_guess: Initial guess for the Gaussian fit.
+    Parameters:
+        wavelength (array): The array of wavelength data points at which the flux is measured. This array
+                            should correspond to the spectral data's domain.
+        flux (array): The array of observed flux values at each wavelength. This array represents the spectral
+                      data's range.
+        initial_guess (tuple or list): Initial estimates for the Gaussian parameters. Typically, this includes
+                                       guesses for the center (mean), depth (amplitude), and standard deviation (sigma)
+                                       of the Gaussian profile.
 
-    :return: Fitted Gaussian parameters.
+    Returns:
+        tuple: 
+            - popt (array): The optimized parameters of the Gaussian model [line_centre, line_depth, line_sigma].
+            - pcov (2D array): The covariance matrix of the parameters estimated. Diagonal elements provide the variance
+                               of the parameter estimate. Off-diagonal elements are covariances between parameters.
+
+    This function is particularly useful for analyzing astronomical spectra to characterize the properties
+    of absorption lines.
     """
 
     # Fit a Gaussian to the spectrum
@@ -82,12 +108,27 @@ def fit_gaussian_absorption_profile(wavelength, flux, initial_guess):
 
 def calculate_barycentric_velocity_correction(science_header):
     """
-    Calculate the barycentric velocity correction for a given observation (Ra, Dec, UT MJD) at Siding Spring Observatory (SSO).
+    Calculates the barycentric velocity correction for a given astronomical observation by taking into account
+    the Earth's motion relative to the solar system's barycenter. This correction is computed based on the
+    right ascension (RA) and declination (Dec) of the observed object, as well as the Universal Time (UT)
+    expressed in Modified Julian Date (MJD), as specified in the header of a FITS file.
 
-    :param science_header: Header of the science FITS file.
+    This function uses astropy.coordinates.SkyCoord for celestial coordinate handling and astropy.time.Time
+    for time format conversions, ensuring precise astronomical calculations. The Siding Spring Observatory (SSO)
+    location should be predefined as an astropy EarthLocation object within the function.
 
-    :return: Barycentric velocity correction in km/s.
+    Parameters:
+        science_header (dict): Header from a science FITS file that must include:
+            - 'MEANRA': Mean right ascension of the observation in degrees.
+            - 'MEANDEC': Mean declination of the observation in degrees.
+            - 'UTMJD': Universal Time of the observation in Modified Julian Date format.
+
+    Returns:
+        float: The barycentric velocity correction in kilometers per second (km/s). This value represents the velocity
+               necessary to adjust for the Earth's motion when analyzing spectral data, improving the accuracy of radial
+               velocity measurements.
     """
+
     object_coordinates = SkyCoord(ra = science_header['MEANRA'], dec = science_header['MEANDEC'], frame="icrs", unit="deg")
     vbary_corr_kms = object_coordinates.radial_velocity_correction( 
         kind='barycentric', 
@@ -98,33 +139,54 @@ def calculate_barycentric_velocity_correction(science_header):
 
 def velocity_shift(velocity_in_kms, wavelength_array):
     """
-    Shift wavelength array with rv_value in km/s.
-    :param velocity_in_kms: Radial velocity in km/s.
-    :param wavelength_array: Wavelength array to be shifted.
-    :return: Shifted wavelength array.
+    Applies a Doppler shift to a wavelength array based on the provided radial velocity. The Doppler effect
+    shifts the wavelengths of emitted light depending on the relative motion of the source towards or away from the observer.
+
+    Parameters:
+        velocity_in_kms (float): The radial velocity in kilometers per second. A positive value indicates
+                                 that the object is moving away from the observer, resulting in a redshift;
+                                 a negative value indicates motion towards the observer, resulting in a blueshift.
+        wavelength_array (array): The array of wavelengths to be shifted. Each wavelength in the array is
+                                  adjusted according to the Doppler formula to reflect the effects of the
+                                  radial velocity.
+
+    Returns:
+        array: A new array containing the shifted wavelengths. The shift is calculated using the formula:
+               shifted_wavelength = original_wavelength / (1 + (velocity_in_kms / c))
+               where 'c' is the speed of light in km/s (approximately 299,792.458 km/s).
     """
     return(wavelength_array / (1.+velocity_in_kms/299792.458))
 
 def match_month_to_date(date):
     """
-    Match the month to the date.
+    Extracts the month from a date string formatted as 'YYYYMMDD' or 'YYMMDD' and returns it as a three-letter abbreviation.
 
-    :param date: Date in the format 'YYYYMMDD'.
+    Parameters:
+        date (str): A string representing a date, formatted as 'YYYYMMDD' or 'YYMMDD'. The year ('YYYY' or 'YY'), month ('MM'),
+                    and day ('DD') must each be correctly positioned in the string for accurate processing.
 
-    :return: Month in string format.
+    Returns:
+        str: The three-letter abbreviation of the month (e.g., 'jan' for January, 'feb' for February, etc.),
+             corresponding to the month number extracted from the date string.
     """
     months = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec']
     
-    return(months[int(date[2:-2])-1])
+    return(months[int(date[-4:-2])-1])
 
 def polynomial_function(x, *coeffs):
     """
-    Polynomial function.
+    Evaluates a polynomial at specified points. This function computes the value of a polynomial with given coefficients
+    at each point in the input array 'x'. The polynomial is defined as y = c0 + c1*x + c2*x^2 + ... + cn*x^n, where 'cn'
+    represents the nth coefficient in the polynomial.
 
-    :param x: Independent variable (wavelength or pixel number).
-    :param coeffs: Coefficients of the polynomial.
+    Parameters:
+        x (array-like): An array of points at which the polynomial is to be evaluated. This can be any sequence of numbers,
+                        wavelength data, or pixel numbers.
+        coeffs (float): Variable length argument list representing the coefficients of the polynomial (c0, c1, c2, ..., cn).
+                        These are passed in the order from the constant term (c0) to the highest power's coefficient.
 
-    :return: Calculated y values.
+    Returns:
+        array: An array of the same shape as 'x', containing the calculated values of the polynomial at each point.
     """
     y = np.zeros_like(x,dtype=float)
     for i, coeff in enumerate(coeffs):
@@ -133,39 +195,66 @@ def polynomial_function(x, *coeffs):
 
 def read_veloce_fits_image_and_metadata(file_path):
     """
-    Read the relevant information from a FITS file.
+    Reads an image and its associated metadata from a Veloce FITS file. This function extracts the full image data
+    and selected metadata attributes relevant to astronomical observations.
 
-    :param file_path: Path to the FITS file.
-    
-    :return: Full image and metadata.
+    Parameters:
+        file_path (str): Path to the FITS file from which data is to be read. The file should conform to the FITS standard
+                         and contain both image data and a header with metadata.
+
+    Returns:
+        tuple:
+            - full_image (numpy.ndarray): The 2D array of the image data extracted from the FITS file's primary HDU.
+            - metadata (dict): A dictionary containing specific metadata entries extracted from the FITS header, including:
+                * 'OBJECT': The name of the observed object
+                * 'UTMJD': Universal Time at mid-exposure, expressed in Modified Julian Date
+                * 'MEANRA': Mean right ascension of the observed object
+                * 'MEANDEC': Mean declination of the observed object
+                * 'EXPTIME': Exposure time in seconds
+                * 'READOUT': Readout mode of the detector (either '4Amp' or '2Amp')
     """
 
-    # Read relevant information from FITS file
+    # Initialize a dictionary to store metadata
     metadata = dict()
     
-    fits_file = fits.open(file_path)
-
-    full_image = fits_file[0].data
-    for key in ['OBJECT','UTMJD','MEANRA','MEANDEC','EXPTIME']:
-        metadata[key] = fits_file[0].header[key]
-    if 'DETA3X' in fits_file[0].header:
-        readout_mode = '4Amp'
-        metadata['READOUT'] = '4Amp'
-    else:
-        readout_mode = '2Amp'
-        metadata['READOUT'] = '2Amp'
-    fits_file.close()
+    # Open the FITS file and extract the image and metadata
+    with fits.open(file_path) as fits_file:
+        full_image = fits_file[0].data
+        for key in ['OBJECT','UTMJD','MEANRA','MEANDEC','EXPTIME']:
+            metadata[key] = fits_file[0].header[key]
+        if 'DETA3X' in fits_file[0].header:
+            readout_mode = '4Amp'
+            metadata['READOUT'] = '4Amp'
+        else:
+            readout_mode = '2Amp'
+            metadata['READOUT'] = '2Amp'
 
     return(full_image, metadata)
 
 def identify_calibration_and_science_runs(date, raw_data_dir):
     """
-    Identify calibration and science runs from the log file.
+    Parses a log file in a specified directory to categorize and list calibration and science runs based on 
+    the observation data. This function is tailored to handle the file structure and content specific to 
+    Veloce spectrograph observations.
 
-    :param date: Date in the format 'YYYYMMDD'.
-    :param raw_data_dir: Path to the raw data directory.
-    
-    :return: Dictionaries with calibration and science runs.
+    Parameters:
+        date (str): Date in the format 'YYMMDD'. This is used to locate the log file in the directory
+                    structure that organizes files by date.
+        raw_data_dir (str): The path to the directory containing raw data and log files. This should be the 
+                            root directory under which data is organized by date.
+
+    Returns:
+        tuple: 
+            - calibration_runs (dict): A dictionary categorizing different types of calibration runs, each
+                                       key corresponds to a run type (e.g., 'Flat', 'Bias') and its value is 
+                                       a list of run identifiers.
+            - science_runs (dict): A dictionary where each key is a science observation object name and its 
+                                   value is a list of run identifiers associated with that object.
+
+    The function searches for a log file matching the provided date, reads the file, and processes each line
+    to extract relevant information such as run type, object observed, and other metadata. Calibration runs 
+    and science runs are distinguished based on predefined criteria extracted from the log file content.
+
     """
     
     print('\n=============================================')
@@ -174,45 +263,31 @@ def identify_calibration_and_science_runs(date, raw_data_dir):
     raw_file_path = raw_data_dir+'/'+date+'/'
 
     log_file_path = glob.glob(raw_file_path+'*.log')
-    if len(log_file_path) == 0:
+    
+    raw_file_path = f"{raw_data_dir}/{date}/"
+
+    log_file_path = glob.glob(f"{raw_file_path}*.log")
+    if not log_file_path:
         raise ValueError('No Log file present')
+    elif len(log_file_path) > 1:
+        print(f'More than 1 Log file present, continuing with {log_file_path[0]}\n')
     else:
-        if len(log_file_path) > 1:
-            print('More than 1 Log file present, continuing with '+log_file_path[0]+'\n')
-        else:
-            print('Found Log file '+log_file_path[0]+'\n')
-        log_file_path = log_file_path[0]
+        print(f'Found Log file {log_file_path[0]}\n')
+    log_file_path = log_file_path[0]
 
-        log_file = open(log_file_path, "r")
-        log_file_text = log_file.read()
-        log_file.close()
-        log_file_text = log_file_text.split('\n')
+    with open(log_file_path, "r") as log_file:
+        log_file_text = log_file.read().split('\n')
 
-    # Now go through the log_file_text and read out all important information
+    # Initialization of dictionaries to collect calibration and science runs
+    calibration_runs = {key: [] for key in [
+        'FibTh_15.0', 'FibTh_60.0', 'FibTh_180.0', 'SimTh_15.0', 'SimTh_60.0', 'SimTh_180.0', 'SimLC',
+        'Flat_0.1', 'Flat_1.0', 'Flat_10.0', 'Flat_60.0', 'Bstar', 'Bias'
+    ]}
+    science_runs = {}
 
-    # Collect information about runs from log file.
-    # We classify calibration_runs and science_runs
-    calibration_runs = dict()
-    calibration_runs['FibTh_15.0'] = []
-    calibration_runs['FibTh_60.0'] = []
-    calibration_runs['FibTh_180.0'] = []
-    calibration_runs['SimTh_15.0'] = []
-    calibration_runs['SimTh_60.0'] = []
-    calibration_runs['SimTh_180.0'] = []
-    calibration_runs['SimLC'] = []
-    calibration_runs['Flat_0.1'] = []
-    calibration_runs['Flat_1.0'] = []
-    calibration_runs['Flat_10.0'] = []
-    calibration_runs['Flat_60.0'] = []
-    calibration_runs['Bstar'] = []
-    calibration_runs['Bias'] = []
-    # 'Dark' to be added depending on exposure times
 
-    science_runs = dict()
-
+    # Process each line in the log file to extract and categorize runs
     for line in log_file_text:
-        # split line to read out specific information
-        line_split = line.split(' ')
 
         # Identify runs via their numeric value
         run = line[:4]
@@ -224,15 +299,15 @@ def identify_calibration_and_science_runs(date, raw_data_dir):
 
             ccd = line[6]
             run_object = line[8:25].strip()
-            utc = line[25:33].strip()
+            # utc = line[25:33].strip()
             exposure_time = line[35:42].strip()
-            snr_noise = line[42:48].strip()
-            snr_photons = line[48:53].strip()
-            seeing = line[55:59].strip()
-            lc_status = line[60:62].strip()
-            thxe_status = line[63:67].strip()
-            read_noise = line[70:85].strip()
-            airmass = line[87:91].strip()
+            # snr_noise = line[42:48].strip()
+            # snr_photons = line[48:53].strip()
+            # seeing = line[55:59].strip()
+            # lc_status = line[60:62].strip()
+            # thxe_status = line[63:67].strip()
+            # read_noise = line[70:85].strip()
+            # airmass = line[87:91].strip()
             overscan = line[97:].split()[0]
             comments = line[98+len(overscan):]
             if len(comments) != 0:
@@ -283,13 +358,22 @@ def identify_calibration_and_science_runs(date, raw_data_dir):
 
 def interpolate_spectrum(wavelength, flux, target_wavelength):
     """
-    Interpolate a spectrum to a target wavelength array.
+    Interpolates a spectrum's flux values to match a target wavelength array. This function uses cubic 
+    interpolation to estimate flux values at new wavelength points specified by the target array.
 
-    :param wavelength: Wavelength array of the input spectrum.
-    :param flux: Flux array of the input spectrum.
-    :param target_wavelength: Target wavelength array.
-    
-    :return: Interpolated flux array
+    Parameters:
+        wavelength (array-like): The array of wavelength data points corresponding to the input spectrum.
+                                 These should be in increasing order.
+        flux (array-like): The array of flux values associated with each wavelength in the input spectrum.
+        target_wavelength (array-like): The array of wavelength data points where the flux values need to
+                                        be interpolated. This array should also be in increasing order.
+
+    Returns:
+        array: An array of flux values interpolated at the target wavelengths. The interpolation is performed 
+               using a cubic spline, which provides a smooth and continuous estimate of the flux between 
+               known data points. If the target wavelength extends beyond the range of the input wavelength,
+               the function fills the values with 1.0 based on the fill_value parameter.
+
     """
 
     interpolation_function = interp1d(wavelength, flux, bounds_error=False, fill_value=(1.0,1.0), kind='cubic')
