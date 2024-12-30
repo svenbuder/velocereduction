@@ -228,7 +228,21 @@ def read_in_order_tramlines_tinney():
     # For now, we simply assume that the laser comb position is just slightly offset from the order_ending
     # (so that we can simply use the order_ending_coefficients).
 
-    return(order_ranges, order_beginning_coefficients, order_ending_coefficients)
+    order_ranges_sorted = dict()
+    order_beginning_coefficients_sorted = dict()
+    order_ending_coefficients_sorted = dict()
+
+    for ccd in ['1','2','3']:
+        if ccd == '1': orders = np.arange(167, 138-1, -1)
+        if ccd == '2': orders = np.arange(140, 103-1, -1)
+        if ccd == '3': orders = np.arange(104,  65-1, -1)
+
+        for order in orders:
+            order_ranges_sorted['ccd_'+ccd+'_order_'+str(order)] = order_ranges['ccd_'+ccd+'_order_'+str(order)]
+            order_beginning_coefficients_sorted['ccd_'+ccd+'_order_'+str(order)] = order_beginning_coefficients['ccd_'+ccd+'_order_'+str(order)]
+            order_ending_coefficients_sorted['ccd_'+ccd+'_order_'+str(order)] = order_ending_coefficients['ccd_'+ccd+'_order_'+str(order)]
+
+    return(order_ranges_sorted, order_beginning_coefficients_sorted, order_ending_coefficients_sorted)
 
 def read_in_order_tramlines():
     """
@@ -237,9 +251,9 @@ def read_in_order_tramlines():
     with pixel information for each order.
 
     CCD Orders Handled:
-        - CCD1 handles orders 138 to 167.
-        - CCD2 handles orders 103 to 140.
-        - CCD3 handles orders 65 to 104.
+        - CCD1 handles orders 167 to 138.
+        - CCD2 handles orders 140 to 103.
+        - CCD3 handles orders 104 to 65.
 
     Each order's data is loaded from a corresponding file in the format:
     './VeloceReduction/tramline_information/tramlines_begin_end_ccd_{ccd}_order_{order}.txt'
@@ -264,9 +278,9 @@ def read_in_order_tramlines():
     order_tramline_ending_coefficients = dict()
 
     for ccd in ['1','2','3']:
-        if ccd == '1': orders = np.arange(138,167+1)
-        if ccd == '2': orders = np.arange(103,140+1)
-        if ccd == '3': orders = np.arange(65,104+1)
+        if ccd == '1': orders = np.arange(167, 138-1, -1)
+        if ccd == '2': orders = np.arange(140, 103-1, -1)
+        if ccd == '3': orders = np.arange(104,  65-1, -1)
 
         for order in orders:
             order_tramline_ranges['ccd_'+ccd+'_order_'+str(order)] = np.arange(4112)

@@ -67,7 +67,15 @@ def calibrate_single_order(file, order, barycentric_velocity=None):
         thxe_pixels_and_wavelengths[:,1],
         p0=[np.median(thxe_pixels_and_wavelengths[:,1]), 0.05, 0.0, 0.0, 0.0]
     )
-    
+
+    if file[order].header['EXTNAME'].lower() in [
+        'ccd_3_order_66','ccd_3_order_67','ccd_3_order_68','ccd_3_order_69',
+        'ccd_3_order_70','ccd_3_order_71','ccd_3_order_72','ccd_3_order_73','ccd_3_order_74','ccd_3_order_75','ccd_3_order_76','ccd_3_order_77','ccd_3_order_78','ccd_3_order_79',
+        'ccd_3_order_80','ccd_3_order_81','ccd_3_order_82','ccd_3_order_83','ccd_3_order_84','ccd_3_order_85','ccd_3_order_86','ccd_3_order_87','ccd_3_order_88','ccd_3_order_89',
+        'ccd_3_order_90','ccd_3_order_91','ccd_3_order_92','ccd_3_order_93','ccd_3_order_94'
+        ]:
+        wavelength_solution_vacuum_coefficients = np.loadtxt('./VeloceReduction/wavelength_coefficients/wavelength_coefficients_'+file[order].header['EXTNAME'].lower()+'.txt')
+
     # Calculate vacuum wavelengths and convert them to air wavelengths
     wavelength_solution_vacuum = polynomial_function(
         np.arange(len(file[order].data['WAVE_VAC'])) - order_centre_pixel,
@@ -239,18 +247,22 @@ def calibrate_wavelength(science_object, correct_barycentric_velocity=True, fit_
             print('  -> Estimating rough Radial Velocity from Halpha and CaII triplet')
 
             # Define the lines and orders to fit a Voigt profile to.
-            # Only fit 4 at the moment, as they deliver the most reliable results of ~3 km/s of literature values for the tests done for 240219.
+            # Only fit a few at the moment, as they deliver the most reliable results of ~3 km/s of literature values for the tests done for 240219.
             lines_air_and_orders_for_rv = [
-                [r'$\mathrm{H_\alpha}$ 6562.7970',6562.7970,97,'CCD_3_ORDER_93'],
-                [r'$\mathrm{H_\alpha}$ 6562.7970',6562.7970,98,'CCD_3_ORDER_94'],
-                #[r'CaII triplet 8498.0230',8498.0230,76,'CCD_3_ORDER_72'],
-                #[r'CaII triplet 8542.0910',8542.0910,76,'CCD_3_ORDER_72'],
-                [r'CaII triplet 8542.0910',8542.0910,75,'CCD_3_ORDER_71'],
-                [r'CaII triplet 8662.1410',8662.1410,75,'CCD_3_ORDER_71'],
-                #[r'CaII triplet 8662.1410',8662.1410,74,'CCD_3_ORDER_70']
+                [r'$\mathrm{H_\alpha}$ 6562.7970',6562.7970,79,'CCD_3_ORDER_94'],
+                [r'$\mathrm{H_\alpha}$ 6562.7970',6562.7970,80,'CCD_3_ORDER_93'],
+                [r'FeI 7511.0187',7511.0187,91,'CCD_3_ORDER_82'],
+                [r'NiI 7788.9299',7788.9299,94,'CCD_3_ORDER_79'],
+                [r'CaII triplet 8498.0230',8498.0230,101,'CCD_3_ORDER_72'],
+                [r'CaII triplet 8542.0910',8542.0910,101,'CCD_3_ORDER_72'],
+                [r'CaII triplet 8542.0910',8542.0910,102,'CCD_3_ORDER_71'],
+                [r'CaII triplet 8662.1410',8662.1410,102,'CCD_3_ORDER_71'],
+                [r'CaII triplet 8662.1410',8662.1410,103,'CCD_3_ORDER_70'],
+                [r'MgI 8806.7570',8806.7570,103,'CCD_3_ORDER_70']
             ]
 
-            f, gs = plt.subplots(1,len(lines_air_and_orders_for_rv),figsize=(15,4),sharey=True)
+            f, gs = plt.subplots(2,int(np.ceil(len(lines_air_and_orders_for_rv)/2)),figsize=(15,7),sharey=True)
+            gs = gs.flatten()
             gs[0].set_ylabel('Flux')
 
             rv_estimates = []
@@ -303,9 +315,12 @@ def calibrate_wavelength(science_object, correct_barycentric_velocity=True, fit_
                 rv_upper_voigt = radial_velocity_from_line_shift(voigt_profile_parameters[0]+e_line_centre, line_centre)
                 rv_lower_voigt = radial_velocity_from_line_shift(voigt_profile_parameters[0]-e_line_centre, line_centre)
 
-                rv_estimates.append(rv_voigt)
-                rv_estimates_upper.append(rv_upper_voigt)
-                rv_estimates_lower.append(rv_lower_voigt)
+                if line_centre != 6562.7970:
+                    rv_estimates.append(rv_voigt)
+                    rv_estimates_upper.append(rv_upper_voigt)
+                    rv_estimates_lower.append(rv_lower_voigt)
+                elif order == 79:
+                    print('  -> Fitting Halpha, but neglecting for RV estimate.')
 
                 ax.plot(
                     wavelength_to_fit,
