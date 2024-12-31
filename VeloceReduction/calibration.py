@@ -72,7 +72,8 @@ def calibrate_single_order(file, order, barycentric_velocity=None):
         'ccd_3_order_66','ccd_3_order_67','ccd_3_order_68','ccd_3_order_69',
         'ccd_3_order_70','ccd_3_order_71','ccd_3_order_72','ccd_3_order_73','ccd_3_order_74','ccd_3_order_75','ccd_3_order_76','ccd_3_order_77','ccd_3_order_78','ccd_3_order_79',
         'ccd_3_order_80','ccd_3_order_81','ccd_3_order_82','ccd_3_order_83','ccd_3_order_84','ccd_3_order_85','ccd_3_order_86','ccd_3_order_87','ccd_3_order_88','ccd_3_order_89',
-        'ccd_3_order_90','ccd_3_order_91','ccd_3_order_92','ccd_3_order_93','ccd_3_order_94'
+        'ccd_3_order_90','ccd_3_order_91','ccd_3_order_92','ccd_3_order_93','ccd_3_order_94','ccd_3_order_95','ccd_3_order_96','ccd_3_order_97','ccd_3_order_98','ccd_3_order_99',
+        'ccd_3_order_100','ccd_3_order_101','ccd_3_order_102','ccd_3_order_103','ccd_3_order_104',
         ]:
         wavelength_solution_vacuum_coefficients = np.loadtxt('./VeloceReduction/wavelength_coefficients/wavelength_coefficients_'+file[order].header['EXTNAME'].lower()+'.txt')
 
