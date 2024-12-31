@@ -75,7 +75,7 @@ def calibrate_single_order(file, order, barycentric_velocity=None):
         'ccd_3_order_90','ccd_3_order_91','ccd_3_order_92','ccd_3_order_93','ccd_3_order_94','ccd_3_order_95','ccd_3_order_96','ccd_3_order_97','ccd_3_order_98','ccd_3_order_99',
         'ccd_3_order_100','ccd_3_order_101','ccd_3_order_102','ccd_3_order_103','ccd_3_order_104',
         ]:
-        wavelength_solution_vacuum_coefficients = np.loadtxt('./VeloceReduction/wavelength_coefficients/wavelength_coefficients_'+file[order].header['EXTNAME'].lower()+'.txt')
+        wavelength_solution_vacuum_coefficients = np.loadtxt('./VeloceReduction/wavelength_coefficients/wavelength_coefficients_'+file[order].header['EXTNAME'].lower()+'_lc.txt')
 
     # Calculate vacuum wavelengths and convert them to air wavelengths
     wavelength_solution_vacuum = polynomial_function(

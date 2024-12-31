@@ -61,6 +61,28 @@ def fit_voigt_absorption_profile(wavelength, flux, initial_guess, bounds=None):
         popt, pcov = curve_fit(voigt_absorption_profile, wavelength, flux, p0=initial_guess)
     return (popt, pcov)
 
+def lc_peak_gauss(pixels, center, sigma, amplitude, offset):
+    """
+    Gaussian profile for the laser comb peak.
+
+    Parameters:
+        pixels : array-like
+            Pixel values at which to compute the Gaussian profile.
+        center : float
+            Center of the Gaussian profile.
+        sigma : float
+            Standard deviation of the Gaussian profile.
+        amplitude : float
+            Amplitude of the Gaussian profile.
+        offset : float
+            Offset of the Gaussian profile.
+
+    Returns:
+        array-like: The Gaussian profile evaluated at the given
+        pixel values.
+    """
+    return offset + amplitude * np.exp(-0.5 * ((pixels - center) / sigma) ** 2)
+            
 def gaussian_absorption_profile(wavelength, line_centre, line_depth, line_sigma):
     """
     Calculates the Gaussian absorption profile for a given set of spectroscopic data. This function models the
