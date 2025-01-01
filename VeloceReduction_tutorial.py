@@ -28,7 +28,9 @@ import matplotlib.pyplot as plt
 from VeloceReduction import config
 import VeloceReduction as VR
 
+from astropy.table import Table
 from scipy.optimize import curve_fit
+from scipy.signal import find_peaks
 from VeloceReduction.utils import polynomial_function
 
 
@@ -217,14 +219,13 @@ for science_object in list(science_runs.keys()):
 
 for science_object in list(science_runs.keys()):
     try:
-        VR.calibration.calibrate_wavelength(science_object, correct_barycentric_velocity=True, create_overview_pdf=True)
+        VR.calibration.calibrate_wavelength(
+            science_object,
+            optimise_lc_solution=False,
+            correct_barycentric_velocity=True,
+            create_overview_pdf=True
+        )
         print('  -> Succesfully calibrated wavelength with diagnostic plots for '+science_object)
     except:
         print('  -> Failed to calibrate wavelength for '+science_object)
-
-
-# In[ ]:
-
-
-
 

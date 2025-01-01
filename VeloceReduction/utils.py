@@ -61,6 +61,28 @@ def fit_voigt_absorption_profile(wavelength, flux, initial_guess, bounds=None):
         popt, pcov = curve_fit(voigt_absorption_profile, wavelength, flux, p0=initial_guess)
     return (popt, pcov)
 
+def lc_peak_gauss(pixels, center, sigma, amplitude, offset):
+    """
+    Gaussian profile for the laser comb peak.
+
+    Parameters:
+        pixels : array-like
+            Pixel values at which to compute the Gaussian profile.
+        center : float
+            Center of the Gaussian profile.
+        sigma : float
+            Standard deviation of the Gaussian profile.
+        amplitude : float
+            Amplitude of the Gaussian profile.
+        offset : float
+            Offset of the Gaussian profile.
+
+    Returns:
+        array-like: The Gaussian profile evaluated at the given
+        pixel values.
+    """
+    return offset + amplitude * np.exp(-0.5 * ((pixels - center) / sigma) ** 2)
+            
 def gaussian_absorption_profile(wavelength, line_centre, line_depth, line_sigma):
     """
     Calculates the Gaussian absorption profile for a given set of spectroscopic data. This function models the
@@ -384,3 +406,109 @@ def interpolate_spectrum(wavelength, flux, target_wavelength):
     interpolation_function = interp1d(wavelength, flux, bounds_error=False, fill_value=(1.0,1.0), kind='cubic')
     return interpolation_function(target_wavelength)
 
+def lasercomb_wavelength_from_numbers(n, repeat_frequency_ghz = 25.00000000, offset_frequency_ghz = 9.56000000000):
+    """
+    Calculates the wavelength of a laser comb (LC) line based on its mode number, repeat frequency,
+    and offset frequency using the formula:
+    
+    lambda_n = speed_of_light / (n * f_repeat + f_offset)
+    
+    Here, we are using the LC mode frequency f_n = n * f_repeat + f_offset.
+    For ease, we use speed_of_light already in units of ÅGHz, i.e. c = 2.9979246 * 10**9 ÅGHz.
+
+    Parameters:
+        n (int or array-like): The mode number(s) of the LC line.
+        repeat_frequency_ghz (float): The repeat frequency of the laser comb in GHz. Default is 25.0 GHz.
+        offset_frequency_ghz (float): The offset frequency of the laser comb in GHz. Default is 9.56 GHz.
+
+    Returns:
+        float or ndarray: The calculated wavelength(s) in Angstroms (Å).
+    """
+    
+    return(2.9979246 * 10**9 / (n * repeat_frequency_ghz + offset_frequency_ghz))
+
+def lasercomb_numbers_from_wavelength(wavelength_aangstroem, repeat_frequency_ghz = 25.00000000, offset_frequency_ghz = 9.56000000000):
+    """
+    Calculates the mode number of a laser comb (LC) line based on a wavelength, repeat frequency,
+    and offset frequency using the formula:
+    
+    n  = (speed_of_light / lambda_n - f_offset) / f_repeat
+
+    Here, we are using the LC mode frequency f_n = n * f_repeat + f_offset.
+    For ease, we use speed_of_light already in units of ÅGHz, i.e. c = 2.9979246 * 10**9 ÅGHz.
+
+    Parameters:
+        wavelength_aangstroem (float or array-like): The wavelength(s) of the LC line in Ångström.
+        repeat_frequency_ghz (float): The repeat frequency of the laser comb in GHz. Default is 25.0 GHz.
+        offset_frequency_ghz (float): The offset frequency of the laser comb in GHz. Default is 9.56 GHz.
+
+    Returns:
+        float or ndarray: The calculated mode number(s). Note: These are floats, not integers!
+    """
+
+    return(((2.9979246*10**9 / wavelength_aangstroem) - offset_frequency_ghz) / repeat_frequency_ghz)
+
+def read_in_wavelength_solution_coefficients_tinney():
+    """
+    Reads wavelength solution coefficients by C. Tinney from predefined vdarc* files.
+
+    Reference pixels (DYO) are defined for Verde and Rosso, and assumed to be 2450 for Azzurro.
+
+    Returns:
+        dict: A dictionary containing wavelength solution coefficients for each CCD and spectral order.
+              The keys are formatted as 'ccd_{ccd_number}_order_{order_number}' and the values are arrays
+              of coefficients, with the last array entry being DY0 if present, otherwise 2450 as default.
+    """
+    
+    wavelength_solution_coefficients_tinney = dict()
+
+    for ccd in [1,2,3]:
+        if ccd == 1: vdarc_file = './VeloceReduction/veloce_reference_data/vdarc_azzurro_230915.txt'
+        if ccd == 2: vdarc_file = './VeloceReduction/veloce_reference_data/vdarc_verde_230920.txt'
+        if ccd == 3: vdarc_file = './VeloceReduction/veloce_reference_data/vdarc_rosso_230919.txt'
+
+        with open(vdarc_file, "r") as vdarc:
+            vdarc_text = vdarc.read().split('\n')
+
+        for line in vdarc_text:
+            if 'START' in line:
+                order = line[6:]
+                has_DYO = False
+            elif 'COEFFS' in line:
+                coeffs = np.array(line[7:].split(' '),dtype=float)
+            elif 'DY0' in line:
+                coeffs = np.concatenate((coeffs, [int(line[4:])]))
+                has_DYO = True
+            elif 'STOP' in line:
+                if not has_DYO:
+                    wavelength_solution_coefficients_tinney['ccd_'+str(ccd)+'_order_'+order] = np.concatenate((coeffs, [2450]))
+                else:
+                    wavelength_solution_coefficients_tinney['ccd_'+str(ccd)+'_order_'+order] = coeffs
+
+    return(wavelength_solution_coefficients_tinney)
+
+def wavelength_vac_to_air(wavelength_vac):
+    """
+    Convert vacuum wavelengths to air wavelengths using the formula by Birch & Downs (1994, Metro, 31, 315).
+    Consistent to the 2024 version of Korg (https://github.com/ajwheeler/Korg.jl).
+
+    Parameters:
+        wavelength_vac (float, array): The vacuum wavelength to be converted to air wavelength.
+
+    Returns:
+        float, array: The corresponding air wavelength(s) calculated from the input vacuum wavelength(s).
+    """
+    return(wavelength_vac / (1 + 0.0000834254 + 0.02406147 / (130 - (1e4/wavelength_vac)**2) + 0.00015998 / (38.9 - (1e4/wavelength_vac)**2)))
+           
+def wavelength_air_to_vac(wavelength_air):
+    """
+    Convert air wavelengths to vacuum wavelengths using the formula by Birch & Downs (1994, Metro, 31, 315).
+    Consistent to the 2024 version of Korg (https://github.com/ajwheeler/Korg.jl).
+
+    Parameters:
+        wavelength_air (float, array): The air wavelength to be converted to vacuum wavelength.
+
+    Returns:
+        float, array: The corresponding vacuum wavelength(s) calculated from the input air wavelength(s).
+    """
+    return(wavelength_air * (1 + 0.00008336624212083 + 0.02408926869968 / (130.1065924522 - (1e4 / wavelength_air)**2) + 0.0001599740894897 / (38.92568793293 - (1e4 / wavelength_air)**2)))
