@@ -9,7 +9,7 @@ from matplotlib.backends.backend_pdf import PdfPages
 
 from . import config
 
-from VeloceReduction.utils import polynomial_function, calculate_barycentric_velocity_correction, velocity_shift, fit_voigt_absorption_profile, radial_velocity_from_line_shift, voigt_absorption_profile
+from VeloceReduction.utils import polynomial_function, calculate_barycentric_velocity_correction, velocity_shift, fit_voigt_absorption_profile, radial_velocity_from_line_shift, voigt_absorption_profile, wavelength_vac_to_air, wavelength_air_to_vac
 
 
 def calibrate_single_order(file, order, barycentric_velocity=None):
@@ -69,11 +69,15 @@ def calibrate_single_order(file, order, barycentric_velocity=None):
     )
 
     if file[order].header['EXTNAME'].lower() in [
+        'ccd_2_order_103','ccd_2_order_104','ccd_2_order_105','ccd_2_order_106','ccd_2_order_107','ccd_2_order_108','ccd_2_order_109',
+        # 'ccd_2_order_110','ccd_2_order_111','ccd_2_order_112','ccd_2_order_113','ccd_2_order_114','ccd_2_order_115','ccd_2_order_116','ccd_2_order_117','ccd_2_order_118','ccd_2_order_119',
+        # 'ccd_2_order_120','ccd_2_order_121','ccd_2_order_122','ccd_2_order_123','ccd_2_order_124','ccd_2_order_125','ccd_2_order_126','ccd_2_order_127','ccd_2_order_128','ccd_2_order_129',
+        'ccd_2_order_130','ccd_2_order_131','ccd_2_order_132','ccd_2_order_133','ccd_2_order_134',
         'ccd_3_order_66','ccd_3_order_67','ccd_3_order_68','ccd_3_order_69',
         'ccd_3_order_70','ccd_3_order_71','ccd_3_order_72','ccd_3_order_73','ccd_3_order_74','ccd_3_order_75','ccd_3_order_76','ccd_3_order_77','ccd_3_order_78','ccd_3_order_79',
         'ccd_3_order_80','ccd_3_order_81','ccd_3_order_82','ccd_3_order_83','ccd_3_order_84','ccd_3_order_85','ccd_3_order_86','ccd_3_order_87','ccd_3_order_88','ccd_3_order_89',
         'ccd_3_order_90','ccd_3_order_91','ccd_3_order_92','ccd_3_order_93','ccd_3_order_94','ccd_3_order_95','ccd_3_order_96','ccd_3_order_97','ccd_3_order_98','ccd_3_order_99',
-        'ccd_3_order_100','ccd_3_order_101','ccd_3_order_102','ccd_3_order_103','ccd_3_order_104',
+        'ccd_3_order_100','ccd_3_order_101','ccd_3_order_102','ccd_3_order_103','ccd_3_order_104'
         ]:
         wavelength_solution_vacuum_coefficients = np.loadtxt('./VeloceReduction/wavelength_coefficients/wavelength_coefficients_'+file[order].header['EXTNAME'].lower()+'_lc.txt')
 
@@ -89,7 +93,7 @@ def calibrate_single_order(file, order, barycentric_velocity=None):
 
     # Using conversion from Birch, K. P., & Downs, M. J. 1994, Metro, 31, 315
     # Consistent to the 2024 version of Korg (https://github.com/ajwheeler/Korg.jl)
-    file[order].data['WAVE_AIR'] = file[order].data['WAVE_VAC'] / (1 + 0.0000834254 + 0.02406147 / (130 - (1e4/file[order].data['WAVE_VAC'])**2) + 0.00015998 / (38.9 - (1e4/file[order].data['WAVE_VAC'])**2))
+    file[order].data['WAVE_AIR'] = wavelength_vac_to_air(file[order].data['WAVE_VAC'])
 
 def plot_wavelength_calibrated_order_data(order, science_object, file, overview_pdf):
     """

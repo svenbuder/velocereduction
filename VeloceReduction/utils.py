@@ -486,3 +486,29 @@ def read_in_wavelength_solution_coefficients_tinney():
                     wavelength_solution_coefficients_tinney['ccd_'+str(ccd)+'_order_'+order] = coeffs
 
     return(wavelength_solution_coefficients_tinney)
+
+def wavelength_vac_to_air(wavelength_vac):
+    """
+    Convert vacuum wavelengths to air wavelengths using the formula by Birch & Downs (1994, Metro, 31, 315).
+    Consistent to the 2024 version of Korg (https://github.com/ajwheeler/Korg.jl).
+
+    Parameters:
+        wavelength_vac (float, array): The vacuum wavelength to be converted to air wavelength.
+
+    Returns:
+        float, array: The corresponding air wavelength(s) calculated from the input vacuum wavelength(s).
+    """
+    return(wavelength_vac / (1 + 0.0000834254 + 0.02406147 / (130 - (1e4/wavelength_vac)**2) + 0.00015998 / (38.9 - (1e4/wavelength_vac)**2)))
+           
+def wavelength_air_to_vac(wavelength_air):
+    """
+    Convert air wavelengths to vacuum wavelengths using the formula by Birch & Downs (1994, Metro, 31, 315).
+    Consistent to the 2024 version of Korg (https://github.com/ajwheeler/Korg.jl).
+
+    Parameters:
+        wavelength_air (float, array): The air wavelength to be converted to vacuum wavelength.
+
+    Returns:
+        float, array: The corresponding vacuum wavelength(s) calculated from the input air wavelength(s).
+    """
+    return(wavelength_air * (1 + 0.00008336624212083 + 0.02408926869968 / (130.1065924522 - (1e4 / wavelength_air)**2) + 0.0001599740894897 / (38.92568793293 - (1e4 / wavelength_air)**2)))
