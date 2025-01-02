@@ -3,6 +3,7 @@ np.seterr(divide='ignore', invalid='ignore')
 
 from scipy.optimize import curve_fit
 from scipy.signal import find_peaks
+from scipy.integrate import quad
 from astropy.io import fits
 
 import matplotlib.pyplot as plt
@@ -654,7 +655,7 @@ def calibrate_wavelength(science_object, optimise_lc_solution=True, correct_bary
         if optimise_lc_solution:
             print('  -> Optimising wavelength solution based on Laser Comb data where available (and using previous ThXe otherwise)')
         else:
-            print('  -> Using previous ThXe calibration for wavelength solution')
+            print('  -> Using previous LC and ThXe calibrations as wavelength solution')
 
         # Now loop through the FITS file extensions aka Veloce orders to apply the wavelength calibration
         for order in range(1,len(file)):
@@ -667,16 +668,17 @@ def calibrate_wavelength(science_object, optimise_lc_solution=True, correct_bary
             # Define the lines and orders to fit a Voigt profile to.
             # Only fit a few at the moment, as they deliver the most reliable results of ~3 km/s of literature values for the tests done for 240219.
             lines_air_and_orders_for_rv = [
-                [r'$\mathrm{H_\alpha}$ 6562.7970',6562.7970,79,'CCD_3_ORDER_94'],
-                [r'$\mathrm{H_\alpha}$ 6562.7970',6562.7970,80,'CCD_3_ORDER_93'],
-                [r'FeI 7511.0187',7511.0187,91,'CCD_3_ORDER_82'],
-                [r'NiI 7788.9299',7788.9299,94,'CCD_3_ORDER_79'],
-                [r'CaII triplet 8498.0230',8498.0230,101,'CCD_3_ORDER_72'],
-                [r'CaII triplet 8542.0910',8542.0910,101,'CCD_3_ORDER_72'],
-                [r'CaII triplet 8542.0910',8542.0910,102,'CCD_3_ORDER_71'],
-                [r'CaII triplet 8662.1410',8662.1410,102,'CCD_3_ORDER_71'],
+                 # Note: CaII 8662.1410 has to be the first one, as we will use it as initial RV estimate for the other lines
                 [r'CaII triplet 8662.1410',8662.1410,103,'CCD_3_ORDER_70'],
-                [r'MgI 8806.7570',8806.7570,103,'CCD_3_ORDER_70']
+                [r'CaII triplet 8662.1410',8662.1410,102,'CCD_3_ORDER_71'],
+                [r'CaII triplet 8542.0910',8542.0910,102,'CCD_3_ORDER_71'],
+                [r'CaII triplet 8542.0910',8542.0910,101,'CCD_3_ORDER_72'],
+                [r'CaII triplet 8498.0230',8498.0230,101,'CCD_3_ORDER_72'],
+                [r'MgI 8806.7570',8806.7570,103,'CCD_3_ORDER_70'],
+                [r'NiI 7788.9299',7788.9299,94,'CCD_3_ORDER_79'],
+                [r'FeI 7511.0187',7511.0187,91,'CCD_3_ORDER_82'],
+                [r'$\mathrm{H_\alpha}$ 6562.7970',6562.7970,80,'CCD_3_ORDER_93'],
+                [r'$\mathrm{H_\alpha}$ 6562.7970',6562.7970,79,'CCD_3_ORDER_94'],
             ]
 
             f, gs = plt.subplots(2,int(np.ceil(len(lines_air_and_orders_for_rv)/2)),figsize=(15,7),sharey=True)
@@ -686,6 +688,7 @@ def calibrate_wavelength(science_object, optimise_lc_solution=True, correct_bary
             rv_estimates = []
             rv_estimates_upper = []
             rv_estimates_lower = []
+            rv_from_8662 = None
 
             for index, (line_name, line_centre, order, order_name) in enumerate(lines_air_and_orders_for_rv):
                 ax = gs[index]
@@ -695,14 +698,37 @@ def calibrate_wavelength(science_object, optimise_lc_solution=True, correct_bary
                 if file[order].header['EXTNAME'] != order_name:
                     print('  -> Warning: '+file[order].header['EXTNAME']+' != '+order_name)
 
+                # Restrice fitting region to +- 600 km/s around line centre
                 close_to_line_centre = (
-                    (file[order].data['WAVE_AIR'] > line_centre - 10) &
-                    (file[order].data['WAVE_AIR'] < line_centre + 10)
+                    (file[order].data['WAVE_AIR'] > line_centre * (1 - 600/299792.458)) &
+                    (file[order].data['WAVE_AIR'] < line_centre * (1 + 600/299792.458))
                 )
+                # Estimate the wavelength of the pixel with the lowest flux value within +- 300 km/s around the line centre
+                line_within_300_kms = (
+                    (file[order].data['WAVE_AIR'] > line_centre * (1 - 300/299792.458)) &
+                    (file[order].data['WAVE_AIR'] < line_centre * (1 + 300/299792.458))
+                )
+                flux_index_within_300_kms = np.argmin(file[order].data['SCIENCE'][line_within_300_kms])
+                wavelength_with_lowest_flux_within_300_kms = file[order].data['WAVE_AIR'][line_within_300_kms][flux_index_within_300_kms]
+
+                # Let's make use of the 8662.1410 line as initial RV estimate for the other lines
+                if line_centre == 8662.1410:
+                    initial_centre_wavelength = wavelength_with_lowest_flux_within_300_kms
+                else:
+                    if rv_from_8662 is not None:
+                        initial_centre_wavelength = (rv_from_8662 / 299792.4658 + 1.0 )* line_centre
+                    else:
+                        initial_centre_wavelength = wavelength_with_lowest_flux_within_300_kms
 
                 wavelength_to_fit = file[order].data['WAVE_AIR'][close_to_line_centre]
                 flux_to_fit = file[order].data['SCIENCE'][close_to_line_centre]
-                flux_to_fit /= np.nanpercentile(flux_to_fit,q=99)
+
+                # Avoid outlier pixels and renormalise locally
+                # Estimate 90th percentile and clip all values above 2*90th percentile
+                local_90th_percentile = np.nanpercentile(flux_to_fit,q=90)
+                flux_to_fit[flux_to_fit > 2*local_90th_percentile] = local_90th_percentile
+                # Then renormalise to 95th percentile
+                flux_to_fit /= np.nanpercentile(flux_to_fit,q=95)
 
                 ax.plot(
                     wavelength_to_fit,
@@ -712,31 +738,51 @@ def calibrate_wavelength(science_object, optimise_lc_solution=True, correct_bary
                     label = 'Veloce'
                 )
 
+                # Make sure that broad lines can be fitted with larger sigmas and gammas
+                if line_centre in [6562.7970, 8498.0230, 8542.0910, 8662.1410]:
+                    sigma_gamma_max = 5.0
+                # But for narrow lines, allow only small sigmas and gammas
+                else:
+                    sigma_gamma_max = 2.0
+
                 voigt_profile_parameters, voigt_profile_covariances = fit_voigt_absorption_profile(
                     wavelength_to_fit,
                     flux_to_fit,
-                    # initial_guess: [line_centre, amplitude, sigma, gamma]
-                    initial_guess = [line_centre, 0.5, 0.5, 0.5],
+                    # initial_guess: [line_centre, offset, amplitude, sigma, gamma]
+                    initial_guess = [initial_centre_wavelength, np.median(flux_to_fit), 0.5, 0.5, 0.5],
                     # Let's assume an absolute RV below 500 km/s and otherwise (hopefully) reasonable estimates for the line profile.
                     bounds = (
-                        [line_centre * (1-500./299792.), 0.1, 0.0, 0.0],
-                        [line_centre * (1+500./299792.), 1.0, 10, 10]
+                        [line_centre * (1-500./299792.), 0.1, 0.05, 0.0, 0.0],
+                        [line_centre * (1+500./299792.), 1.2, 1.0, sigma_gamma_max, sigma_gamma_max]
                     )
                 )
-                if voigt_profile_parameters[2] == 10:
-                    print('  -> Warning: Voigt profile fit hit upper boundary (10) for sigma')
-                if voigt_profile_parameters[3] == 10:
-                    print('  -> Warning: Voigt profile fit hit upper boundary (10) for gamma')
+
+                if voigt_profile_parameters[-2] == sigma_gamma_max:
+                    print('  -> Warning: Voigt profile fit hit upper boundary ('+str(sigma_gamma_max)+') for sigma')
+                if voigt_profile_parameters[-1] == sigma_gamma_max:
+                    print('  -> Warning: Voigt profile fit hit upper boundary ('+str(sigma_gamma_max)+') for gamma')
 
                 rv_voigt = radial_velocity_from_line_shift(voigt_profile_parameters[0], line_centre)
                 e_line_centre = np.sqrt(np.diag(voigt_profile_covariances))[0]
                 rv_upper_voigt = radial_velocity_from_line_shift(voigt_profile_parameters[0]+e_line_centre, line_centre)
                 rv_lower_voigt = radial_velocity_from_line_shift(voigt_profile_parameters[0]-e_line_centre, line_centre)
 
+                # Let's remember the radial velocity estimate for the 8662.1410 line
+                if line_centre == 8662.1410:
+                    rv_from_8662 = rv_voigt
+
                 if line_centre != 6562.7970:
-                    rv_estimates.append(rv_voigt)
-                    rv_estimates_upper.append(rv_upper_voigt)
-                    rv_estimates_lower.append(rv_lower_voigt)
+                    # Estimate equivalent width of the line
+                    x_min = voigt_profile_parameters[0] * (1 - 600./299792.458)
+                    x_max = voigt_profile_parameters[0] * (1 + 600./299792.458)
+                    line_equivalent_width, _ = quad(lambda x: voigt_profile_parameters[1] - voigt_absorption_profile(x, *voigt_profile_parameters), x_min, x_max)
+
+                    if line_equivalent_width > 0.1:
+                        rv_estimates.append(rv_voigt)
+                        rv_estimates_upper.append(rv_upper_voigt)
+                        rv_estimates_lower.append(rv_lower_voigt)
+                    else:
+                        print('  -> Neglecting RV estimate for '+line_name+' due to weak line (EW '+str(int(np.round(100*line_equivalent_width)))+' < 100 mÅ).')
                 elif order == 79:
                     print('  -> Fitting Halpha, but neglecting for RV estimate.')
 
@@ -751,10 +797,36 @@ def calibrate_wavelength(science_object, optimise_lc_solution=True, correct_bary
                 ax.legend(fontsize=8,handlelength=1)
                 ax.set_ylim(-0.1,1.1)
 
-            rv_mean = np.round(np.mean(rv_estimates),1)
-            rv_std  = np.round(np.std(rv_estimates),1)
-            rv_unc  = np.round(np.median(np.array(rv_estimates_upper)-np.array(rv_estimates_lower)),1)
-            print(r'  -> $v_\mathrm{rad}  = '+str(rv_mean)+' \pm '+str(rv_std)+' \pm '+str(rv_unc)+r'\,\mathrm{km\,s^{-1}}$ (mean, scatter, uncertainty)')
+            rv_estimates = np.array(rv_estimates)
+            rv_mean = np.round(np.mean(rv_estimates),2)
+
+            def mad_based_outlier(points, thresh=3.5):
+                if len(points.shape) == 1:
+                    points = points[:,None]
+                median = np.median(points, axis=0)
+                diff = np.sum((points - median)**2, axis=-1)
+                diff = np.sqrt(diff)
+                med_abs_deviation = np.median(diff)
+
+                modified_z_score = 0.6745 * diff / med_abs_deviation
+
+                return modified_z_score > thresh
+
+            # Identify and neglect outliers in the RV estimates (either based on MAD or on a threshold of 50 km/s with respect to RV 8662)
+            # But ensure at least 3 estimates remain.
+            outliers = mad_based_outlier(rv_estimates)
+            outliers[abs(rv_estimates - rv_from_8662) > 50] = True
+            if (len(np.where(outliers)[0]) > 0) & (len(rv_estimates) - len(np.where(outliers)[0]) >= 3):
+                print('  -> Neglecting '+str(np.sum(outliers))+' RV outlier(s): ',np.round(rv_estimates[outliers],2))
+                filtered_rv = rv_estimates[~outliers]
+            else:
+                print('  -> No RV outlier(s) identified.')
+                filtered_rv = rv_estimates
+
+            rv_mean = np.round(np.mean(filtered_rv),2)
+            rv_std  = np.round(np.std(filtered_rv),2)
+            rv_unc  = np.round(np.median(np.array(rv_estimates_upper)-np.array(rv_estimates_lower)),2)
+            print(r'  -> $v_\mathrm{rad}  = '+str(rv_mean)+' \pm '+str(rv_std)+' \pm '+str(rv_unc)+r'\,\mathrm{km\,s^{-1}}$ (mean, scatter, unc.) based on '+str(len(filtered_rv))+' lines.')
             
             file[0].header['VRAD'] = rv_mean
             file[0].header['E_VRAD'] = rv_std
@@ -768,8 +840,8 @@ def calibrate_wavelength(science_object, optimise_lc_solution=True, correct_bary
     if create_overview_pdf:
         with PdfPages(input_output_directory+'/veloce_spectra_'+science_object+'_'+config.date+'_overview.pdf') as overview_pdf:
             with fits.open(input_output_directory+'/veloce_spectra_'+science_object+'_'+config.date+'.fits') as file:
-                print('  -> Creating overview PDF. This may take some time for the '+str(len(file))+' orders.')
+                print('  -> Creating overview PDF. This may take some time for the '+str(len(file))+' orders.\n')
                 for order in range(1,len(file)):
                     plot_wavelength_calibrated_order_data(order, science_object, file, overview_pdf)
     else:
-        print('  -> Not creating overview PDF.')
+        print('  -> Not creating overview PDF.\n')

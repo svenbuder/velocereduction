@@ -16,7 +16,7 @@ SSO = EarthLocation.of_site('Siding Spring Observatory')
 def radial_velocity_from_line_shift(line_centre_observed, line_centre_rest):
     return((line_centre_observed - line_centre_rest) / line_centre_rest * 299792.458)
 
-def voigt_absorption_profile(wavelength, line_centre, line_depth, sigma, gamma):
+def voigt_absorption_profile(wavelength, line_centre, line_offset, line_depth, sigma, gamma):
     """
     Returns the Voigt line shape at wavelengths `wavelength` for an absorption line with a continuum.
 
@@ -25,6 +25,8 @@ def voigt_absorption_profile(wavelength, line_centre, line_depth, sigma, gamma):
             Wavelength array over which to compute the Voigt profile.
         line_centre : float
             Central wavelength of the absorption line.
+        line_offset : float
+            Offset of the absorption line from the central wavelength.
         line_depth : float
             The depth of the absorption relative to the continuum.
         sigma : float
@@ -34,8 +36,7 @@ def voigt_absorption_profile(wavelength, line_centre, line_depth, sigma, gamma):
     """
     z = ((wavelength - line_centre) + 1j*gamma) / (sigma*np.sqrt(2))
     profile = wofz(z).real
-    profile = profile / max(profile)  # Normalize profile to max 1
-    return 1 - line_depth * profile
+    return line_offset - line_depth * profile
 
 def fit_voigt_absorption_profile(wavelength, flux, initial_guess, bounds=None):
     """
@@ -46,7 +47,7 @@ def fit_voigt_absorption_profile(wavelength, flux, initial_guess, bounds=None):
         wavelength (array):                 The array of wavelength data points across which the spectrum is measured.
         flux (array):                       The array of flux measurements corresponding to each wavelength.
         initial_guess (list):               A list of initial guess parameters for the Voigt profile fit:
-                                            [line_centre, line_depth, sigma, gamma]
+                                            [line_centre, line_offset, line_depth, sigma, gamma]
         bounds (tuple or list, optional):   Bounds to be used when calling curve_fit optimization.
 
     Returns:
@@ -345,7 +346,7 @@ def identify_calibration_and_science_runs(date, raw_data_dir):
             if ccd == '3':
                 if run_object == 'SimLC':
                     calibration_runs['SimLC'].append(run)
-                elif run_object == 'Bias':
+                elif run_object == 'BiasFrame':
                     calibration_runs['Bias'].append(run)
                 elif run_object == 'FlatField-Quartz':
                     calibration_runs['Flat_'+exposure_time].append(run)
