@@ -110,20 +110,18 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, ov
         raise ValueError('This function is only implemented for CCD3 (exepct order 65) and CCD2 orders 103-134')
     else:
 
-        # Load a previous wavelength calibration (LC if available, otherwise ThXe)
+        # Use wavelength coefficients according to the following preference:
+        # 1) Coefficients fitted with 18Sco and Korg synthesis
+        # 2) Coefficients fitted with LC
+        # 3) Coefficients fitted with ThXe
         try:
-            previous_calibration_coefficients = np.loadtxt('./VeloceReduction/wavelength_coefficients/wavelength_coefficients_'+order_name+'_lc.txt')
+            previous_calibration_coefficients = np.loadtxt('./VeloceReduction/wavelength_coefficients/wavelength_coefficients_'+order_name+'_korg.txt')
         except:
-            thxe_file_path = './VeloceReduction/veloce_reference_data/thxe_pixels_and_positions/' + order_name + '_px_wl.txt'
-            thxe_pixels_and_wavelengths = np.array(np.loadtxt(thxe_file_path))
+            try:
+                previous_calibration_coefficients = np.loadtxt('./VeloceReduction/wavelength_coefficients/wavelength_coefficients_'+order_name+'_lc.txt')
+            except:
+                previous_calibration_coefficients = np.loadtxt('./VeloceReduction/wavelength_coefficients/wavelength_coefficients_'+order_name+'_thxe.txt')
 
-            # Fit a polynomial function to pixel and wavelength data
-            previous_calibration_coefficients, _ = curve_fit(
-                polynomial_function,
-                thxe_pixels_and_wavelengths[:,0] - 2064,
-                thxe_pixels_and_wavelengths[:,1],
-                p0=[np.median(thxe_pixels_and_wavelengths[:,1]), 0.05, 0.0, 0.0, 0.0, 0.0]
-            )
         wavelength = polynomial_function(np.arange(4128)-2064,*previous_calibration_coefficients)*10
 
         # Identify the range for which we will fit the peaks
@@ -392,14 +390,7 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, ov
             )
 
             # ThXe Wavelegnth Solution
-            thxe_file_path = './VeloceReduction/veloce_reference_data/thxe_pixels_and_positions/' + order_name + '_px_wl.txt'
-            thxe_pixels_and_wavelengths = np.array(np.loadtxt(thxe_file_path))
-            coeffs_thxe, _ = curve_fit(
-                polynomial_function,
-                thxe_pixels_and_wavelengths[:,0] - 2064,
-                thxe_pixels_and_wavelengths[:,1],
-                p0=[np.median(thxe_pixels_and_wavelengths[:,1]), 0.05, 0.0, 0.0, 0.0, 0.0]
-            )
+            coeffs_thxe = np.loadtxt('./VeloceReduction/wavelength_coefficients/wavelength_coefficients_'+order_name+'_thxe.txt')
             plt.plot(
                 np.arange(4128),
                 polynomial_function(np.arange(4128)-2064,*coeffs_thxe)*10 - 
@@ -462,32 +453,27 @@ def calibrate_single_order(file, order, barycentric_velocity=None, optimise_lc_s
     order_centre_pixel = int(len(file[order].data['WAVE_AIR'])/2)
     
     # Use the initial pixel <-> wavelength information per order to fit a polynomial function to it.
-    
-    # Load calibration data for the order
-    # Note: Wavelength is reported in vacuum and in units of nm, not Å.
-    thxe_file_path = './VeloceReduction/veloce_reference_data/thxe_pixels_and_positions/' + order_name + '_px_wl.txt'
-    thxe_pixels_and_wavelengths = np.array(np.loadtxt(thxe_file_path))
-    
-    # Fit a polynomial function to pixel and wavelength data
-    wavelength_solution_vacuum_coefficients, _ = curve_fit(
-        polynomial_function,
-        thxe_pixels_and_wavelengths[:,0] - order_centre_pixel,
-        thxe_pixels_and_wavelengths[:,1],
-        p0=[np.median(thxe_pixels_and_wavelengths[:,1]), 0.05, 0.0, 0.0, 0.0]
-    )
 
-    # Update the wavelength solution with the Laser Comb data for CCD3 (except order 65) and CCD2 (orders 103-134)
-    if (
-        ((order_name[4] == '3') & (order_name != 'ccd_3_order_65')) |
-        # Let's use the last 2 digits to avoid warnings, because not all of CCD3 are > 100 (but all of CCD2).
-        ((order_name[4] == '2') & (int(order_name[-2:]) >= 3) & (int(order_name[-2:]) <= 34))
-    ):
-        # Optimise the LC solution based on the refitted peaks of the laser comb, if enabled
-        if optimise_lc_solution:
-            wavelength_solution_vacuum_coefficients = optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values = file[order].data['LC'])
-        # Otherwise use the default coefficients
-        else:
+    # Use wavelength coefficients according to the following preference:
+    # 1) Coefficients fitted with 18Sco (RV = 11.7640 +- 0.0004 km/s) and Korg synthesis
+    # 2) Coefficients fitted with LC
+    # 3) Coefficients fitted with ThXe
+    try:
+        wavelength_solution_vacuum_coefficients = np.loadtxt('./VeloceReduction/wavelength_coefficients/wavelength_coefficients_'+order_name+'_korg.txt')
+    except:
+        try:
             wavelength_solution_vacuum_coefficients = np.loadtxt('./VeloceReduction/wavelength_coefficients/wavelength_coefficients_'+order_name+'_lc.txt')
+        except:
+            wavelength_solution_vacuum_coefficients = np.loadtxt('./VeloceReduction/wavelength_coefficients/wavelength_coefficients_'+order_name+'_thxe.txt')
+    
+    # Optimise the LC solution based on the refitted peaks of the laser comb, if enabled
+    if optimise_lc_solution:
+        if (
+            ((order_name[4] == '3') & (order_name != 'ccd_3_order_65')) |
+            # Let's use the last 2 digits to avoid warnings, because not all of CCD3 are > 100 (but all of CCD2).
+            ((order_name[4] == '2') & (int(order_name[-2:]) >= 3) & (int(order_name[-2:]) <= 34))
+        ):
+            wavelength_solution_vacuum_coefficients = optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values = file[order].data['LC'])
 
     # Calculate vacuum wavelengths and convert them to air wavelengths
     wavelength_solution_vacuum = polynomial_function(
@@ -845,3 +831,37 @@ def calibrate_wavelength(science_object, optimise_lc_solution=True, correct_bary
                     plot_wavelength_calibrated_order_data(order, science_object, file, overview_pdf)
     else:
         print('  -> Not creating overview PDF.\n')
+
+def fit_thxe_polynomial_coefficients():
+    """
+    Fits a polynomial function to the pixel-to-wavelength relationship for the ThXe calibration lamp.
+
+    Parameters:
+        None
+
+    Returns:
+        None: The function saves the fitted polynomial coefficients to a text file for each order.
+    """
+
+    # Create array of orders to loop through
+    orders = []
+    for ccd in ['1','2','3']:
+        if ccd == '1': orders.append(['ccd_1_order_'+str(x) for x in np.arange(167, 138-1, -1)])
+        if ccd == '2': orders.append(['ccd_2_order_'+str(x) for x in np.arange(140, 103-1, -1)])
+        if ccd == '3': orders.append(['ccd_3_order_'+str(x) for x in np.arange(104,  65-1, -1)])
+    orders = np.concatenate((orders))
+
+    for order in orders:
+        # Read in ThXe pixel and wavelength data
+        thxe_pixels_and_wavelengths = np.array(np.loadtxt('./VeloceReduction/VeloceReduction/veloce_reference_data/thxe_pixels_and_positions/' + order + '_px_wl.txt'))
+
+        # Fit a polynomial function to pixel and wavelength data
+        thxe_coefficients, _ = curve_fit(
+            polynomial_function,
+            thxe_pixels_and_wavelengths[:,0] - 2064,
+            thxe_pixels_and_wavelengths[:,1],
+            p0=[np.median(thxe_pixels_and_wavelengths[:,1]), 0.05, 0.0, 0.0, 0.0, 0.0]
+        )
+
+        # Save the fitted polynomial coefficients to a text file
+        np.savetxt('./VeloceReduction/VeloceReduction/wavelength_coefficients/wavelength_coefficients_'+order+'_thxe.txt', thxe_coefficients)

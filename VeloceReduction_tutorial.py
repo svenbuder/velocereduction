@@ -67,6 +67,8 @@ def get_script_input():
         
 #         jupyter_date = "240201"
         
+#         jupyter_date = "240321"
+        
         jupyter_working_directory = "./"
         print("Running in a Jupyter notebook. Using predefined values")
         args = argparse.Namespace(date=jupyter_date, working_directory=jupyter_working_directory)
@@ -145,7 +147,7 @@ master_lc, noise = VR.extraction.extract_orders(
 
 
 # Extract Science Objects and save them into FITS files under reduced_data/
-for science_object in list(science_runs.keys()):
+for science_object in list(science_runs.keys())[1:2]:
     print('Extracting '+science_object)
     try:
         science, science_noise, science_header = VR.extraction.extract_orders(
@@ -180,10 +182,10 @@ for science_object in list(science_runs.keys()):
             science[ext_index,:] /= master_flat[ext_index,:]
             science_noise[ext_index,:] /= master_flat[ext_index,:]
             
-            # Apply rough renormalisation with outlier-robuster 99th percenile of ~middle of order
-            science_99percentile = np.nanpercentile(science[ext_index,1500:2500],q=99)
-            science[ext_index,:] /= science_99percentile
-            science_noise[ext_index,:] /= science_99percentile
+            # Apply rough renormalisation with outlier-robuster 90th percenile of ~middle of order
+            science_90percentile = np.nanpercentile(science[ext_index,1500:2500],q=90)
+            science[ext_index,:] /= science_90percentile
+            science_noise[ext_index,:] /= science_90percentile
             
             # Define the columns with appropriate formats
             col1_def = fits.Column(name='wave_vac',format='E', array=np.arange(len(science[ext_index,:]),dtype=float))
