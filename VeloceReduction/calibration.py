@@ -665,6 +665,8 @@ def calibrate_wavelength(science_object, optimise_lc_solution=True, correct_bary
                 [r'FeI 7511.0187',7511.0187,91,'CCD_3_ORDER_82'],
                 [r'$\mathrm{H_\alpha}$ 6562.7970',6562.7970,80,'CCD_3_ORDER_93'],
                 [r'$\mathrm{H_\alpha}$ 6562.7970',6562.7970,79,'CCD_3_ORDER_94'],
+                [r'FeI 5324.1787',5324.1787,58,'CCD_3_ORDER_115'],
+                [r'FeI 5324.1787',5324.1787,57,'CCD_3_ORDER_116'],
             ]
 
             f, gs = plt.subplots(2,int(np.ceil(len(lines_air_and_orders_for_rv)/2)),figsize=(15,7),sharey=True)
