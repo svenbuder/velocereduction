@@ -147,7 +147,7 @@ master_lc, noise = VR.extraction.extract_orders(
 
 
 # Extract Science Objects and save them into FITS files under reduced_data/
-for science_object in list(science_runs.keys())[1:2]:
+for science_object in list(science_runs.keys()):
     print('Extracting '+science_object)
     try:
         science, science_noise, science_header = VR.extraction.extract_orders(

@@ -649,7 +649,7 @@ def calibrate_wavelength(science_object, optimise_lc_solution=True, correct_bary
 
         # If requested, fit a Voigt profile to the Halpha and CaII triplet lines to estimate the radial velocity
         if fit_voigt_for_rv:
-            print('  -> Estimating rough Radial Velocity from Halpha and CaII triplet')
+            print('  -> Estimating rough RV from Halpha and CaT; starting with CaII 8662 using its RV as initial guess for others.')
 
             # Define the lines and orders to fit a Voigt profile to.
             # Only fit a few at the moment, as they deliver the most reliable results of ~3 km/s of literature values for the tests done for 240219.
@@ -665,8 +665,8 @@ def calibrate_wavelength(science_object, optimise_lc_solution=True, correct_bary
                 [r'FeI 7511.0187',7511.0187,91,'CCD_3_ORDER_82'],
                 [r'$\mathrm{H_\alpha}$ 6562.7970',6562.7970,80,'CCD_3_ORDER_93'],
                 [r'$\mathrm{H_\alpha}$ 6562.7970',6562.7970,79,'CCD_3_ORDER_94'],
-                [r'FeI 5324.1787',5324.1787,58,'CCD_3_ORDER_115'],
-                [r'FeI 5324.1787',5324.1787,57,'CCD_3_ORDER_116'],
+                # [r'FeI 5324.1787',5324.1787,57,'CCD_2_ORDER_114'],
+                # [r'FeI 5324.1787',5324.1787,56,'CCD_2_ORDER_115'],
             ]
 
             f, gs = plt.subplots(2,int(np.ceil(len(lines_air_and_orders_for_rv)/2)),figsize=(15,7),sharey=True)
