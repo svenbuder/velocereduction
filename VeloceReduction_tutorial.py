@@ -248,8 +248,5 @@ for science_object in list(science_runs.keys()):
 
 repeated_observations = VR.utils.check_repeated_observations(science_runs)
 
-if len(repeated_observations) > 0:
-    print('Repeat observations found for:\n'+','.join(list(repeated_observations.keys())))
-    
-    VR.utils.monitor_vrad_for_repeat_observations(config.date, repeated_observations)
+VR.utils.monitor_vrad_for_repeat_observations(config.date, repeated_observations)
 

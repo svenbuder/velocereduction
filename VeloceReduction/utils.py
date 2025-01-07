@@ -537,13 +537,15 @@ def check_repeated_observations(science_runs):
     # Loop through each key in the input dictionary
     for key in science_runs.keys():
         # Assume the format is target_run and split to get the target and the run identifier
-        target, run = key.rsplit('_', 1)
-        
-        # Collect runs associated with each target
-        if target in target_runs:
-            target_runs[target].append(run)
-        else:
-            target_runs[target] = [run]
+        for key in science_runs.keys():
+        # Check if the key contains an underscore and split appropriately
+            if '_' in key:
+                target, run = key.rsplit('_', 1)
+                # Collect runs associated with each target
+                if target in target_runs:
+                    target_runs[target].append(run)
+                else:
+                    target_runs[target] = [run]
 
     # Create a dictionary to store targets with multiple observations
     repeated_observations = {target: runs for target, runs in target_runs.items() if len(runs) > 1}
@@ -560,47 +562,52 @@ def monitor_vrad_for_repeat_observations(date, repeated_observations):
                                   and the value is a list of run identifiers for that target.
     """
 
-    # Loop through each repeated observation
-    for repeated_observation in repeated_observations.keys():
-        print('\nMonitoring RV for '+repeated_observation)
-        
-        # We will read out UTMJD, VRAD, and E_VRAD
-        utmjd = []
-        vrad = []
-        e_vrad = []
-        
-        for run in repeated_observations[repeated_observation]:
-            try:
-                with fits.open('./reduced_data/'+date+'/'+repeated_observation+'_'+run+'/veloce_spectra_'+repeated_observation+'_'+run+'_'+date+'.fits') as file:
-                    utmjd.append(file[0].header['UTMJD'])
-                    vrad.append(file[0].header['VRAD'])
-                    e_vrad.append(file[0].header['E_VRAD'])
-            except:
-                print('\nCould not read '+repeated_observation+'_'+run)
-                print('Expected path was: reduced_data/'+date+'/'+repeated_observation+'_'+run+'/veloce_spectra_'+repeated_observation+'_'+run+'_'+date+'.fits')
+    if len(repeated_observations) == 0:
+        print('No repeated observations found.')
+    else:
+        print('Repeat observations found for:\n'+','.join(list(repeated_observations.keys())))
 
-        utmjd = np.array(utmjd)
-        vrad = np.array(vrad)
-        e_vrad = np.array(e_vrad)
-        
-        if len(vrad) > 1:
-            # Plot the RV measurements
-            f, ax = plt.subplots()
-            ax.errorbar(
-                utmjd - int(np.floor(utmjd[0])), # MJD of the first observation
-                vrad,
-                yerr = e_vrad,
-                fmt = 'o'
-            )
-            ax.set_xlabel('Modified Julian Date MJD - '+str(int(np.floor(utmjd[0]))),fontsize=15)
-            ax.set_ylabel(r'Radial Velocity $v_\mathrm{rad}~/~\mathrm{km\,s^{-1}}$',fontsize=15)
-            ax.axhline(np.mean(vrad),c = 'C3',lw=2,ls='dashed',label = r'$\leftangle v_\mathrm{rad} \rightangle = '+"{:.2f}".format(np.round(np.mean(vrad),2))+' \pm '+"{:.2f}".format(np.round(np.std(vrad),2))+r'\,\mathrm{km\,s^{-1}}$')
-            ax.axhline(np.mean(vrad)-np.std(vrad),c = 'C1',lw=1,ls='dashed')
-            ax.axhline(np.mean(vrad)+np.std(vrad),c = 'C1',lw=1,ls='dashed')
-            ax.legend()
-            plt.savefig('./reduced_data/'+date+'/'+repeated_observation+'_vrad_monitoring.pdf')
-            plt.show()
-            plt.close()
-        else:
-            print('Less than two observations could be read in for '+repeated_observation)
-            print('Skipping plotting for '+repeated_observation)
+        # Loop through each repeated observation
+        for repeated_observation in repeated_observations.keys():
+            print('\nMonitoring RV for '+repeated_observation)
+            
+            # We will read out UTMJD, VRAD, and E_VRAD
+            utmjd = []
+            vrad = []
+            e_vrad = []
+            
+            for run in repeated_observations[repeated_observation]:
+                try:
+                    with fits.open('./reduced_data/'+date+'/'+repeated_observation+'_'+run+'/veloce_spectra_'+repeated_observation+'_'+run+'_'+date+'.fits') as file:
+                        utmjd.append(file[0].header['UTMJD'])
+                        vrad.append(file[0].header['VRAD'])
+                        e_vrad.append(file[0].header['E_VRAD'])
+                except:
+                    print('\nCould not read '+repeated_observation+'_'+run)
+                    print('Expected path was: reduced_data/'+date+'/'+repeated_observation+'_'+run+'/veloce_spectra_'+repeated_observation+'_'+run+'_'+date+'.fits')
+
+            utmjd = np.array(utmjd)
+            vrad = np.array(vrad)
+            e_vrad = np.array(e_vrad)
+            
+            if len(vrad) > 1:
+                # Plot the RV measurements
+                f, ax = plt.subplots()
+                ax.errorbar(
+                    utmjd - int(np.floor(utmjd[0])), # MJD of the first observation
+                    vrad,
+                    yerr = e_vrad,
+                    fmt = 'o'
+                )
+                ax.set_xlabel('Modified Julian Date MJD - '+str(int(np.floor(utmjd[0]))),fontsize=15)
+                ax.set_ylabel(r'Radial Velocity $v_\mathrm{rad}~/~\mathrm{km\,s^{-1}}$',fontsize=15)
+                ax.axhline(np.mean(vrad),c = 'C3',lw=2,ls='dashed',label = r'$\leftangle v_\mathrm{rad} \rightangle = '+"{:.2f}".format(np.round(np.mean(vrad),2))+' \pm '+"{:.2f}".format(np.round(np.std(vrad),2))+r'\,\mathrm{km\,s^{-1}}$')
+                ax.axhline(np.mean(vrad)-np.std(vrad),c = 'C1',lw=1,ls='dashed')
+                ax.axhline(np.mean(vrad)+np.std(vrad),c = 'C1',lw=1,ls='dashed')
+                ax.legend()
+                plt.savefig('./reduced_data/'+date+'/'+repeated_observation+'_vrad_monitoring.pdf')
+                plt.show()
+                plt.close()
+            else:
+                print('Less than two observations could be read in for '+repeated_observation)
+                print('Skipping plotting for '+repeated_observation)
