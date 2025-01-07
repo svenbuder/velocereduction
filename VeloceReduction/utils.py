@@ -518,3 +518,89 @@ def wavelength_air_to_vac(wavelength_air):
         float, array: The corresponding vacuum wavelength(s) calculated from the input air wavelength(s).
     """
     return(wavelength_air * (1 + 0.00008336624212083 + 0.02408926869968 / (130.1065924522 - (1e4 / wavelength_air)**2) + 0.0001599740894897 / (38.92568793293 - (1e4 / wavelength_air)**2)))
+
+def check_repeated_observations(science_runs):
+    """
+    This function checks if any science run targets have been observed more than once and
+    returns the names of the specific runs that were observed repeatedly.
+
+    Parameters:
+    science_runs (dict): A dictionary where keys are target names with run identifiers
+                         (formatted as target+'_'+run) and values are some details about the run.
+
+    Returns:
+    dict: A dictionary with each target and a list of runs if it has been observed repeatedly.
+    """
+    # Create a dictionary to store the runs for each base target (without the run number)
+    target_runs = {}
+
+    # Loop through each key in the input dictionary
+    for key in science_runs.keys():
+        # Assume the format is target_run and split to get the target and the run identifier
+        target, run = key.rsplit('_', 1)
+        
+        # Collect runs associated with each target
+        if target in target_runs:
+            target_runs[target].append(run)
+        else:
+            target_runs[target] = [run]
+
+    # Create a dictionary to store targets with multiple observations
+    repeated_observations = {target: runs for target, runs in target_runs.items() if len(runs) > 1}
+
+    return repeated_observations
+
+def monitor_vrad_for_repeat_observations(date, repeated_observations):
+    """
+    This function reads in the RV measurements for repeated observations and plots them for comparison.
+    
+    Parameters:
+    date (str): The date of the observations in the format 'YYMMDD'.
+    repeated_observations (dict): A dictionary containing the repeated observations, where each key is the target
+                                  and the value is a list of run identifiers for that target.
+    """
+
+    # Loop through each repeated observation
+    for repeated_observation in repeated_observations.keys():
+        print('\nMonitoring RV for '+repeated_observation)
+        
+        # We will read out UTMJD, VRAD, and E_VRAD
+        utmjd = []
+        vrad = []
+        e_vrad = []
+        
+        for run in repeated_observations[repeated_observation]:
+            try:
+                with fits.open('./reduced_data/'+date+'/'+repeated_observation+'_'+run+'/veloce_spectra_'+repeated_observation+'_'+run+'_'+date+'.fits') as file:
+                    utmjd.append(file[0].header['UTMJD'])
+                    vrad.append(file[0].header['VRAD'])
+                    e_vrad.append(file[0].header['E_VRAD'])
+            except:
+                print('\nCould not read '+repeated_observation+'_'+run)
+                print('Expected path was: reduced_data/'+date+'/'+repeated_observation+'_'+run+'/veloce_spectra_'+repeated_observation+'_'+run+'_'+date+'.fits')
+
+        utmjd = np.array(utmjd)
+        vrad = np.array(vrad)
+        e_vrad = np.array(e_vrad)
+        
+        if len(vrad) > 1:
+            # Plot the RV measurements
+            f, ax = plt.subplots()
+            ax.errorbar(
+                utmjd - int(np.floor(utmjd[0])), # MJD of the first observation
+                vrad,
+                yerr = e_vrad,
+                fmt = 'o'
+            )
+            ax.set_xlabel('Modified Julian Date MJD - '+str(int(np.floor(utmjd[0]))),fontsize=15)
+            ax.set_ylabel(r'Radial Velocity $v_\mathrm{rad}~/~\mathrm{km\,s^{-1}}$',fontsize=15)
+            ax.axhline(np.mean(vrad),c = 'C3',lw=2,ls='dashed',label = r'$\leftangle v_\mathrm{rad} \rightangle = '+"{:.2f}".format(np.round(np.mean(vrad),2))+' \pm '+"{:.2f}".format(np.round(np.std(vrad),2))+r'\,\mathrm{km\,s^{-1}}$')
+            ax.axhline(np.mean(vrad)-np.std(vrad),c = 'C1',lw=1,ls='dashed')
+            ax.axhline(np.mean(vrad)+np.std(vrad),c = 'C1',lw=1,ls='dashed')
+            ax.legend()
+            plt.savefig('./reduced_data/'+date+'/'+repeated_observation+'_vrad_monitoring.pdf')
+            plt.show()
+            plt.close()
+        else:
+            print('Less than two observations could be read in for '+repeated_observation)
+            print('Skipping plotting for '+repeated_observation)
