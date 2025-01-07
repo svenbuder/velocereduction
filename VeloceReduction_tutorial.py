@@ -1,6 +1,9 @@
 #!/usr/bin/env python
 # coding: utf-8
 
+# <h1>Table of Contents<span class="tocSkip"></span></h1>
+# <div class="toc"><ul class="toc-item"><li><span><a href="#Adjust-Date-and-Directory-(possibly-via-argument-parser)" data-toc-modified-id="Adjust-Date-and-Directory-(possibly-via-argument-parser)-1"><span class="toc-item-num">1&nbsp;&nbsp;</span>Adjust Date and Directory (possibly via argument parser)</a></span></li><li><span><a href="#Identfiy-Calibration-and-Science-Runs" data-toc-modified-id="Identfiy-Calibration-and-Science-Runs-2"><span class="toc-item-num">2&nbsp;&nbsp;</span>Identfiy Calibration and Science Runs</a></span></li><li><span><a href="#Extract-orders-and-save-in-initial-FITS-files-with-an-extension-per-order." data-toc-modified-id="Extract-orders-and-save-in-initial-FITS-files-with-an-extension-per-order.-3"><span class="toc-item-num">3&nbsp;&nbsp;</span>Extract orders and save in initial FITS files with an extension per order.</a></span></li><li><span><a href="#Wavelength-calibration" data-toc-modified-id="Wavelength-calibration-4"><span class="toc-item-num">4&nbsp;&nbsp;</span>Wavelength calibration</a></span></li></ul></div>
+
 # # VeloceReduction -- Tutorial
 # 
 # This tutorial provides an example on how to reduce data of a given night YYMMDD.
@@ -92,7 +95,11 @@ print(f"Date: {args.date}, Working Directory: {args.working_directory}")
 
 
 # Extract the Calibration and Science data from the night log
-calibration_runs, science_runs = VR.utils.identify_calibration_and_science_runs(config.date, config.working_directory+'observations/')
+calibration_runs, science_runs = VR.utils.identify_calibration_and_science_runs(
+    config.date,
+    config.working_directory+'observations/',
+    each_science_run_separately = False # Set this True, if you want to reduce the runs of the same object separately
+)
 
 
 # ## Extract orders and save in initial FITS files with an extension per order.
@@ -230,4 +237,10 @@ for science_object in list(science_runs.keys()):
         print('  -> Succesfully calibrated wavelength with diagnostic plots for '+science_object)
     except:
         print('  -> Failed to calibrate wavelength for '+science_object)
+
+
+# In[ ]:
+
+
+
 
