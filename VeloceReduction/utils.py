@@ -259,7 +259,7 @@ def read_veloce_fits_image_and_metadata(file_path):
 
     return(full_image, metadata)
 
-def identify_calibration_and_science_runs(date, raw_data_dir):
+def identify_calibration_and_science_runs(date, raw_data_dir, each_science_run_separately = False):
     """
     Parses a log file in a specified directory to categorize and list calibration and science runs based on 
     the observation data. This function is tailored to handle the file structure and content specific to 
@@ -270,6 +270,8 @@ def identify_calibration_and_science_runs(date, raw_data_dir):
                     structure that organizes files by date.
         raw_data_dir (str): The path to the directory containing raw data and log files. This should be the 
                             root directory under which data is organized by date.
+        each_science_run_separately (bool): If True, each science run will be treated as a separate object. 
+                                            If False, all science runs will be coadded. Default is False.
 
     Returns:
         tuple: 
@@ -371,10 +373,13 @@ def identify_calibration_and_science_runs(date, raw_data_dir):
                     ]:
                     calibration_runs['Bstar'].append([run, run_object])
                 else:
-                    if run_object in science_runs.keys():
-                        science_runs[run_object].append(run)
+                    if each_science_run_separately:
+                        science_runs[run_object+'_'+str(run)] = [run]
                     else:
-                        science_runs[run_object] = [run]
+                        if run_object in science_runs.keys():
+                            science_runs[run_object].append(run)
+                        else:
+                            science_runs[run_object] = [run]
                         
     if len(calibration_runs['Bstar']) > 0:
         print('\nThe following Bstar observations were identified: '+', '.join(list(np.array(calibration_runs['Bstar'])[:,1])))
