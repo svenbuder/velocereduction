@@ -73,6 +73,9 @@ def get_script_input():
 #         jupyter_date = "240321"
 
 #         jupyter_date = "240921"
+#         jupyter_date = "240919"
+#         jupyter_date = "240219"
+
         
         jupyter_working_directory = "./"
         print("Running in a Jupyter notebook. Using predefined values")
@@ -167,7 +170,7 @@ else:
 
 
 # Extract Science Objects and save them into FITS files under reduced_data/
-for science_object in list(science_runs.keys())[:1]:
+for science_object in list(science_runs.keys()):
     print('Extracting '+science_object)
     try:
         science, science_noise, science_header = VR.extraction.extract_orders(
@@ -261,4 +264,10 @@ for science_object in list(science_runs.keys()):
 repeated_observations = VR.utils.check_repeated_observations(science_runs)
 
 VR.utils.monitor_vrad_for_repeat_observations(config.date, repeated_observations)
+
+
+# In[ ]:
+
+
+
 

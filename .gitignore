@@ -6,5 +6,6 @@ raw_data/
 *.egg-info/
 .DS_Store
 .egg-info
+lsf_matrix_lsf_korg_veloce.jld2
 __pycache__/
 .ipynb_checkpoints/
