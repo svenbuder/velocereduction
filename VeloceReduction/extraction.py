@@ -103,7 +103,7 @@ def substract_overscan(full_image, metadata, debug_overscan = False):
         overscan_rms['q4'] = np.diff(np.percentile(overscan,q=[16,84]))/2
         quadrant4 -= overscan_median['q4']
 
-        trimmed_image = np.hstack([np.vstack([quadrant1,quadrant2]),np.vstack([quadrant4,quadrant3])]).clip(min=0)
+        trimmed_image = np.hstack([np.vstack([quadrant1,quadrant2]),np.vstack([quadrant4,quadrant3])]).clip(min=0.0)
 
     if metadata['READOUT'] == '2Amp':
 
@@ -131,7 +131,7 @@ def substract_overscan(full_image, metadata, debug_overscan = False):
         overscan_rms['q2'] = np.diff(np.percentile(overscan,q=[16,84]))/2
         quadrant2 = (quadrant2 - overscan_median['q2'])
 
-        trimmed_image = np.hstack([quadrant1,quadrant2]).clip(min=0)
+        trimmed_image = np.hstack([quadrant1,quadrant2]).clip(min=0.0)
 
     if debug_overscan:
         plt.figure(figsize=(10,10))
@@ -142,7 +142,7 @@ def substract_overscan(full_image, metadata, debug_overscan = False):
         
     if debug_overscan:
         print(overscan_median, overscan_rms, metadata['READOUT'])
-
+        
     return(trimmed_image, overscan_median, overscan_rms, metadata['READOUT'])
 
 def read_in_order_tramlines_tinney():
@@ -291,7 +291,43 @@ def read_in_order_tramlines():
 
     return(order_tramline_ranges, order_tramline_beginning_coefficients, order_tramline_ending_coefficients)
 
-def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlines_based_on_flat = False, LC = False, Science = False, use_tinney_ranges = False, debug_tramlines = False, debug_overscan=False):
+def get_master_dark(runs, archival=False):
+    """
+    Read in the dark runs (assuming they are the same exposure time) and combine them to a master dark dictionary with keys for the three CCDs.
+
+    Parameters:
+        runs (list): List of observation runs for dark frames.
+
+    Returns:
+        dict: A dictionary containing the master dark image for the three CCDs.
+    
+    """
+
+    # Extract Images from CCDs 1-3
+    images = dict()
+    
+    # Read in, overscan subtract and append images to array
+    for ccd in [1,2,3]:
+        images['ccd_'+str(ccd)] = []
+
+        # If we use acrhival dark frames, we use frames 0224-0226 from date 001122.
+        if not archival:
+            date = config.date
+        else:
+            runs = ['0224','0225','0226']
+            date = '001122'
+
+        for run in runs:
+            full_image, metadata = read_veloce_fits_image_and_metadata(config.working_directory+'observations/'+date+'/ccd_'+str(ccd)+'/'+date[-2:]+match_month_to_date(date)+str(ccd)+run+'.fits')
+            trimmed_image, _, _, _ = substract_overscan(full_image, metadata)
+            images['ccd_'+str(ccd)].append(trimmed_image)
+        
+        # Calculate median across all runs
+        images['ccd_'+str(ccd)] = np.array(np.median(images['ccd_'+str(ccd)],axis=0),dtype=float)
+    return(images)
+
+
+def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlines_based_on_flat = False, LC = False, Science = False, master_darks = None, exposure_time_threshold_darks = 300, use_tinney_ranges = False, debug_tramlines = False, debug_overscan=False):
     """
     Extracts spectroscopic orders from CCD images for various types of Veloce CCD images
     using predefined tramline ranges and providing detailed debug information.
@@ -304,6 +340,8 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
         update_tramlines_based_on_flat (bool): Set to True to update tramline information based on flat field images. Can only be activated if Flat == True.
         LC (bool): Set to True to extract orders for laser comb calibration images.
         Science (bool): Set to True to extract orders for science observations.
+        master_darks (dict): A dictionary containing master dark images for the three CCDs.
+        exposure_time_threshold_darks (int, float): The threshold exposure time for applying master darks to science images in seconds. Default is 300 (seconds, i.e. 5 minutes).
         use_tinney_ranges (bool): Set to True to use tramline ranges specified by Chris Tinney.
         debug_tramlines (bool): Set to True to display debug plots for tramline extraction.
         debug_overscan (bool): Set to True to display debug plots for overscan correction.
@@ -320,8 +358,17 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
         - `Science` enables additional metadata extraction.
     """
 
+    # Raise ValueError if we try to update tramlines based on flat field images without Flat being True
     if (not Flat) & (update_tramlines_based_on_flat):
         raise ValueError('Cannot update tramlines based on flat field images if Flat is False')
+    
+    # Check if exposure_time_threshold_darks is a float or int
+    if not isinstance(exposure_time_threshold_darks, (int, float)):
+        raise ValueError('exposure_time_threshold_darks must be a float.')
+
+    # Raise warning if we use Science exposures but do not provide master darks.
+    if (Science) & (master_darks is None):
+        print('  -> Warning: Note using any dark subtraction.')
 
     order_ranges, order_beginning_coefficients, order_ending_coefficients = read_in_order_tramlines()
 
@@ -343,6 +390,44 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
         for run in runs:
             full_image, metadata = read_veloce_fits_image_and_metadata(config.working_directory+'observations/'+config.date+'/ccd_'+str(ccd)+'/'+config.date[-2:]+match_month_to_date(config.date)+str(ccd)+run+'.fits')
             trimmed_image, os_median, os_rms, readout_mode = substract_overscan(full_image, metadata, debug_overscan)
+            
+            # Let's apply a reasonable dark subtraction
+            if (Science) & (master_darks is not None):
+
+                exp_time_science = float(metadata['EXPTIME'])
+
+                # Let's check if the science exposure is actually long enough to necessitate dark subtraction
+                if (ccd == 1) & (exp_time_science < exposure_time_threshold_darks):
+                    print('  --> Science exposure time ('+str(exp_time_science)+' seconds) is less than threshold of '+str(exposure_time_threshold_darks)+' seconds to apply dark subtraction.')
+                    print('      Adjust kwarg exposure_time_threshold_darks to change this threshold.')
+                
+                # If the science exposure is long enough, apply dark subtraction
+                else:
+                    # Let's find the best matching dark frame (just above the exposure time) and apply it based on the exposure time ratio of science and said dark frame.
+                    exp_times_dark = np.array(list(master_darks.keys()),dtype=float)
+                    # If possible: Select only the dark frames that are equal or longer than the science exposure time
+                    if len(np.where(exp_times_dark-exp_time_science >= 0.0)[0]) > 0:
+                        exp_times_dark = exp_times_dark[exp_times_dark-exp_time_science >= 0.0]
+                    else:
+                        print('  --> Warning: No DarkFrame with exposure time longer than Science exposure time ('+str(exp_time_science)+'s) found. Using closest DarkFrame.')
+
+                    # Now find the smallest one of those
+                    best_matching_dark = exp_times_dark[np.argmin(exp_times_dark-exp_time_science)]
+                    exp_times_ratio_science_to_dark = float(exp_time_science / best_matching_dark)
+
+                    # Calculate an exposure time adjusted dark frame, which has no negative entries.
+                    adjusted_dark = (np.array(master_darks[str(best_matching_dark)]['ccd_'+str(ccd)], dtype=float) * exp_times_ratio_science_to_dark).clip(min=0.0)
+
+                    if (ccd == 1):
+                        print('  --> Subtracting '+str(best_matching_dark)+'s dark frame from Science exposure '+str(run)+' (D='+str(best_matching_dark)+'s vs. S='+str(exp_time_science)+'s, S/D = '+"{:.2f}".format(exp_times_ratio_science_to_dark)+' ~ '+str(int(np.median(adjusted_dark.flatten())))+' counts).')
+
+                    # Let's check that the dark and science frames have the same dimenions.
+                    # This may fail if the archival 2Amp dark is used for a 4Amp science frame.
+                    if np.shape(adjusted_dark) != np.shape(trimmed_image):
+                        raise ValueError('Dark frame ('+str(np.shape(adjusted_dark)[0])+','+str(np.shape(adjusted_dark)[1])+') and science frame ('+str(np.shape(trimmed_image)[0])+','+str(np.shape(trimmed_image)[1])+') have different shapes (this is likely because of a 4Amp science vs. 2Amp archivel dark)!')
+
+                    trimmed_image -= adjusted_dark
+
             images['ccd_'+str(ccd)].append(trimmed_image)
         
         # For science: sum counts

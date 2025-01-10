@@ -151,12 +151,23 @@ master_lc, noise = VR.extraction.extract_orders(
     # ./VeloceReduction/tramline_information/debug_tramlines_lc.pdf
 )
 
+# # Extract Darks
+master_darks = dict()
+if len(calibration_runs['Darks']) > 0:
+    print('Extracting Darks')
+    for dark_exposure in calibration_runs['Darks'].keys():
+        print('  --> '+str(dark_exposure)+': '+','.join(calibration_runs['Darks'][dark_exposure]))
+        master_darks[dark_exposure] = VR.extraction.get_master_dark(calibration_runs['Darks'][dark_exposure])
+else:
+    print('No Dark exposure found for '+config.date+'. Using Archvial exposure from 001122 (2Amp.)')
+    master_darks['1800.0'] = VR.extraction.get_master_dark(calibration_runs['Darks'], archival=True)
+
 
 # In[ ]:
 
 
 # Extract Science Objects and save them into FITS files under reduced_data/
-for science_object in list(science_runs.keys()):
+for science_object in list(science_runs.keys())[:1]:
     print('Extracting '+science_object)
     try:
         science, science_noise, science_header = VR.extraction.extract_orders(
@@ -164,6 +175,7 @@ for science_object in list(science_runs.keys()):
             ccd2_runs = science_runs[science_object],
             ccd3_runs = science_runs[science_object],
             Science=True,
+            master_darks = master_darks, # These are needed to subtract the dark current
             debug_tramlines = False, # Would create a tramlines trace PDF under
             # ./VeloceReduction/tramline_information/debug_tramlines_science.pdf
             debug_overscan=False
@@ -208,7 +220,7 @@ for science_object in list(science_runs.keys()):
             # Combine columns to BinTable and add header from primary
             hdu = fits.BinTableHDU.from_columns([col1_def, col2_def, col3_def, col4_def, col5_def, col6_def, col7_def], name=ext_name.lower())
             hdu.header.extend(header.copy(strip=True), unique=True)
-            
+    
             # Append the HDU to the HDU list
             hdul.append(hdu)
 
