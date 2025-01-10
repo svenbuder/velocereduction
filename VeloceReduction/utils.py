@@ -374,7 +374,7 @@ def identify_calibration_and_science_runs(date, raw_data_dir, each_science_run_s
                     "136504","138690","139365","142669","143018","143118","143275","144470","157246","158094","158427","158926","160578","165024","169022",
                     "175191","209952"
                     ]:
-                    calibration_runs['Bstar'][utc] = [run, run_object]
+                    calibration_runs['Bstar'][utc] = [run_object, run, utc]
                 else:
                     if each_science_run_separately:
                         science_runs[run_object+'_'+str(run)] = [run]
@@ -392,7 +392,7 @@ def identify_calibration_and_science_runs(date, raw_data_dir, each_science_run_s
         print('\nNo DarkFrame observations identified.')
                         
     if len(calibration_runs['Bstar']) > 0:
-        print('\nBstar observations: '+', '.join(list(np.array(calibration_runs['Bstar'])[:,1])))
+        print('\nBstar observations happened at: '+', '.join(calibration_runs['Bstar'].keys()))
     else:
         print('\nNo Bstar observations identified.')
 
