@@ -151,7 +151,7 @@ master_lc, noise = VR.extraction.extract_orders(
     # ./VeloceReduction/tramline_information/debug_tramlines_lc.pdf
 )
 
-# Extract Darks
+# # Extract Darks
 master_darks = dict()
 if len(calibration_runs['Darks']) > 0:
     print('Extracting Darks')
@@ -161,15 +161,6 @@ if len(calibration_runs['Darks']) > 0:
 else:
     print('No Dark exposure found for '+config.date+'. Using Archvial exposure from 001122 (2Amp.)')
     master_darks['1800.0'] = VR.extraction.get_master_dark(calibration_runs['Darks'], archival=True)
-
-
-# In[ ]:
-
-
-master_darks['0.0'] = master_darks['1800.0']
-master_darks['2.0'] = master_darks['1800.0']
-master_darks['60.0'] = master_darks['1800.0']
-master_darks['600.0'] = master_darks['1800.0']
 
 
 # In[ ]:

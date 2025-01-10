@@ -308,13 +308,17 @@ def get_master_dark(runs, archival=False):
     
     # Read in, overscan subtract and append images to array
     for ccd in [1,2,3]:
-        images['ccd_'+str(ccd)] = []        
+        images['ccd_'+str(ccd)] = []
+
+        # If we use acrhival dark frames, we use frames 0224-0226 from date 001122.
+        if not archival:
+            date = config.date
+        else:
+            runs = ['0224','0225','0226']
+            date = '001122'
+
         for run in runs:
-            if not archival:
-                full_image, metadata = read_veloce_fits_image_and_metadata(config.working_directory+'observations/'+config.date+'/ccd_'+str(ccd)+'/'+config.date[-2:]+match_month_to_date(config.date)+str(ccd)+run+'.fits')
-            else:
-                # Use the archival data from 001122
-                full_image, metadata = read_veloce_fits_image_and_metadata(config.working_directory+'observations/001122/ccd_'+str(ccd)+'/22nov'+str(ccd)+'0224.fits')
+            full_image, metadata = read_veloce_fits_image_and_metadata(config.working_directory+'observations/'+date+'/ccd_'+str(ccd)+'/'+date[-2:]+match_month_to_date(date)+str(ccd)+run+'.fits')
             trimmed_image, _, _, _ = substract_overscan(full_image, metadata)
             images['ccd_'+str(ccd)].append(trimmed_image)
         
