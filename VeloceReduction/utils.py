@@ -247,7 +247,7 @@ def read_veloce_fits_image_and_metadata(file_path):
     
     # Open the FITS file and extract the image and metadata
     with fits.open(file_path) as fits_file:
-        full_image = fits_file[0].data
+        full_image = np.array(fits_file[0].data, dtype=float) # We are reading in the images in as float to allow more image corrections.
         for key in ['OBJECT','UTMJD','MEANRA','MEANDEC','EXPTIME']:
             metadata[key] = fits_file[0].header[key]
         if 'DETA3X' in fits_file[0].header:
@@ -311,8 +311,11 @@ def identify_calibration_and_science_runs(date, raw_data_dir, each_science_run_s
     # Initialization of dictionaries to collect calibration and science runs
     calibration_runs = {key: [] for key in [
         'FibTh_15.0', 'FibTh_60.0', 'FibTh_180.0', 'SimTh_15.0', 'SimTh_60.0', 'SimTh_180.0', 'SimLC',
-        'Flat_0.1', 'Flat_1.0', 'Flat_10.0', 'Flat_60.0', 'Bstar', 'Bias'
+        'Flat_0.1', 'Flat_1.0', 'Flat_10.0', 'Flat_60.0', 'Bias'
     ]}
+    calibration_runs['Bstar'] = dict()
+    calibration_runs['Darks'] = dict()
+    
     science_runs = {}
 
 
@@ -329,7 +332,7 @@ def identify_calibration_and_science_runs(date, raw_data_dir, each_science_run_s
 
             ccd = line[6]
             run_object = line[8:25].strip()
-            # utc = line[25:33].strip()
+            utc = line[25:33].strip()
             exposure_time = line[35:42].strip()
             # snr_noise = line[42:48].strip()
             # snr_photons = line[48:53].strip()
@@ -361,17 +364,17 @@ def identify_calibration_and_science_runs(date, raw_data_dir, each_science_run_s
                 elif run_object == 'Acquire':
                     pass
                 elif run_object == 'DarkFrame':
-                    if 'Dark_'+exposure_time in calibration_runs.keys():
-                        calibration_runs['Dark_'+exposure_time].append(run)
+                    if exposure_time in calibration_runs['Darks'].keys():
+                        calibration_runs['Darks'][exposure_time].append(run)
                     else:
-                        calibration_runs['Dark_'+exposure_time] = [run]
+                        calibration_runs['Darks'][exposure_time] = [run]
                 elif run_object in [
                     "10144","14228","37795","47670","50013","56139","89080","91465","93030","98718","105435","105937","106490","108248","108249","108483",
                     "109026","109668","110879","118716","120324","121263","121743","121790","122451","125238","127972","129116","132058","134481","136298",
                     "136504","138690","139365","142669","143018","143118","143275","144470","157246","158094","158427","158926","160578","165024","169022",
                     "175191","209952"
                     ]:
-                    calibration_runs['Bstar'].append([run, run_object])
+                    calibration_runs['Bstar'][utc] = [run, run_object]
                 else:
                     if each_science_run_separately:
                         science_runs[run_object+'_'+str(run)] = [run]
@@ -380,11 +383,19 @@ def identify_calibration_and_science_runs(date, raw_data_dir, each_science_run_s
                             science_runs[run_object].append(run)
                         else:
                             science_runs[run_object] = [run]
+
+    # Print all DarkFrame exposures, if any
+    dark_frames = [key for key in calibration_runs['Darks'].keys()]
+    if len(dark_frames) > 0:
+        print('\nDarkFrame observations: '+', '.join(dark_frames))
+    else:
+        print('\nNo DarkFrame observations identified.')
                         
     if len(calibration_runs['Bstar']) > 0:
-        print('\nThe following Bstar observations were identified: '+', '.join(list(np.array(calibration_runs['Bstar'])[:,1])))
+        print('\nBstar observations: '+', '.join(list(np.array(calibration_runs['Bstar'])[:,1])))
     else:
-        print('\nNo Bstar observations were identified.')
+        print('\nNo Bstar observations identified.')
+
     print('\nThe following science observations were identified: '+', '.join(list(science_runs.keys())))
 
     return(calibration_runs, science_runs)
