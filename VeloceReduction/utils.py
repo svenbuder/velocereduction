@@ -11,6 +11,7 @@ import numpy as np
 
 from scipy.special import wofz
 from scipy.interpolate import interp1d
+from scipy.ndimage import gaussian_filter1d
 from scipy.optimize import curve_fit
 
 import matplotlib.pyplot as plt
@@ -21,6 +22,19 @@ from astropy.time import Time
 from astropy.coordinates import SkyCoord, EarthLocation
 import astropy.units as u
 SSO = EarthLocation.of_site('Siding Spring Observatory')
+
+def apply_velocity_shift_to_wavelength_array(velocity_in_kms, wavelength_array):
+    """
+    Applies a Doppler shift to a wavelength array based on the provided radial velocity.
+
+    Parameters:
+        velocity_in_kms (float): The radial velocity in kilometers per second.
+        wavelength_array (array): The array of wavelengths to be shifted.
+        
+    Returns:
+        array: A new array containing the shifted wavelengths.
+    """
+    return(wavelength_array / (1.+velocity_in_kms/299792.458))
 
 def radial_velocity_from_line_shift(line_centre_observed, line_centre_rest):
     """
@@ -673,3 +687,36 @@ def get_memory_usage():
                 return('Run on Apple/Darwin: '+"{:.1f}".format(free_memory)+'MB')
     else:
         return(result.stdout)
+
+def degrade_spectral_resolution(wavelength, flux, original_resolution, target_resolution):
+
+    """
+    Degrade the spectral resolution of a given flux from an original to a target resolution.
+
+    Parameters:
+        wavelength (numpy.ndarray): Wavelength array of the spectrum.
+        flux (numpy.ndarray): Flux array of the spectrum.
+        original_resolution (float): Original spectral resolution.
+        target_resolution (float): Target spectral resolution to degrade to.
+
+    Returns:
+        numpy.ndarray: The degraded flux array.
+    """
+
+    # Calculate the FWHM at the original and target resolutions
+    fwhm_original = wavelength / original_resolution
+    fwhm_target = wavelength / target_resolution
+    
+    # Calculate the required broadening in FWHM
+    fwhm_diff = np.sqrt(np.maximum(fwhm_target**2 - fwhm_original**2, 0))
+    
+    # Convert FWHM difference to sigma for the Gaussian kernel
+    sigma = fwhm_diff / (2.0 * np.sqrt(2 * np.log(2)))
+
+    # Assume sigma varies across wavelength; use mean sigma for simplicity in this example
+    mean_sigma = np.mean(sigma)
+
+    # Convolve flux with Gaussian kernel to degrade resolution
+    degraded_flux = gaussian_filter1d(flux, mean_sigma)
+
+    return(degraded_flux)

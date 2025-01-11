@@ -77,13 +77,10 @@ def get_script_input():
 #         jupyter_date = "231121"
         
 #         jupyter_date = "240201"
-        
 #         jupyter_date = "240321"
-
 #         jupyter_date = "240921"
 #         jupyter_date = "240919"
 #         jupyter_date = "240219"
-
         
         jupyter_working_directory = "./"
         print("Running in a Jupyter notebook. Using predefined values")
@@ -264,6 +261,25 @@ for science_object in list(science_runs.keys()):
         print('  -> Failed to calibrate wavelength for '+science_object+'\n')
 
 
+# In[ ]:
+
+
+# import VeloceReduction as VR
+# from astropy.io import fits
+
+# korg_spectra = VR.flux_comparison.read_korg_syntheses()
+
+# with fits.open('reduced_data/250111/HIP47908/veloce_spectra_HIP47908_250111.fits') as veloce_fits_file:
+    
+#     VR.flux_comparison.calculate_wavelength_coefficients_with_korg_synthesis(
+#         veloce_fits_file,
+#         korg_wavelength_vac = korg_spectra['wavelength_vac'],
+#         korg_flux = korg_spectra['flux_arcturus'],
+#         order_selection=['ccd_3_order_70','ccd_3_order_71'],
+#         debug=False
+#     )
+
+
 # ## Monitor RV (for stars with multiple observations and seperate reductions)
 
 # In[ ]:
@@ -283,4 +299,10 @@ print('Memory before starting the reduction was:')
 print(starting_memory)
 print('Memory after running the reduction is:')
 print(get_memory_usage())
+
+
+# In[ ]:
+
+
+
 
