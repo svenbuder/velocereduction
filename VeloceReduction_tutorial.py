@@ -42,7 +42,8 @@ from VeloceReduction.utils import polynomial_function, get_memory_usage
 # In[ ]:
 
 starting_memory = get_memory_usage()
-print('Memory before starting the reduction: {:.2f} MB'.format(starting_memory))
+print('Memory before starting the reduction:')
+print(starting_memory)
 
 def parse_arguments():
     # Create the parser
@@ -270,6 +271,8 @@ VR.utils.monitor_vrad_for_repeat_observations(config.date, repeated_observations
 
 # In[ ]:
 
-print('Memory at the end of the reduction: {:.2f} MB'.format(get_memory_usage()))
+print('Final memory information:')
+print(get_memory_usage())
 
-print('Remember: initial memory was ',starting_memory)
+print('Initial memory information:')
+print(starting_memory)
