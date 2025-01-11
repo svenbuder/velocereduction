@@ -655,7 +655,6 @@ def get_memory_usage():
                 # macOS uses a page size of 4096 bytes, convert pages to megabytes
                 page_size = os.sysconf('SC_PAGE_SIZE') / 1024 / 1024  # Convert bytes to MB
                 free_memory = free_pages * page_size
-                print(f"Free Memory (MB): {free_memory:.2f} MB")
-                break
+                return('Run on Apple/Darwin: '+"{:.1f}".format(free_memory)+'MB')
     else:
-        print(result.stdout)
+        return(result.stdout)

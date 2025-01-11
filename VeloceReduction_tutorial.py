@@ -2,7 +2,7 @@
 # coding: utf-8
 
 # <h1>Table of Contents<span class="tocSkip"></span></h1>
-# <div class="toc"><ul class="toc-item"><li><span><a href="#Adjust-Date-and-Directory-(possibly-via-argument-parser)" data-toc-modified-id="Adjust-Date-and-Directory-(possibly-via-argument-parser)-1"><span class="toc-item-num">1&nbsp;&nbsp;</span>Adjust Date and Directory (possibly via argument parser)</a></span></li><li><span><a href="#Identfiy-Calibration-and-Science-Runs" data-toc-modified-id="Identfiy-Calibration-and-Science-Runs-2"><span class="toc-item-num">2&nbsp;&nbsp;</span>Identfiy Calibration and Science Runs</a></span></li><li><span><a href="#Extract-orders-and-save-in-initial-FITS-files-with-an-extension-per-order." data-toc-modified-id="Extract-orders-and-save-in-initial-FITS-files-with-an-extension-per-order.-3"><span class="toc-item-num">3&nbsp;&nbsp;</span>Extract orders and save in initial FITS files with an extension per order.</a></span></li><li><span><a href="#Wavelength-calibration" data-toc-modified-id="Wavelength-calibration-4"><span class="toc-item-num">4&nbsp;&nbsp;</span>Wavelength calibration</a></span></li><li><span><a href="#Monitor-RV-(for-stars-with-multiple-observations-and-seperate-reductions)" data-toc-modified-id="Monitor-RV-(for-stars-with-multiple-observations-and-seperate-reductions)-5"><span class="toc-item-num">5&nbsp;&nbsp;</span>Monitor RV (for stars with multiple observations and seperate reductions)</a></span></li></ul></div>
+# <div class="toc"><ul class="toc-item"><li><span><a href="#Adjust-Date-and-Directory-(possibly-via-argument-parser)" data-toc-modified-id="Adjust-Date-and-Directory-(possibly-via-argument-parser)-1"><span class="toc-item-num">1&nbsp;&nbsp;</span>Adjust Date and Directory (possibly via argument parser)</a></span></li><li><span><a href="#Identfiy-Calibration-and-Science-Runs" data-toc-modified-id="Identfiy-Calibration-and-Science-Runs-2"><span class="toc-item-num">2&nbsp;&nbsp;</span>Identfiy Calibration and Science Runs</a></span></li><li><span><a href="#Extract-orders-and-save-in-initial-FITS-files-with-an-extension-per-order." data-toc-modified-id="Extract-orders-and-save-in-initial-FITS-files-with-an-extension-per-order.-3"><span class="toc-item-num">3&nbsp;&nbsp;</span>Extract orders and save in initial FITS files with an extension per order.</a></span></li><li><span><a href="#Wavelength-calibration" data-toc-modified-id="Wavelength-calibration-4"><span class="toc-item-num">4&nbsp;&nbsp;</span>Wavelength calibration</a></span></li><li><span><a href="#Monitor-RV-(for-stars-with-multiple-observations-and-seperate-reductions)" data-toc-modified-id="Monitor-RV-(for-stars-with-multiple-observations-and-seperate-reductions)-5"><span class="toc-item-num">5&nbsp;&nbsp;</span>Monitor RV (for stars with multiple observations and seperate reductions)</a></span></li><li><span><a href="#Final-Memory-Check" data-toc-modified-id="Final-Memory-Check-6"><span class="toc-item-num">6&nbsp;&nbsp;</span>Final Memory Check</a></span></li></ul></div>
 
 # # VeloceReduction -- Tutorial
 # 
@@ -34,16 +34,21 @@ import VeloceReduction as VR
 from astropy.table import Table
 from scipy.optimize import curve_fit
 from scipy.signal import find_peaks
-from VeloceReduction.utils import polynomial_function, get_memory_usage
+from VeloceReduction.utils import get_memory_usage
+
+
+# In[ ]:
+
+
+starting_memory = get_memory_usage()
+print('Memory before starting the reduction:')
+print(starting_memory)
 
 
 # ## Adjust Date and Directory (possibly via argument parser)
 
 # In[ ]:
 
-starting_memory = get_memory_usage()
-print('Memory before starting the reduction:')
-print(starting_memory)
 
 def parse_arguments():
     # Create the parser
@@ -269,10 +274,13 @@ repeated_observations = VR.utils.check_repeated_observations(science_runs)
 VR.utils.monitor_vrad_for_repeat_observations(config.date, repeated_observations)
 
 
+# ## Final Memory Check
+
 # In[ ]:
 
-print('Final memory information:')
+
+print('Memory before starting the reduction was:')
+print(starting_memory)
+print('Memory after running the reduction is:')
 print(get_memory_usage())
 
-print('Initial memory information:')
-print(starting_memory)
