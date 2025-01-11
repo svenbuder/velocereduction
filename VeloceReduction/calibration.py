@@ -814,7 +814,7 @@ def calibrate_wavelength(science_object, optimise_lc_solution=True, correct_bary
             rv_mean = np.round(np.mean(filtered_rv),2)
             rv_std  = np.round(np.std(filtered_rv),2)
             rv_unc  = np.round(np.median(np.array(rv_estimates_upper)-np.array(rv_estimates_lower)),2)
-            print(r'  -> $v_\mathrm{rad}  = '+str(rv_mean)+' \pm '+str(rv_std)+' \pm '+str(rv_unc)+r'\,\mathrm{km\,s^{-1}}$ (mean, scatter, unc.) based on '+str(len(filtered_rv))+' lines.')
+            print(r'  -> $v_\mathrm{rad}  = '+str(rv_mean)+r' \pm '+str(rv_std)+r' \pm '+str(rv_unc)+r'\,\mathrm{km\,s^{-1}}$ (mean, scatter, unc.) based on '+str(len(filtered_rv))+' lines.')
             
             file[0].header['VRAD'] = rv_mean
             file[0].header['E_VRAD'] = rv_std
