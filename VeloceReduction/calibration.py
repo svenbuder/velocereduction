@@ -535,9 +535,9 @@ def plot_wavelength_calibrated_order_data(order, science_object, file, overview_
     # Plot title with radial and barycentric velocity information
     if isinstance(file[0].header['VRAD'], float):
         wavelength_to_plot = velocity_shift(velocity_in_kms=file[0].header['VRAD'], wavelength_array=wavelength_to_plot)
-        f.suptitle(config.date+' '+science_object+' '+file[order].header['EXTNAME']+ r' $v_\mathrm{rad} = '+str(file[0].header['VRAD'])+r' \pm '+str(file[0].header['E_VRAD'])+'\,\mathrm{km\,s^{-1}}$, $v_\mathrm{bary} = '+"{:.2f}".format(np.round(file[0].header['BARYVEL'],2))+'\,\mathrm{km\,s^{-1}}$')
+        f.suptitle(config.date+' '+science_object+' '+file[order].header['EXTNAME']+ r' $v_\mathrm{rad} = '+str(file[0].header['VRAD'])+r' \pm '+str(file[0].header['E_VRAD'])+r'\,\mathrm{km\,s^{-1}}$, $v_\mathrm{bary} = '+"{:.2f}".format(np.round(file[0].header['BARYVEL'],2))+r'\,\mathrm{km\,s^{-1}}$')
     else:
-        f.suptitle(config.date+' '+science_object+' '+file[order].header['EXTNAME']+ r' $v_\mathrm{rad} = N/A, $v_\mathrm{bary} = '+"{:.2f}".format(np.round(file[0].header['BARYVEL'],2))+'\,\mathrm{km\,s^{-1}}$')
+        f.suptitle(config.date+' '+science_object+' '+file[order].header['EXTNAME']+ r' $v_\mathrm{rad} = N/A, $v_\mathrm{bary} = '+"{:.2f}".format(np.round(file[0].header['BARYVEL'],2))+r'\,\mathrm{km\,s^{-1}}$')
 
     # Panel 1: Science spectrum
     ax = gs[0]
