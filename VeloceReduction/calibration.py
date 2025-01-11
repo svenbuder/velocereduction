@@ -116,12 +116,12 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, ov
         # 2) Coefficients fitted with LC
         # 3) Coefficients fitted with ThXe
         try:
-            previous_calibration_coefficients = np.loadtxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / 'wavelength_coefficients_'+order_name+'_korg.txt')
+            previous_calibration_coefficients = np.loadtxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_{order_name}_korg.txt')
         except:
             try:
-                previous_calibration_coefficients = np.loadtxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / 'wavelength_coefficients_'+order_name+'_lc.txt')
+                previous_calibration_coefficients = np.loadtxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_{order_name}_lc.txt')
             except:
-                previous_calibration_coefficients = np.loadtxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / 'wavelength_coefficients_'+order_name+'_thxe.txt')
+                previous_calibration_coefficients = np.loadtxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_{order_name}_thxe.txt')
 
         wavelength = polynomial_function(np.arange(4128)-2064,*previous_calibration_coefficients)*10
 
@@ -356,7 +356,7 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, ov
             rms_velocity = 299792.46 * np.std(wavelength_residuals/lc_wavelengths_to_fit)
 
         if overwrite:
-            np.savetxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / 'wavelength_coefficients_'+order_name+'_lc.txt',coeffs_lc)
+            np.savetxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_{order_name}_lc.txt',coeffs_lc)
 
         # Plot the difference between the LC wavelength solution and
         #   a) the LC peaks (as scatter points) as dots,
@@ -391,7 +391,7 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, ov
             )
 
             # ThXe Wavelegnth Solution
-            coeffs_thxe = np.loadtxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / 'wavelength_coefficients_'+order_name+'_thxe.txt')
+            coeffs_thxe = np.loadtxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_{order_name}_thxe.txt')
             plt.plot(
                 np.arange(4128),
                 polynomial_function(np.arange(4128)-2064,*coeffs_thxe)*10 - 
@@ -460,12 +460,12 @@ def calibrate_single_order(file, order, barycentric_velocity=None, optimise_lc_s
     # 2) Coefficients fitted with LC
     # 3) Coefficients fitted with ThXe
     try:
-        wavelength_solution_vacuum_coefficients = np.loadtxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / 'wavelength_coefficients_'+order_name+'_korg.txt')
+        wavelength_solution_vacuum_coefficients = np.loadtxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_{order_name}_korg.txt')
     except:
         try:
-            wavelength_solution_vacuum_coefficients = np.loadtxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / 'wavelength_coefficients_'+order_name+'_lc.txt')
+            wavelength_solution_vacuum_coefficients = np.loadtxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_{order_name}_lc.txt')
         except:
-            wavelength_solution_vacuum_coefficients = np.loadtxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / 'wavelength_coefficients_'+order_name+'_thxe.txt')
+            wavelength_solution_vacuum_coefficients = np.loadtxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_{order_name}_thxe.txt')
     
     # Optimise the LC solution based on the refitted peaks of the laser comb, if enabled
     if optimise_lc_solution:
@@ -856,7 +856,7 @@ def fit_thxe_polynomial_coefficients():
 
     for order in orders:
         # Read in ThXe pixel and wavelength data
-        thxe_pixels_and_wavelengths = np.array(np.loadtxt(Path(__file__).resolve().parent / 'veloce_reference_data' / 'thxe_pixels_and_positions' / + order + '_px_wl.txt'))
+        thxe_pixels_and_wavelengths = np.array(np.loadtxt(Path(__file__).resolve().parent / 'veloce_reference_data' / 'thxe_pixels_and_positions' / f'{order}_px_wl.txt'))
 
         # Fit a polynomial function to pixel and wavelength data
         thxe_coefficients, _ = curve_fit(
@@ -867,4 +867,4 @@ def fit_thxe_polynomial_coefficients():
         )
 
         # Save the fitted polynomial coefficients to a text file
-        np.savetxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / 'wavelength_coefficients_'+order+'_thxe.txt', thxe_coefficients)
+        np.savetxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_f{order}_thxe.txt', thxe_coefficients)
