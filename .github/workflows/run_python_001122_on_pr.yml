@@ -22,5 +22,17 @@ jobs:
           python -m pip install --upgrade pip
           pip install numpy scipy astropy matplotlib
 
+      - name: Check free memory
+        run: free -m | tee memory_usage.txt
+
       - name: Run Python script
         run: python ./VeloceReduction_tutorial.py
+
+      - name: Check free memory after script execution
+        run: free -m >> memory_usage.txt
+
+      - name: Upload memory usage data
+        uses: actions/upload-artifact@v2
+        with:
+          name: memory_usage
+          path: memory_usage.txt
