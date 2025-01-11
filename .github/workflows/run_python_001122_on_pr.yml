@@ -15,7 +15,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.9.12'  # This is the version that I used on 20 Dec 2024.
+          python-version: '3.X'  # Code was written with 3.9.12 (version on 20 Dec 2024).
 
       - name: Install dependencies
         run: |
