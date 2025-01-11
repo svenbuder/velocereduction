@@ -285,7 +285,7 @@ def read_in_order_tramlines():
         for order in orders:
             order_tramline_ranges['ccd_'+ccd+'_order_'+str(order)] = np.arange(4112)
 
-            tramline_information = np.loadtxt(Path(__file__).resolve().parent / 'tramline_information' / 'tramlines_begin_end_ccd_'+ccd+'_order_'+str(order)+'.txt')
+            tramline_information = np.loadtxt(Path(__file__).resolve().parent / 'tramline_information' / f'tramlines_begin_end_ccd_{ccd}_order_{order}.txt')
             order_tramline_beginning_coefficients['ccd_'+ccd+'_order_'+str(order)] = tramline_information[0,:-1] # neglecting the buffer info in last cell
             order_tramline_ending_coefficients['ccd_'+ccd+'_order_'+str(order)]    = tramline_information[1,:-1] # neglecting the buffer info in last cell
 
@@ -543,7 +543,7 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
             type=''
         
         plt.tight_layout()
-        plt.savefig(Path(__file__).resolve().parent / 'tramline_information' / 'debug_tramlines'+type+'.pdf',dpi=400,bb_inches='tight')
+        plt.savefig(Path(__file__).resolve().parent / 'tramline_information' / f'debug_tramlines{type}.pdf',dpi=400,bb_inches='tight')
         plt.show()
         plt.close()
         
@@ -934,7 +934,7 @@ def optimise_tramline_polynomial(overscan_subtracted_images, order, readout_mode
     )[0]
     
     if overwrite:
-        np.savetxt(Path(__file__).resolve().parent / 'tramline_information' / 'tramlines_begin_end_'+order+'.txt',
+        np.savetxt(Path(__file__).resolve().parent / 'tramline_information' / f'tramlines_begin_end_{order}.txt',
                 np.array([
                     ['#c0', 'c1', 'c2', 'c3', 'c4','buffer_pixel'],
                     np.concatenate((order_beginning_fit,[buffer[order][0]])),
@@ -943,7 +943,7 @@ def optimise_tramline_polynomial(overscan_subtracted_images, order, readout_mode
                 fmt='%s')
     else:
         try:
-            old_order_beginning, old_order_ending = np.loadtxt(Path(__file__).resolve().parent / 'tramline_information' / 'tramlines_begin_end_'+order+'.txt')
+            old_order_beginning, old_order_ending = np.loadtxt(Path(__file__).resolve().parent / 'tramline_information' / f'tramlines_begin_end_{order}.txt')
             old_buffer = [old_order_beginning[-1],old_order_ending[-1]]
             old_order_beginning = old_order_beginning[:-1]
             old_order_ending = old_order_ending[:-1]
@@ -1002,7 +1002,7 @@ def optimise_tramline_polynomial(overscan_subtracted_images, order, readout_mode
     plt.ylabel('Y Pixels',fontsize=15)
     plt.legend(loc = 'upper left',fontsize=15)
     if (order == 'ccd_1_order_141') & overwrite:
-        plt.savefig(Path(__file__).resolve().parent / 'joss_paper' / 'tramline_extraction_example_'+order+'.png',dpi=100,bbox_inches='tight')
+        plt.savefig(Path(__file__).resolve().parent / 'joss_paper' / f'tramline_extraction_example_{order}.png',dpi=100,bbox_inches='tight')
     plt.show()
     plt.close()
     
