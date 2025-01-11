@@ -10,17 +10,29 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v2
+        uses: actions/setup-python@v4
         with:
-          python-version: '3.9.12'  # This is the version that I used on 20 Dec 2024.
+          python-version: '3.X'  # Code was written with 3.9.12 (version on 20 Dec 2024).
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install numpy scipy astropy matplotlib
 
+      - name: Check free memory
+        run: free -m | tee memory_usage.txt
+
       - name: Run Python script
         run: python ./VeloceReduction_tutorial.py
+
+      - name: Check free memory after script execution
+        run: free -m >> memory_usage.txt
+
+      - name: Upload memory usage data
+        uses: actions/upload-artifact@v4
+        with:
+          name: memory_usage
+          path: memory_usage.txt

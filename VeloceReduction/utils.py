@@ -5,9 +5,14 @@ import glob
 from scipy.special import wofz
 from scipy.interpolate import interp1d
 from scipy.optimize import curve_fit
+import subprocess
+import platform
+import os
+
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 from astropy.io import fits
+
 from astropy.time import Time
 from astropy.coordinates import SkyCoord, EarthLocation
 import astropy.units as u
@@ -612,7 +617,7 @@ def monitor_vrad_for_repeat_observations(date, repeated_observations):
                 )
                 ax.set_xlabel('Modified Julian Date MJD - '+str(int(np.floor(utmjd[0]))),fontsize=15)
                 ax.set_ylabel(r'Radial Velocity $v_\mathrm{rad}~/~\mathrm{km\,s^{-1}}$',fontsize=15)
-                ax.axhline(np.mean(vrad),c = 'C3',lw=2,ls='dashed',label = r'$\leftangle v_\mathrm{rad} \rightangle = '+"{:.2f}".format(np.round(np.mean(vrad),2))+' \pm '+"{:.2f}".format(np.round(np.std(vrad),2))+r'\,\mathrm{km\,s^{-1}}$')
+                ax.axhline(np.mean(vrad),c = 'C3',lw=2,ls='dashed',label = r'$\leftangle v_\mathrm{rad} \rightangle = '+"{:.2f}".format(np.round(np.mean(vrad),2))+r' \pm '+"{:.2f}".format(np.round(np.std(vrad),2))+r'\,\mathrm{km\,s^{-1}}$')
                 ax.axhline(np.mean(vrad)-np.std(vrad),c = 'C1',lw=1,ls='dashed')
                 ax.axhline(np.mean(vrad)+np.std(vrad),c = 'C1',lw=1,ls='dashed')
                 ax.legend()
@@ -622,3 +627,34 @@ def monitor_vrad_for_repeat_observations(date, repeated_observations):
             else:
                 print('Less than two observations could be read in for '+repeated_observation)
                 print('Skipping plotting for '+repeated_observation)
+
+def get_memory_usage():
+    """
+    Get the memory usage of the system and print it in a human-readable format.
+    This function uses the `free` command on Linux systems and `vm_stat` on macOS to retrieve memory usage information.
+    """
+    os_type = platform.system()
+    
+    if os_type == 'Linux':
+        command = ["free", "-m"]
+    elif os_type == 'Darwin':
+        command = ["vm_stat"]
+    else:
+        raise Exception("Unsupported operating system")
+    
+    result = subprocess.run(command, capture_output=True, text=True)
+    
+    if os_type == 'Darwin':
+        # Process macOS memory output
+        lines = result.stdout.split('\n')
+        for line in lines:
+            if "Pages free" in line:
+                # Extracting the number of free pages
+                free_pages = line.split(':')[1].strip().replace('.', '')
+                free_pages = int(free_pages)
+                # macOS uses a page size of 4096 bytes, convert pages to megabytes
+                page_size = os.sysconf('SC_PAGE_SIZE') / 1024 / 1024  # Convert bytes to MB
+                free_memory = free_pages * page_size
+                return('Run on Apple/Darwin: '+"{:.1f}".format(free_memory)+'MB')
+    else:
+        return(result.stdout)
