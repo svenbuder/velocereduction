@@ -1,24 +1,52 @@
 from . import config
 
-import numpy as np
 import glob
-from scipy.special import wofz
-from scipy.interpolate import interp1d
-from scipy.optimize import curve_fit
+from pathlib import Path
 import subprocess
 import platform
 import os
 
+
+import numpy as np
+
+from scipy.special import wofz
+from scipy.interpolate import interp1d
+from scipy.ndimage import gaussian_filter1d
+from scipy.optimize import curve_fit
+
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
-from astropy.io import fits
 
+from astropy.io import fits
 from astropy.time import Time
 from astropy.coordinates import SkyCoord, EarthLocation
 import astropy.units as u
 SSO = EarthLocation.of_site('Siding Spring Observatory')
 
+def apply_velocity_shift_to_wavelength_array(velocity_in_kms, wavelength_array):
+    """
+    Applies a Doppler shift to a wavelength array based on the provided radial velocity.
+
+    Parameters:
+        velocity_in_kms (float): The radial velocity in kilometers per second.
+        wavelength_array (array): The array of wavelengths to be shifted.
+        
+    Returns:
+        array: A new array containing the shifted wavelengths.
+    """
+    return(wavelength_array / (1.+velocity_in_kms/299792.458))
+
 def radial_velocity_from_line_shift(line_centre_observed, line_centre_rest):
+    """
+    Calculate the radial velocity from the observed and rest wavelengths of a spectral line.
+
+    Parameters:
+        line_centre_observed (float): The observed central wavelength of the spectral line.
+        line_centre_rest (float): The rest central wavelength of the spectral line.
+
+    Returns:
+        float: The radial velocity in km/s.
+    """
     return((line_centre_observed - line_centre_rest) / line_centre_rest * 299792.458)
 
 def voigt_absorption_profile(wavelength, line_centre, line_offset, line_depth, sigma, gamma):
@@ -485,9 +513,9 @@ def read_in_wavelength_solution_coefficients_tinney():
     wavelength_solution_coefficients_tinney = dict()
 
     for ccd in [1,2,3]:
-        if ccd == 1: vdarc_file = './VeloceReduction/veloce_reference_data/vdarc_azzurro_230915.txt'
-        if ccd == 2: vdarc_file = './VeloceReduction/veloce_reference_data/vdarc_verde_230920.txt'
-        if ccd == 3: vdarc_file = './VeloceReduction/veloce_reference_data/vdarc_rosso_230919.txt'
+        if ccd == 1: vdarc_file = Path(__file__).resolve().parent / 'veloce_reference_data' / 'vdarc_azzurro_230915.txt'
+        if ccd == 2: vdarc_file = Path(__file__).resolve().parent / 'veloce_reference_data' / 'vdarc_verde_230920.txt'
+        if ccd == 3: vdarc_file = Path(__file__).resolve().parent / 'veloce_reference_data' / 'vdarc_rosso_230919.txt'
 
         with open(vdarc_file, "r") as vdarc:
             vdarc_text = vdarc.read().split('\n')
@@ -593,14 +621,15 @@ def monitor_vrad_for_repeat_observations(date, repeated_observations):
             e_vrad = []
             
             for run in repeated_observations[repeated_observation]:
+                expected_path = config.working_directory+'/reduced_data/'+date+'/'+repeated_observation+'_'+run+'/veloce_spectra_'+repeated_observation+'_'+run+'_'+date+'.fits'
                 try:
-                    with fits.open('./reduced_data/'+date+'/'+repeated_observation+'_'+run+'/veloce_spectra_'+repeated_observation+'_'+run+'_'+date+'.fits') as file:
+                    with fits.open(expected_path) as file:
                         utmjd.append(file[0].header['UTMJD'])
                         vrad.append(file[0].header['VRAD'])
                         e_vrad.append(file[0].header['E_VRAD'])
                 except:
                     print('\nCould not read '+repeated_observation+'_'+run)
-                    print('Expected path was: reduced_data/'+date+'/'+repeated_observation+'_'+run+'/veloce_spectra_'+repeated_observation+'_'+run+'_'+date+'.fits')
+                    print('Expected path was: '+expected_path)
 
             utmjd = np.array(utmjd)
             vrad = np.array(vrad)
@@ -621,7 +650,7 @@ def monitor_vrad_for_repeat_observations(date, repeated_observations):
                 ax.axhline(np.mean(vrad)-np.std(vrad),c = 'C1',lw=1,ls='dashed')
                 ax.axhline(np.mean(vrad)+np.std(vrad),c = 'C1',lw=1,ls='dashed')
                 ax.legend()
-                plt.savefig('./reduced_data/'+date+'/'+repeated_observation+'_vrad_monitoring.pdf')
+                plt.savefig(config.working_directory+'/reduced_data/'+date+'/'+repeated_observation+'_vrad_monitoring.pdf')
                 plt.show()
                 plt.close()
             else:
@@ -658,3 +687,36 @@ def get_memory_usage():
                 return('Run on Apple/Darwin: '+"{:.1f}".format(free_memory)+'MB')
     else:
         return(result.stdout)
+
+def degrade_spectral_resolution(wavelength, flux, original_resolution, target_resolution):
+
+    """
+    Degrade the spectral resolution of a given flux from an original to a target resolution.
+
+    Parameters:
+        wavelength (numpy.ndarray): Wavelength array of the spectrum.
+        flux (numpy.ndarray): Flux array of the spectrum.
+        original_resolution (float): Original spectral resolution.
+        target_resolution (float): Target spectral resolution to degrade to.
+
+    Returns:
+        numpy.ndarray: The degraded flux array.
+    """
+
+    # Calculate the FWHM at the original and target resolutions
+    fwhm_original = wavelength / original_resolution
+    fwhm_target = wavelength / target_resolution
+    
+    # Calculate the required broadening in FWHM
+    fwhm_diff = np.sqrt(np.maximum(fwhm_target**2 - fwhm_original**2, 0))
+    
+    # Convert FWHM difference to sigma for the Gaussian kernel
+    sigma = fwhm_diff / (2.0 * np.sqrt(2 * np.log(2)))
+
+    # Assume sigma varies across wavelength; use mean sigma for simplicity in this example
+    mean_sigma = np.mean(sigma)
+
+    # Convolve flux with Gaussian kernel to degrade resolution
+    degraded_flux = gaussian_filter1d(flux, mean_sigma)
+
+    return(degraded_flux)
