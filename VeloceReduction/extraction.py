@@ -1,10 +1,12 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
+from scipy.signal import medfilt
+from scipy.interpolate import UnivariateSpline
 from pathlib import Path
 
 from . import config
-from .utils import read_veloce_fits_image_and_metadata, match_month_to_date, polynomial_function
+from .utils import read_veloce_fits_image_and_metadata, match_month_to_date, polynomial_function, calculate_barycentric_velocity_correction
 
 def substract_overscan(full_image, metadata, debug_overscan = False):
     """
@@ -326,8 +328,78 @@ def get_master_dark(runs, archival=False):
         images['ccd_'+str(ccd)] = np.array(np.median(images['ccd_'+str(ccd)],axis=0),dtype=float)
     return(images)
 
+def convert_bstar_to_telluric(bstar_flux_in_orders, master_flat, filter_kernel_size=101, debug=False):
+    """
+    Convert B-star flux to telluric flux by normalising the B-star flux to unity
+    using a medfilt and a spline fit.
 
-def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlines_based_on_flat = False, LC = False, Science = False, master_darks = None, exposure_time_threshold_darks = 300, use_tinney_ranges = False, debug_tramlines = False, debug_overscan=False):
+    Parameters:
+        bstar_flux_in_orders (np.array): An array of B-star flux in the orders.
+        master_flat (np.array): The master flat field image.
+        filter_kernel_size (int): The kernel size for the median filter.
+        debug (bool): Set to True to display debug plots.
+
+    Returns:
+        np.array: An array of telluric flux in the orders.
+    """
+
+    # Calculate the median of the B-star flux in each order
+    for order in range(len(bstar_flux_in_orders)):
+        smooth_bstar_flux_in_order = medfilt(bstar_flux_in_orders[order], kernel_size=filter_kernel_size)
+
+        # fit a spline to the smooth flux
+        spline_fit = UnivariateSpline(np.arange(len(smooth_bstar_flux_in_order)), smooth_bstar_flux_in_order, k=3, s=0)
+
+        # Plot the smooth flux and spline fit to it and compare to the original flux
+        if debug:
+            plt.figure(figsize=(10,5))
+            plt.plot(bstar_flux_in_orders[order], label = 'B-star flux')
+            plt.plot(smooth_bstar_flux_in_order, label = 'Smooth B-star flux')
+            plt.plot(spline_fit(np.arange(len(smooth_bstar_flux_in_order))), label = 'Spline')
+            plt.plot(master_flat[order] * np.nanpercentile(smooth_bstar_flux_in_order/master_flat[order],99), label = 'Flat')
+            plt.legend(ncol=4)
+            plt.ylim(0, 1.25*np.nanpercentile(smooth_bstar_flux_in_order, 99))
+            plt.show()
+            plt.close()
+
+        # divide the bstar_flux_in_order by the spline fit
+        bstar_flux_in_orders[order] /= spline_fit(np.arange(len(smooth_bstar_flux_in_order)))
+
+    return(bstar_flux_in_orders)
+
+def get_tellurics_from_bstar(bstar_information, master_flat):
+    """
+    Extract telluric orders from a B-star observation.
+
+    Parameters:
+        bstar_information (list): A list in the format [bstar_id, run, obsering_time]
+        master_flat (np.array): The master flat field image
+
+    Returns:
+        telluric_flux_in_orders (np.array): An array of telluric flux in the orders.
+        vbary_bstar (float): The barycentric velocity correction in km/s for the B-star observation
+    """
+
+    bstar_id, run, time = bstar_information
+
+    # Extract the B-star flux in the orders and the metadata
+    bstar_flux_in_orders, _, metadata = extract_orders(
+        ccd1_runs = [run],
+        ccd2_runs = [run],
+        ccd3_runs = [run],
+        Bstar = True
+    )
+
+    # Calculate the barycentric velocity correction for the B-star observation based on the FITS header metadata
+    vbary_bstar = calculate_barycentric_velocity_correction(metadata)
+    
+    # Convert the B-star flux to telluric flux by normalising the B-star flux to unity
+    telluric_flux_in_orders = convert_bstar_to_telluric(bstar_flux_in_orders, master_flat, debug=True)
+
+    return(telluric_flux_in_orders, vbary_bstar, metadata['UTMJD'])
+    
+
+def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlines_based_on_flat = False, LC = False, Bstar = False, Science = False, master_darks = None, exposure_time_threshold_darks = 300, use_tinney_ranges = False, debug_tramlines = False, debug_overscan=False):
     """
     Extracts spectroscopic orders from CCD images for various types of Veloce CCD images
     using predefined tramline ranges and providing detailed debug information.
@@ -339,6 +411,7 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
         Flat (bool): Set to True to extract orders for flat field images.
         update_tramlines_based_on_flat (bool): Set to True to update tramline information based on flat field images. Can only be activated if Flat == True.
         LC (bool): Set to True to extract orders for laser comb calibration images.
+        Bstar (bool): Set to True to extract orders for B-star calibration images.
         Science (bool): Set to True to extract orders for science observations.
         master_darks (dict): A dictionary containing master dark images for the three CCDs.
         exposure_time_threshold_darks (int, float): The threshold exposure time for applying master darks to science images in seconds. Default is 300 (seconds, i.e. 5 minutes).
@@ -364,7 +437,7 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
     
     # Check if exposure_time_threshold_darks is a float or int
     if not isinstance(exposure_time_threshold_darks, (int, float)):
-        raise ValueError('exposure_time_threshold_darks must be a float.')
+        raise ValueError('Exposure_time_threshold_darks must be a float.')
 
     # Raise warning if we use Science exposures but do not provide master darks.
     if (Science) & (master_darks is None):
@@ -547,7 +620,7 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
         plt.show()
         plt.close()
         
-    if Science:
+    if Science | Bstar:
         return(np.array(counts_in_orders),np.array(noise_in_orders),metadata)
     else:
         return(np.array(counts_in_orders),np.array(noise_in_orders))
