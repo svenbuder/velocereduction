@@ -631,7 +631,7 @@ def calibrate_wavelength(science_object, optimise_lc_solution=True, correct_bary
         # Let user know if we are correcting for barycentric velocity and creating overview PDF
         if correct_barycentric_velocity:
             # ToDo: Check why the barycentric velocity correction seems to be exactly off in the wrong direction?! For now, we will just flip the sign.
-            barycentric_velocity = -calculate_barycentric_velocity_correction(science_header=file[0].header)
+            barycentric_velocity = -calculate_barycentric_velocity_correction(fits_header=file[0].header)
             print('  -> Correcting for barycentric velocity: '+"{:.2f}".format(np.round(barycentric_velocity,2))+' km/s')
             file[0].header['BARYVEL'] = barycentric_velocity
         else:

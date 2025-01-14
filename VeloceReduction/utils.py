@@ -331,7 +331,7 @@ def identify_calibration_and_science_runs(date, raw_data_dir, each_science_run_s
 
     log_file_path = glob.glob(f"{raw_file_path}*.log")
     if not log_file_path:
-        raise ValueError('No Log file present')
+        raise ValueError('No Log file present in '+f"{raw_file_path}*.log")
     elif len(log_file_path) > 1:
         print(f'More than 1 Log file present, continuing with {log_file_path[0]}\n')
     else:
