@@ -75,12 +75,14 @@ def get_script_input():
         
         # 4Amp example
 #         jupyter_date = "231121"
-        
+
+
 #         jupyter_date = "240201"
 #         jupyter_date = "240321"
 #         jupyter_date = "240921"
 #         jupyter_date = "240919"
 #         jupyter_date = "240219"
+#         jupyter_date = "250111"
         
         jupyter_working_directory = "./"
         print("Running in a Jupyter notebook. Using predefined values")
@@ -95,8 +97,12 @@ def get_script_input():
 # Use the function to get input
 args = get_script_input()
 config.date = args.date
-config.working_directory = args.working_directory
-print(f"Date: {args.date}, Working Directory: {args.working_directory}")
+
+if args.working_directory[:2] in ['./','~/']:
+    config.working_directory = str(Path(args.working_directory).resolve())+'/'
+else:
+    config.working_directory = args.working_directory
+print(f"Date: {config.date}, Working Directory: {config.working_directory}")
 
 
 # ## Identfiy Calibration and Science Runs
@@ -117,49 +123,43 @@ calibration_runs, science_runs = VR.utils.identify_calibration_and_science_runs(
 # In[ ]:
 
 
-# Extract order ranges and coefficients
-order_ranges, order_beginning_coeffs, order_ending_coeffs = VR.extraction.read_in_order_tramlines()
-
-
-# In[ ]:
-
-
 # Extract Master Flat
 print('Extracting Master Flat')
-master_flat, noise = VR.extraction.extract_orders(
-    ccd1_runs = calibration_runs['Flat_60.0'][:1],
-    ccd2_runs = calibration_runs['Flat_1.0'][:1],
-    ccd3_runs = calibration_runs['Flat_0.1'][:1],
+master_flat, _ = VR.extraction.extract_orders(
+    ccd1_runs = calibration_runs['Flat_60.0'],
+    ccd2_runs = calibration_runs['Flat_1.0'],
+    ccd3_runs = calibration_runs['Flat_0.1'],
     Flat = True,
-    update_tramlines_based_on_flat = False, # Would update and overwrite
+    update_tramlines_based_on_flat = True, # Would update and overwrite
     # ./VeloceReduction/tramline_information/tramline_begin_end_ccd_*_oder_*.txt
     debug_overscan = False,
     debug_tramlines = False # Would create a tramlines trace PDF under
-    # ./VeloceReduction/tramline_information/debug_tramlines_flat.pdf
+    # reduced_data/YYMMDD/debug/debug_tramlines_flat.pdf
 )
 
 # Extract Master ThXe
 print('Extracting Master ThXe')
-master_thxe, noise = VR.extraction.extract_orders(
+master_thxe, _ = VR.extraction.extract_orders(
     ccd1_runs = calibration_runs['FibTh_180.0'][:1],
     ccd2_runs = calibration_runs['FibTh_60.0'][:1],
     ccd3_runs = calibration_runs['FibTh_15.0'][:1],
-    debug_tramlines = False # Would create a tramlines trace PDF under
-    # ./VeloceReduction/tramline_information/debug_tramlines.pdf
+    ThXe = True,
+    debug_tramlines = True # Would create a tramlines trace PDF under
+    # reduced_data/YYMMDD/debug/debug_tramlines_thxe.pdf
 )
 
 # Extract Master LC
 print('Extracting Master LC')
-master_lc, noise = VR.extraction.extract_orders(
+master_lc, _ = VR.extraction.extract_orders(
     ccd1_runs = calibration_runs['SimLC'][-1:],
     ccd2_runs = calibration_runs['SimLC'][-1:],
     ccd3_runs = calibration_runs['SimLC'][-1:],
     LC = True,
-    debug_tramlines = False # Would create a tramlines trace PDF under
-    # ./VeloceReduction/tramline_information/debug_tramlines_lc.pdf
+    debug_tramlines = True # Would create a tramlines trace PDF under
+    # reduced_data/YYMMDD/debug/debug_tramlines_lc.pdf
 )
 
-# # Extract Darks
+# Extract Darks
 master_darks = dict()
 if len(calibration_runs['Darks']) > 0:
     print('Extracting Darks')
@@ -169,6 +169,18 @@ if len(calibration_runs['Darks']) > 0:
 else:
     print('No Dark exposure found for '+config.date+'. Using Archvial exposure from 001122 (2Amp.)')
     master_darks['1800.0'] = VR.extraction.get_master_dark(calibration_runs['Darks'], archival=True)
+
+
+# In[ ]:
+
+
+# # Extract BStars -> Telluric lines
+# master_bstars = dict()
+# if len(calibration_runs['Bstar']) > 0:
+#     print('Extracting Bstar-Tellurics')
+#     for bstar_exposure in calibration_runs['Bstar'].keys():
+#         print('  --> '+str(bstar_exposure)+': '+', '.join(calibration_runs['Bstar'][bstar_exposure]))
+#         telluric_flux, telluric_vbary, telluric_mjd = VR.extraction.get_tellurics_from_bstar(calibration_runs['Bstar'][bstar_exposure], master_flat)
 
 
 # In[ ]:
@@ -184,8 +196,8 @@ for science_object in list(science_runs.keys()):
             ccd3_runs = science_runs[science_object],
             Science=True,
             master_darks = master_darks, # These are needed to subtract the dark current
-            debug_tramlines = False, # Would create a tramlines trace PDF under
-            # ./VeloceReduction/tramline_information/debug_tramlines_science.pdf
+            debug_tramlines = True, # Would create a tramlines trace PDF under
+            # reduced_data/YYMMDD/debug/debug_tramlines_{metadata['OBJECT']}.pdf
             debug_overscan=False
         )
 
@@ -202,6 +214,9 @@ for science_object in list(science_runs.keys()):
         header['VRAD']               = ('None',                   'Radial velocity estimate')
         header['E_VRAD']             = ('None',                   'Uncertainty of radial velocity estimate')
         hdul = fits.HDUList([primary_hdu])
+
+        # Extract order ranges and coefficients
+        order_ranges, order_beginning_coeffs, order_ending_coeffs = VR.extraction.read_in_order_tramlines()
 
         # Loop over your extension names and corresponding data arrays
         for ext_index, ext_name in enumerate(order_beginning_coeffs):

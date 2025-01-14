@@ -87,6 +87,13 @@ reduced_data/                                               # Directory where th
 └── .../                                                    # Date of another observing run
 ```
 
+An example reduction (blue line) of order 143 for CCD1 is shown here in comparison to a not-optimised model spectrum of the [Korg](https://ajwheeler.github.io/Korg.jl/stable/) spectrum synthesis tool with telluric lines by [Hinkle et al. (2000)](https://ui.adsabs.harvard.edu/abs/2000vnia.book.....H):
+<p align="center">
+  <img src="./VeloceReduction/veloce_reference_data/veloce_reduction_ccd_1_order_143.png" width="100%"/>
+</p>
+
+
+
 ## Workflow
 
 ### Identification of calibration and science runs + tramlines extractions

@@ -167,7 +167,7 @@ def fit_gaussian_absorption_profile(wavelength, flux, initial_guess, bounds=None
         popt, pcov = curve_fit(gaussian_absorption_profile, wavelength, flux, p0=initial_guess)
     return (popt, pcov)
 
-def calculate_barycentric_velocity_correction(science_header):
+def calculate_barycentric_velocity_correction(fits_header):
     """
     Calculates the barycentric velocity correction for a given astronomical observation by taking into account
     the Earth's motion relative to the solar system's barycenter. This correction is computed based on the
@@ -179,7 +179,7 @@ def calculate_barycentric_velocity_correction(science_header):
     location should be predefined as an astropy EarthLocation object within the function.
 
     Parameters:
-        science_header (dict): Header from a science FITS file that must include:
+        fits_header (dict): Header from a Veloce FITS file that must include:
             - 'MEANRA': Mean right ascension of the observation in degrees.
             - 'MEANDEC': Mean declination of the observation in degrees.
             - 'UTMJD': Universal Time of the observation in Modified Julian Date format.
@@ -190,10 +190,10 @@ def calculate_barycentric_velocity_correction(science_header):
                velocity measurements.
     """
 
-    object_coordinates = SkyCoord(ra = science_header['MEANRA'], dec = science_header['MEANDEC'], frame="icrs", unit="deg")
+    object_coordinates = SkyCoord(ra = fits_header['MEANRA'], dec = fits_header['MEANDEC'], frame="icrs", unit="deg")
     vbary_corr_kms = object_coordinates.radial_velocity_correction( 
         kind='barycentric', 
-        obstime = Time(val=science_header['UTMJD'],format='mjd', scale='utc'),
+        obstime = Time(val=fits_header['UTMJD'],format='mjd', scale='utc'),
         location=SSO
     ).to(u.km/u.s).value
     return vbary_corr_kms
@@ -331,7 +331,7 @@ def identify_calibration_and_science_runs(date, raw_data_dir, each_science_run_s
 
     log_file_path = glob.glob(f"{raw_file_path}*.log")
     if not log_file_path:
-        raise ValueError('No Log file present')
+        raise ValueError('No Log file present in '+f"{raw_file_path}*.log")
     elif len(log_file_path) > 1:
         print(f'More than 1 Log file present, continuing with {log_file_path[0]}\n')
     else:
