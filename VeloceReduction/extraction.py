@@ -1,8 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
-from scipy.signal import medfilt
-from scipy.interpolate import UnivariateSpline
+from scipy.ndimage import median_filter
 from pathlib import Path
 
 from . import config
@@ -337,52 +336,76 @@ def get_master_dark(runs, archival=False):
         images['ccd_'+str(ccd)] = np.array(np.median(images['ccd_'+str(ccd)],axis=0),dtype=float)
     return(images)
 
-def convert_bstar_to_telluric(bstar_flux_in_orders, master_flat, filter_kernel_size=101, debug=False):
+def convert_bstar_to_telluric(bstar_flux_in_orders, filter_kernel_size=51, debug=False):
     """
     Convert B-star flux to telluric flux by normalising the B-star flux to unity
-    using a medfilt and a spline fit.
+    using a smoothed Bstar spectrum (smoothed via median_filter).
 
     Parameters:
         bstar_flux_in_orders (np.array): An array of B-star flux in the orders.
-        master_flat (np.array): The master flat field image.
-        filter_kernel_size (int): The kernel size for the median filter.
+        filter_kernel_size (int): The kernel size for the median filter. 51 default.
         debug (bool): Set to True to display debug plots.
 
     Returns:
         np.array: An array of telluric flux in the orders.
     """
 
+    telluric_flux_in_orders = []
+
     # Calculate the median of the B-star flux in each order
     for order in range(len(bstar_flux_in_orders)):
-        smooth_bstar_flux_in_order = medfilt(bstar_flux_in_orders[order], kernel_size=filter_kernel_size)
 
-        # fit a spline to the smooth flux
-        spline_fit = UnivariateSpline(np.arange(len(smooth_bstar_flux_in_order)), smooth_bstar_flux_in_order, k=3, s=0)
+        smooth_bstar_flux_in_order = median_filter(bstar_flux_in_orders[order], size=filter_kernel_size)
 
-        # Plot the smooth flux and spline fit to it and compare to the original flux
+        bstar_flux_for_tellurics = bstar_flux_in_orders[order] / smooth_bstar_flux_in_order
+        bstar_flux_for_tellurics[np.isnan(bstar_flux_for_tellurics)] = 1.0
+        
+        # Let's make sure we have reasonable telluric features that we can divide with.
+        telluric_flux_in_order = bstar_flux_for_tellurics.clip(min = 0.01, max = 1.0)
+        
+        # cut first and last 100 pixels of telluric (~2.5% of the order each left and right).
+        telluric_flux_in_order[:100] = 1.0
+        telluric_flux_in_order[-100:] = 1.0
+
+        # We do not expect any telluric lines in a lot of orders.
+        if (order < 47) | (order in [51,52,53,54,55,56,60,61]):
+            telluric_flux_in_order = 1.0 * np.ones(len(telluric_flux_in_order))
+        
+        # Specific cuts left and right
+        if order in [47,48,49,50]:
+            telluric_flux_in_order[:200] = 1.0
+        if order in [65,66,67]:
+            telluric_flux_in_order[-200:] = 1.0
+        if order == 107:
+            telluric_flux_in_order[2250:] = 1.0
+
+        # Specific cuts for too strong absorption (50%) where we do not expect it
+        if order <= 82:
+            telluric_flux_in_order[telluric_flux_in_order < 0.5] = 1.0
+
+        telluric_flux_in_orders.append(telluric_flux_in_order)
+
+        # Plot the bstar flux divided by the smooth flux
         if debug:
             plt.figure(figsize=(10,5))
-            plt.plot(bstar_flux_in_orders[order], label = 'B-star flux')
-            plt.plot(smooth_bstar_flux_in_order, label = 'Smooth B-star flux')
-            plt.plot(spline_fit(np.arange(len(smooth_bstar_flux_in_order))), label = 'Spline')
-            plt.plot(master_flat[order] * np.nanpercentile(smooth_bstar_flux_in_order/master_flat[order],99), label = 'Flat')
+            plt.title(order)
+            plt.plot(bstar_flux_for_tellurics, label = 'B-star flux divided by smooth flux', lw = 0.5, c='k')
+            plt.plot(telluric_flux_in_order, label = 'Final telluric flux', lw = 1, c='C0')
             plt.legend(ncol=4)
-            plt.ylim(0, 1.25*np.nanpercentile(smooth_bstar_flux_in_order, 99))
+            plt.ylim(-0.1, 1.5)
             plt.show()
             plt.close()
 
-        # divide the bstar_flux_in_order by the spline fit
-        bstar_flux_in_orders[order] /= spline_fit(np.arange(len(smooth_bstar_flux_in_order)))
+    return(np.array(telluric_flux_in_orders))
 
-    return(bstar_flux_in_orders)
-
-def get_tellurics_from_bstar(bstar_information, master_flat):
+def get_tellurics_from_bstar(bstar_information, master_flat, debug=False):
     """
     Extract telluric orders from a B-star observation.
 
     Parameters:
         bstar_information (list): A list in the format [bstar_id, run, obsering_time]
         master_flat (np.array): The master flat field image
+        debug (bool): Set to True to display debug plots.
 
     Returns:
         telluric_flux_in_orders (np.array): An array of telluric flux in the orders.
@@ -399,26 +422,19 @@ def get_tellurics_from_bstar(bstar_information, master_flat):
         Bstar = True
     )
 
-<<<<<<< HEAD
-=======
     # Flat-field correct the B-star flux
     bstar_flux_in_orders /= master_flat
 
->>>>>>> origin/main
     # Calculate the barycentric velocity correction for the B-star observation based on the FITS header metadata
     vbary_bstar = calculate_barycentric_velocity_correction(metadata)
     
     # Convert the B-star flux to telluric flux by normalising the B-star flux to unity
-    telluric_flux_in_orders = convert_bstar_to_telluric(bstar_flux_in_orders, master_flat, debug=True)
+    telluric_flux_in_orders = convert_bstar_to_telluric(bstar_flux_in_orders, debug=debug)
 
     return(telluric_flux_in_orders, vbary_bstar, metadata['UTMJD'])
     
 
-<<<<<<< HEAD
-def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlines_based_on_flat = False, LC = False, Bstar = False, Science = False, master_darks = None, exposure_time_threshold_darks = 300, use_tinney_ranges = False, debug_tramlines = False, debug_overscan=False):
-=======
 def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlines_based_on_flat = False, LC = False, Bstar = False, Science = False, ThXe = False, master_darks = None, exposure_time_threshold_darks = 300, use_tinney_ranges = False, debug_tramlines = False, debug_overscan=False):
->>>>>>> origin/main
     """
     Extracts spectroscopic orders from CCD images for various types of Veloce CCD images
     using predefined tramline ranges and providing detailed debug information.

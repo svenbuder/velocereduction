@@ -531,7 +531,7 @@ def plot_wavelength_calibrated_order_data(order, science_object, file, overview_
     wavelength_to_plot = file[order].data['WAVE_AIR']
 
     # Create the figure and set up shared x-axis
-    f, gs = plt.subplots(5,1,figsize=(15,10),sharex=True)
+    f, gs = plt.subplots(6,1,figsize=(11.69,8.27),sharex=True)
     
     # Plot title with radial and barycentric velocity information
     if isinstance(file[0].header['VRAD'], float):
@@ -564,14 +564,19 @@ def plot_wavelength_calibrated_order_data(order, science_object, file, overview_
     ax.plot(file[order].data['FLAT'], lw=1)
     ax.set_ylabel('Flat')
 
-    # Panel 4: ThXe emission lines
+    # Panel 4: Telluric spectrum
     ax = gs[3]
+    ax.plot(file[order].data['TELLURIC'], lw=1)
+    ax.set_ylabel('Telluric')
+
+    # Panel 5: ThXe emission lines
+    ax = gs[4]
     ax.plot(file[order].data['THXE'], lw=1)
     ax.set_yscale('log')
     ax.set_ylabel('ThXe')
 
-    # Panel 5: Laser Comb data
-    ax = gs[4]
+    # Panel 6: Laser Comb data
+    ax = gs[5]
     ax.plot(file[order].data['LC'], lw=0.5)
     ax.set_yscale('log')
     ax.set_ylabel('LC')

@@ -4,7 +4,7 @@ import numpy as np
 from numpy.polynomial.chebyshev import Chebyshev
 from astropy.table import Table
 from scipy.optimize import minimize
-from scipy.signal import medfilt
+from scipy.ndimage import median_filter
 import matplotlib.pyplot as plt
 
 from VeloceReduction.utils import polynomial_function, wavelength_vac_to_air, apply_velocity_shift_to_wavelength_array, degrade_spectral_resolution
@@ -94,7 +94,7 @@ def normalise_veloce_flux_via_smoothed_ratio_to_korg_flux(veloce_wavelength, vel
 
     # Apply a broad median filter to estimate a smoothed ratio
     smooth_wavelength = veloce_wavelength[~absorption_pixels]
-    smooth_flux_ratio = medfilt(flux_ratio[~absorption_pixels], kernel_size=filter_kernel_size)
+    smooth_flux_ratio = median_filter(flux_ratio[~absorption_pixels], size=filter_kernel_size)
 
     # Neglect 1/2 filer sizes left and right for more robust estimate
     smooth_flux_ratio[:filter_kernel_size//2] = np.nan
