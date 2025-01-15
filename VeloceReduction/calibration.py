@@ -415,17 +415,17 @@ def calibrate_single_order(file, order, barycentric_velocity=None, optimise_lc_s
     data for both vacuum and air wavelengths directly within the provided FITS file object.
 
     Parameters:
-        file (HDUList): An open FITS file object from astropy.io.fits, which should contain the spectral data.
-                        The spectral data of each order should be accessible via indexing.
-        order (int): The index of the order within the FITS file to calibrate. This specifies which HDU in the
-                     FITS file is being calibrated.
+        file (HDUList):                         An open FITS file object from astropy.io.fits, which should contain the spectral data.
+                                                The spectral data of each order should be accessible via indexing.
+        order (int):                            The index of the order within the FITS file to calibrate. This specifies which HDU in the
+                                                FITS file is being calibrated.
         barycentric_velocity (float, optional): The barycentric radial velocity (in km/s) to correct for
                                                 the Doppler shift due to Earth's motion. If provided, this velocity
                                                 is used to adjust the calculated wavelengths for the motion of the Earth.
                                                 If None, no correction is applied.
         optimise_lc_solution (bool, optional):  If True, the function will use the laser comb data of the FITS extension
                                                 and optimise the wavelength solution based on refitted peaks of the laser comb.
-
+        
     Returns:
         None: The function modifies the 'file' object in-place, updating the wavelength data for the specified order.
 
@@ -568,6 +568,7 @@ def plot_wavelength_calibrated_order_data(order, science_object, file, overview_
     ax = gs[3]
     ax.plot(file[order].data['TELLURIC'], lw=1)
     ax.set_ylabel('Telluric')
+    ax.set_ylim(-0.1,1.1)
 
     # Panel 5: ThXe emission lines
     ax = gs[4]
@@ -585,6 +586,7 @@ def plot_wavelength_calibrated_order_data(order, science_object, file, overview_
     ax.set_xticklabels(ticks, rotation=90)
 
     # Save the plot to the provided PDF
+    plt.tight_layout()
     overview_pdf.savefig()
     plt.close()
 
@@ -595,15 +597,15 @@ def calibrate_wavelength(science_object, optimise_lc_solution=True, correct_bary
     optionally, generating an overview PDF with plots of the calibrated data.
 
     Parameters:
-        science_object (str): The identifier for the science object. This is used to locate the corresponding
-                              FITS file and to label outputs appropriately.
-        optimise_lc_solution (bool): If True, optimise the wavelength solution based on the refitted peaks of the laser comb.
-        correct_barycentric_velocity (bool): If True, apply a correction for the barycentric velocity to the
-                                             wavelength data based on header information.
-        fit_voigt_for_rv (bool): If True, fits a Voigt profile to selected spectral lines (Halpha and CaII triplet)
-                                 to estimate the radial velocity of the object.
-        create_overview_pdf (bool): If True, generates a PDF file containing plots of the calibrated spectral data
-                                    for each order in the FITS file.
+        science_object (str):                       The identifier for the science object. This is used to locate the corresponding
+                                                    FITS file and to label outputs appropriately.
+        optimise_lc_solution (bool):                If True, optimise the wavelength solution based on the refitted peaks of the laser comb.
+        correct_barycentric_velocity (bool):        If True, apply a correction for the barycentric velocity to the
+                                                    wavelength data based on header information.
+        fit_voigt_for_rv (bool):                    If True, fits a Voigt profile to selected spectral lines (Halpha and CaII triplet)
+                                                    to estimate the radial velocity of the object.
+        create_overview_pdf (bool):                 If True, generates a PDF file containing plots of the calibrated spectral data
+                                                    for each order in the FITS file.
 
     Returns:
         None: This function modifies the FITS files in-place and may generate output files (PDFs), but does not
@@ -642,7 +644,7 @@ def calibrate_wavelength(science_object, optimise_lc_solution=True, correct_bary
         else:
             print('  -> Not correcting for barycentric velocity.')
             barycentric_velocity = None
-            file[0].header['BARYVEL'] = 'None'
+            file[0].header['BARYVEL'] = 0.0
 
         if optimise_lc_solution:
             print('  -> Optimising wavelength solution based on Laser Comb data where available (and using previous ThXe otherwise)')

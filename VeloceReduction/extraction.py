@@ -293,7 +293,7 @@ def read_in_order_tramlines(use_default = False):
                 tramline_information = np.loadtxt(Path(__file__).resolve().parent / 'tramline_information' / f'tramlines_begin_end_ccd_{ccd}_order_{order}.txt')
             else:
                 try:
-                    tramline_information = np.loadtxt(config.working_directory+'/reduced_data/'+config.date+f'/tramline_information/tramlines_begin_end_ccd_{ccd}_order_{order}.txt')
+                    tramline_information = np.loadtxt(config.working_directory+'/reduced_data/'+config.date+f'/_tramline_information/tramlines_begin_end_ccd_{ccd}_order_{order}.txt')
                 except:
                     tramline_information = np.loadtxt(Path(__file__).resolve().parent / 'tramline_information' / f'tramlines_begin_end_ccd_{ccd}_order_{order}.txt')
             order_tramline_beginning_coefficients['ccd_'+ccd+'_order_'+str(order)] = tramline_information[0,:-1] # neglecting the buffer info in last cell
@@ -409,7 +409,7 @@ def get_tellurics_from_bstar(bstar_information, master_flat, debug=False):
 
     Returns:
         telluric_flux_in_orders (np.array): An array of telluric flux in the orders.
-        vbary_bstar (float): The barycentric velocity correction in km/s for the B-star observation
+        utmjd (float): The modified Julian date of the telluric/BStar observation.
     """
 
     bstar_id, run, time = bstar_information
@@ -425,13 +425,10 @@ def get_tellurics_from_bstar(bstar_information, master_flat, debug=False):
     # Flat-field correct the B-star flux
     bstar_flux_in_orders /= master_flat
 
-    # Calculate the barycentric velocity correction for the B-star observation based on the FITS header metadata
-    vbary_bstar = calculate_barycentric_velocity_correction(metadata)
-    
     # Convert the B-star flux to telluric flux by normalising the B-star flux to unity
     telluric_flux_in_orders = convert_bstar_to_telluric(bstar_flux_in_orders, debug=debug)
 
-    return(telluric_flux_in_orders, vbary_bstar, metadata['UTMJD'])
+    return(telluric_flux_in_orders, metadata['UTMJD'])
     
 
 def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlines_based_on_flat = False, LC = False, Bstar = False, Science = False, ThXe = False, master_darks = None, exposure_time_threshold_darks = 300, use_tinney_ranges = False, debug_tramlines = False, debug_overscan=False):
@@ -563,8 +560,8 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
             # Update tramlines if this was requested
             if update_tramlines_based_on_flat:
                 if ccd == 1:
-                    print('  --> Optimising tramlines based on Flat images (saving at reduced_data/YYMMDD/tramline_information/).')
-                    print('      Check reduced_data/YYMMDD/debug/debug_tramlines_flat.pdf for results.')
+                    print('  --> Optimising tramlines based on Flat images (saving at reduced_data/YYMMDD/_tramline_information/).')
+                    print('      Check reduced_data/YYMMDD/_debug/debug_tramlines_flat.pdf for results.')
                 for order in list(order_beginning_coefficients):
                     if order[4] == str(ccd):
                         optimise_tramline_polynomial(
@@ -586,19 +583,27 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
     
     # Create the debug_tramlines plot if we are debugging or fitting the tramlines
     if debug_tramlines | (update_tramlines_based_on_flat & Flat):
-        f, gs = plt.subplots(1,3,figsize=(12,4))
+        f, gs = plt.subplots(1,3,figsize=(15,4))
         for panel_index in [0,1,2]:
 
             if Science | ThXe:
                 s = gs[panel_index].imshow(np.log10(images['ccd_'+str(panel_index+1)]), vmin=0.1, vmax=np.nanpercentile(np.log10(images['ccd_'+str(panel_index+1)]),95), cmap='Greys')
+                cbar_label = r'$\log_{10}(\mathrm{Counts})$'
             else:
                 if Flat: vmin = 0; vmax = 0.1
                 elif LC: vmin = 1; vmax = 10
                 else: vmin = 1; vmax = 50
                 s = gs[panel_index].imshow(images['ccd_'+str(panel_index+1)], vmin=vmin, vmax=vmax, cmap='Greys')
+                if Flat:
+                    cbar_label = r'Normalised Counts'
+                else:
+                    cbar_label = r'Counts'
 
             gs[panel_index].set_title('CCD '+str(panel_index+1))
-            plt.colorbar(s, ax=gs[panel_index-1])
+            cbar = plt.colorbar(s, ax=gs[panel_index-1],extend='both')
+            cbar.set_label(cbar_label)
+            gs[panel_index].set_xlabel('X Pixel')
+            gs[panel_index].set_ylabel('Y Pixel')
             gs[panel_index].set_xlim(0,np.shape(images['ccd_'+str(panel_index+1)])[1])
             gs[panel_index].set_ylim(np.shape(images['ccd_'+str(panel_index+1)])[0],0)
     
@@ -617,9 +622,15 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
             order_xrange_begin = np.array(polynomial_function(np.arange(np.shape(images['ccd_'+str(ccd)])[0]),*order_ending_coefficients[order])+5,dtype=int)
             order_xrange_end   = np.array(polynomial_function(np.arange(np.shape(images['ccd_'+str(ccd)])[0]),*order_ending_coefficients[order])+17,dtype=int)
 
-        if debug_tramlines:
-            gs[int(ccd)-1].plot(order_xrange_begin,np.arange(len(order_xrange_begin)),c='C0',lw=0.1)
-            gs[int(ccd)-1].plot(order_xrange_end,np.arange(len(order_xrange_begin)),c='C1',lw=0.1)
+        if debug_tramlines | (update_tramlines_based_on_flat & Flat):
+            if order == list(order_beginning_coefficients.keys())[0]:
+                label_left = 'Tramline left edges'
+                label_right = 'Tramline right edges'
+            else:
+                label_left = '_nolegend_'
+                label_right = '_nolegend_'
+            gs[int(ccd)-1].plot(order_xrange_begin,np.arange(len(order_xrange_begin)),c='C0',lw=0.1,label=label_left)
+            gs[int(ccd)-1].plot(order_xrange_end,np.arange(len(order_xrange_begin)),c='C1',lw=0.1,label=label_right)
         
         # Because of the extended overscan region in 4Amplifier readout mode, we have to adjust which region we are using the extract the orders from.
         if readout_mode == '2Amp':
@@ -676,8 +687,8 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
         
         plt.tight_layout()
 
-        Path(config.working_directory+'reduced_data/'+config.date+'/debug').mkdir(parents=True, exist_ok=True)
-        plt.savefig(config.working_directory+'reduced_data/'+config.date+f'/debug/debug_tramlines{type}.pdf',dpi=400,bbox_inches='tight')
+        Path(config.working_directory+'reduced_data/'+config.date+'/_debug').mkdir(parents=True, exist_ok=True)
+        plt.savefig(config.working_directory+'reduced_data/'+config.date+f'/_debug/debug_tramlines{type}.pdf',dpi=200,bbox_inches='tight')
         plt.show()
         plt.close()
         
@@ -1023,17 +1034,20 @@ def optimise_tramline_polynomial(overscan_subtracted_images, order, order_ranges
                     ax2.set_title('x_index: '+str(x_index))
                     ax2.plot(
                         x_pixels_to_be_tested_for_tramline,
-                        x_pixel_values_to_be_tested_for_tramline
+                        x_pixel_values_to_be_tested_for_tramline,
+                        labbel = 'Flat'
                     )
                     ax2.plot(
                         x_pixels_to_be_tested_for_tramline[above_threshold],
                         threshold*np.ones(len(x_pixel_values_to_be_tested_for_tramline[above_threshold])),
-                        c = 'C3'
+                        c = 'C3', label = 'Threshold ('+"{:.1f}".format(threshold)+')'
                     )
+                    ax2.set_xlabel('X Pixel')
+                    ax2.set_ylabel('Counts')
                     ax2.set_ylim(0,1.1*np.max(x_pixel_values_to_be_tested_for_tramline))
                     plt.tight_layout()
                     plt.show()
-                    plt.close()
+                    plt.close(f2)
                 
                 # We expect slightly different widths for each tramlines in the different CCDs
                 if ccd == '3':
@@ -1114,8 +1128,8 @@ def optimise_tramline_polynomial(overscan_subtracted_images, order, order_ranges
         order_beginning_fit = old_order_beginning
         order_ending_fit = old_order_ending
 
-    Path(config.working_directory+'reduced_data/'+config.date+'/tramline_information').mkdir(parents=True, exist_ok=True)
-    np.savetxt(config.working_directory+'reduced_data/'+config.date+f'/tramline_information/tramlines_begin_end_{order}.txt',
+    Path(config.working_directory+'reduced_data/'+config.date+'/_tramline_information').mkdir(parents=True, exist_ok=True)
+    np.savetxt(config.working_directory+'reduced_data/'+config.date+f'/_tramline_information/tramlines_begin_end_{order}.txt',
         np.array([
             ['#c0', 'c1', 'c2', 'c3', 'c4','buffer_pixel'],
             np.concatenate((order_beginning_fit,[buffer[order][0]])),
