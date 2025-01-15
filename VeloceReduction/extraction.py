@@ -1,8 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
-from scipy.signal import medfilt
-from scipy.interpolate import UnivariateSpline
+from scipy.ndimage import median_filter
 from pathlib import Path
 
 from . import config
@@ -294,7 +293,7 @@ def read_in_order_tramlines(use_default = False):
                 tramline_information = np.loadtxt(Path(__file__).resolve().parent / 'tramline_information' / f'tramlines_begin_end_ccd_{ccd}_order_{order}.txt')
             else:
                 try:
-                    tramline_information = np.loadtxt(config.working_directory+'/reduced_data/'+config.date+f'/tramline_information/tramlines_begin_end_ccd_{ccd}_order_{order}.txt')
+                    tramline_information = np.loadtxt(config.working_directory+'/reduced_data/'+config.date+f'/_tramline_information/tramlines_begin_end_ccd_{ccd}_order_{order}.txt')
                 except:
                     tramline_information = np.loadtxt(Path(__file__).resolve().parent / 'tramline_information' / f'tramlines_begin_end_ccd_{ccd}_order_{order}.txt')
             order_tramline_beginning_coefficients['ccd_'+ccd+'_order_'+str(order)] = tramline_information[0,:-1] # neglecting the buffer info in last cell
@@ -337,56 +336,80 @@ def get_master_dark(runs, archival=False):
         images['ccd_'+str(ccd)] = np.array(np.median(images['ccd_'+str(ccd)],axis=0),dtype=float)
     return(images)
 
-def convert_bstar_to_telluric(bstar_flux_in_orders, master_flat, filter_kernel_size=101, debug=False):
+def convert_bstar_to_telluric(bstar_flux_in_orders, filter_kernel_size=51, debug=False):
     """
     Convert B-star flux to telluric flux by normalising the B-star flux to unity
-    using a medfilt and a spline fit.
+    using a smoothed Bstar spectrum (smoothed via median_filter).
 
     Parameters:
         bstar_flux_in_orders (np.array): An array of B-star flux in the orders.
-        master_flat (np.array): The master flat field image.
-        filter_kernel_size (int): The kernel size for the median filter.
+        filter_kernel_size (int): The kernel size for the median filter. 51 default.
         debug (bool): Set to True to display debug plots.
 
     Returns:
         np.array: An array of telluric flux in the orders.
     """
 
+    telluric_flux_in_orders = []
+
     # Calculate the median of the B-star flux in each order
     for order in range(len(bstar_flux_in_orders)):
-        smooth_bstar_flux_in_order = medfilt(bstar_flux_in_orders[order], kernel_size=filter_kernel_size)
 
-        # fit a spline to the smooth flux
-        spline_fit = UnivariateSpline(np.arange(len(smooth_bstar_flux_in_order)), smooth_bstar_flux_in_order, k=3, s=0)
+        smooth_bstar_flux_in_order = median_filter(bstar_flux_in_orders[order], size=filter_kernel_size)
 
-        # Plot the smooth flux and spline fit to it and compare to the original flux
+        bstar_flux_for_tellurics = bstar_flux_in_orders[order] / smooth_bstar_flux_in_order
+        bstar_flux_for_tellurics[np.isnan(bstar_flux_for_tellurics)] = 1.0
+        
+        # Let's make sure we have reasonable telluric features that we can divide with.
+        telluric_flux_in_order = bstar_flux_for_tellurics.clip(min = 0.01, max = 1.0)
+        
+        # cut first and last 100 pixels of telluric (~2.5% of the order each left and right).
+        telluric_flux_in_order[:100] = 1.0
+        telluric_flux_in_order[-100:] = 1.0
+
+        # We do not expect any telluric lines in a lot of orders.
+        if (order < 47) | (order in [51,52,53,54,55,56,60,61]):
+            telluric_flux_in_order = 1.0 * np.ones(len(telluric_flux_in_order))
+        
+        # Specific cuts left and right
+        if order in [47,48,49,50]:
+            telluric_flux_in_order[:200] = 1.0
+        if order in [65,66,67]:
+            telluric_flux_in_order[-200:] = 1.0
+        if order == 107:
+            telluric_flux_in_order[2250:] = 1.0
+
+        # Specific cuts for too strong absorption (50%) where we do not expect it
+        if order <= 82:
+            telluric_flux_in_order[telluric_flux_in_order < 0.5] = 1.0
+
+        telluric_flux_in_orders.append(telluric_flux_in_order)
+
+        # Plot the bstar flux divided by the smooth flux
         if debug:
             plt.figure(figsize=(10,5))
-            plt.plot(bstar_flux_in_orders[order], label = 'B-star flux')
-            plt.plot(smooth_bstar_flux_in_order, label = 'Smooth B-star flux')
-            plt.plot(spline_fit(np.arange(len(smooth_bstar_flux_in_order))), label = 'Spline')
-            plt.plot(master_flat[order] * np.nanpercentile(smooth_bstar_flux_in_order/master_flat[order],99), label = 'Flat')
+            plt.title(order)
+            plt.plot(bstar_flux_for_tellurics, label = 'B-star flux divided by smooth flux', lw = 0.5, c='k')
+            plt.plot(telluric_flux_in_order, label = 'Final telluric flux', lw = 1, c='C0')
             plt.legend(ncol=4)
-            plt.ylim(0, 1.25*np.nanpercentile(smooth_bstar_flux_in_order, 99))
+            plt.ylim(-0.1, 1.5)
             plt.show()
             plt.close()
 
-        # divide the bstar_flux_in_order by the spline fit
-        bstar_flux_in_orders[order] /= spline_fit(np.arange(len(smooth_bstar_flux_in_order)))
+    return(np.array(telluric_flux_in_orders))
 
-    return(bstar_flux_in_orders)
-
-def get_tellurics_from_bstar(bstar_information, master_flat):
+def get_tellurics_from_bstar(bstar_information, master_flat, debug=False):
     """
     Extract telluric orders from a B-star observation.
 
     Parameters:
         bstar_information (list): A list in the format [bstar_id, run, obsering_time]
         master_flat (np.array): The master flat field image
+        debug (bool): Set to True to display debug plots.
 
     Returns:
         telluric_flux_in_orders (np.array): An array of telluric flux in the orders.
-        vbary_bstar (float): The barycentric velocity correction in km/s for the B-star observation
+        utmjd (float): The modified Julian date of the telluric/BStar observation.
     """
 
     bstar_id, run, time = bstar_information
@@ -402,13 +425,10 @@ def get_tellurics_from_bstar(bstar_information, master_flat):
     # Flat-field correct the B-star flux
     bstar_flux_in_orders /= master_flat
 
-    # Calculate the barycentric velocity correction for the B-star observation based on the FITS header metadata
-    vbary_bstar = calculate_barycentric_velocity_correction(metadata)
-    
     # Convert the B-star flux to telluric flux by normalising the B-star flux to unity
-    telluric_flux_in_orders = convert_bstar_to_telluric(bstar_flux_in_orders, master_flat, debug=True)
+    telluric_flux_in_orders = convert_bstar_to_telluric(bstar_flux_in_orders, debug=debug)
 
-    return(telluric_flux_in_orders, vbary_bstar, metadata['UTMJD'])
+    return(telluric_flux_in_orders, metadata['UTMJD'])
     
 
 def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlines_based_on_flat = False, LC = False, Bstar = False, Science = False, ThXe = False, master_darks = None, exposure_time_threshold_darks = 300, use_tinney_ranges = False, debug_tramlines = False, debug_overscan=False):
@@ -540,8 +560,8 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
             # Update tramlines if this was requested
             if update_tramlines_based_on_flat:
                 if ccd == 1:
-                    print('  --> Optimising tramlines based on Flat images (saving at reduced_data/YYMMDD/tramline_information/).')
-                    print('      Check reduced_data/YYMMDD/debug/debug_tramlines_flat.pdf for results.')
+                    print('  --> Optimising tramlines based on Flat images (saving at reduced_data/YYMMDD/_tramline_information/).')
+                    print('      Check reduced_data/YYMMDD/_debug/debug_tramlines_flat.pdf for results.')
                 for order in list(order_beginning_coefficients):
                     if order[4] == str(ccd):
                         optimise_tramline_polynomial(
@@ -563,19 +583,27 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
     
     # Create the debug_tramlines plot if we are debugging or fitting the tramlines
     if debug_tramlines | (update_tramlines_based_on_flat & Flat):
-        f, gs = plt.subplots(1,3,figsize=(12,4))
+        f, gs = plt.subplots(1,3,figsize=(15,4))
         for panel_index in [0,1,2]:
 
             if Science | ThXe:
                 s = gs[panel_index].imshow(np.log10(images['ccd_'+str(panel_index+1)]), vmin=0.1, vmax=np.nanpercentile(np.log10(images['ccd_'+str(panel_index+1)]),95), cmap='Greys')
+                cbar_label = r'$\log_{10}(\mathrm{Counts})$'
             else:
                 if Flat: vmin = 0; vmax = 0.1
                 elif LC: vmin = 1; vmax = 10
                 else: vmin = 1; vmax = 50
                 s = gs[panel_index].imshow(images['ccd_'+str(panel_index+1)], vmin=vmin, vmax=vmax, cmap='Greys')
+                if Flat:
+                    cbar_label = r'Normalised Counts'
+                else:
+                    cbar_label = r'Counts'
 
             gs[panel_index].set_title('CCD '+str(panel_index+1))
-            plt.colorbar(s, ax=gs[panel_index-1])
+            cbar = plt.colorbar(s, ax=gs[panel_index-1],extend='both')
+            cbar.set_label(cbar_label)
+            gs[panel_index].set_xlabel('X Pixel')
+            gs[panel_index].set_ylabel('Y Pixel')
             gs[panel_index].set_xlim(0,np.shape(images['ccd_'+str(panel_index+1)])[1])
             gs[panel_index].set_ylim(np.shape(images['ccd_'+str(panel_index+1)])[0],0)
     
@@ -594,9 +622,15 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
             order_xrange_begin = np.array(polynomial_function(np.arange(np.shape(images['ccd_'+str(ccd)])[0]),*order_ending_coefficients[order])+5,dtype=int)
             order_xrange_end   = np.array(polynomial_function(np.arange(np.shape(images['ccd_'+str(ccd)])[0]),*order_ending_coefficients[order])+17,dtype=int)
 
-        if debug_tramlines:
-            gs[int(ccd)-1].plot(order_xrange_begin,np.arange(len(order_xrange_begin)),c='C0',lw=0.1)
-            gs[int(ccd)-1].plot(order_xrange_end,np.arange(len(order_xrange_begin)),c='C1',lw=0.1)
+        if debug_tramlines | (update_tramlines_based_on_flat & Flat):
+            if order == list(order_beginning_coefficients.keys())[0]:
+                label_left = 'Tramline left edges'
+                label_right = 'Tramline right edges'
+            else:
+                label_left = '_nolegend_'
+                label_right = '_nolegend_'
+            gs[int(ccd)-1].plot(order_xrange_begin,np.arange(len(order_xrange_begin)),c='C0',lw=0.1,label=label_left)
+            gs[int(ccd)-1].plot(order_xrange_end,np.arange(len(order_xrange_begin)),c='C1',lw=0.1,label=label_right)
         
         # Because of the extended overscan region in 4Amplifier readout mode, we have to adjust which region we are using the extract the orders from.
         if readout_mode == '2Amp':
@@ -653,8 +687,8 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
         
         plt.tight_layout()
 
-        Path(config.working_directory+'reduced_data/'+config.date+'/debug').mkdir(parents=True, exist_ok=True)
-        plt.savefig(config.working_directory+'reduced_data/'+config.date+f'/debug/debug_tramlines{type}.pdf',dpi=400,bbox_inches='tight')
+        Path(config.working_directory+'reduced_data/'+config.date+'/_debug').mkdir(parents=True, exist_ok=True)
+        plt.savefig(config.working_directory+'reduced_data/'+config.date+f'/_debug/debug_tramlines{type}.pdf',dpi=200,bbox_inches='tight')
         plt.show()
         plt.close()
         
@@ -1000,17 +1034,20 @@ def optimise_tramline_polynomial(overscan_subtracted_images, order, order_ranges
                     ax2.set_title('x_index: '+str(x_index))
                     ax2.plot(
                         x_pixels_to_be_tested_for_tramline,
-                        x_pixel_values_to_be_tested_for_tramline
+                        x_pixel_values_to_be_tested_for_tramline,
+                        labbel = 'Flat'
                     )
                     ax2.plot(
                         x_pixels_to_be_tested_for_tramline[above_threshold],
                         threshold*np.ones(len(x_pixel_values_to_be_tested_for_tramline[above_threshold])),
-                        c = 'C3'
+                        c = 'C3', label = 'Threshold ('+"{:.1f}".format(threshold)+')'
                     )
+                    ax2.set_xlabel('X Pixel')
+                    ax2.set_ylabel('Counts')
                     ax2.set_ylim(0,1.1*np.max(x_pixel_values_to_be_tested_for_tramline))
                     plt.tight_layout()
                     plt.show()
-                    plt.close()
+                    plt.close(f2)
                 
                 # We expect slightly different widths for each tramlines in the different CCDs
                 if ccd == '3':
@@ -1091,8 +1128,8 @@ def optimise_tramline_polynomial(overscan_subtracted_images, order, order_ranges
         order_beginning_fit = old_order_beginning
         order_ending_fit = old_order_ending
 
-    Path(config.working_directory+'reduced_data/'+config.date+'/tramline_information').mkdir(parents=True, exist_ok=True)
-    np.savetxt(config.working_directory+'reduced_data/'+config.date+f'/tramline_information/tramlines_begin_end_{order}.txt',
+    Path(config.working_directory+'reduced_data/'+config.date+'/_tramline_information').mkdir(parents=True, exist_ok=True)
+    np.savetxt(config.working_directory+'reduced_data/'+config.date+f'/_tramline_information/tramlines_begin_end_{order}.txt',
         np.array([
             ['#c0', 'c1', 'c2', 'c3', 'c4','buffer_pixel'],
             np.concatenate((order_beginning_fit,[buffer[order][0]])),

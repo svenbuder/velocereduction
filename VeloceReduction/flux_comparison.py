@@ -4,7 +4,7 @@ import numpy as np
 from numpy.polynomial.chebyshev import Chebyshev
 from astropy.table import Table
 from scipy.optimize import minimize
-from scipy.signal import medfilt
+from scipy.ndimage import median_filter
 import matplotlib.pyplot as plt
 
 from VeloceReduction.utils import polynomial_function, wavelength_vac_to_air, apply_velocity_shift_to_wavelength_array, degrade_spectral_resolution
@@ -94,7 +94,7 @@ def normalise_veloce_flux_via_smoothed_ratio_to_korg_flux(veloce_wavelength, vel
 
     # Apply a broad median filter to estimate a smoothed ratio
     smooth_wavelength = veloce_wavelength[~absorption_pixels]
-    smooth_flux_ratio = medfilt(flux_ratio[~absorption_pixels], kernel_size=filter_kernel_size)
+    smooth_flux_ratio = median_filter(flux_ratio[~absorption_pixels], size=filter_kernel_size)
 
     # Neglect 1/2 filer sizes left and right for more robust estimate
     smooth_flux_ratio[:filter_kernel_size//2] = np.nan
@@ -185,8 +185,9 @@ def make_veloce_and_korg_spectrum_compatible(wavelength_coefficients,veloce_scie
     veloce_wavelength_vac = polynomial_function(np.arange(4128)-2064, *wavelength_coefficients)*10
 
     # Avoid infinite fluxes in the Veloce spectrum.
-    veloce_wavelength_vac = veloce_wavelength_vac[np.isfinite(veloce_science_flux)]
-    veloce_science_flux = veloce_science_flux[np.isfinite(veloce_science_flux)]
+    veloce_flux_finite_pixels = np.isfinite(veloce_science_flux)
+    veloce_wavelength_vac = veloce_wavelength_vac[veloce_flux_finite_pixels]
+    veloce_science_flux = veloce_science_flux[veloce_flux_finite_pixels]
 
     # Apply the radial velocity and barycentric velocity to the Veloce wavelength.
     veloce_wavelength_vac_rv_shifted = apply_velocity_shift_to_wavelength_array(
@@ -233,13 +234,14 @@ def make_veloce_and_korg_spectrum_compatible(wavelength_coefficients,veloce_scie
                 left = 1.0,
                 right = 1.0
             )
-        else:
-            # In this case we assume that the telluric flux is taken via Veloce itself during the same night
-            # and is already shifted and interpolated onto the science spectrum wavelength grid.
-            telluric_flux_interpolated = telluric_line_fluxes
+            # Multiply the Korg spectrum with the telluric spectrum
+            korg_flux_without_tellurics = korg_flux_interpolated.copy()
+            korg_flux_interpolated *= telluric_flux_interpolated
 
-        # Multiply the Korg spectrum with the telluric spectrum
-        korg_flux_interpolated *= telluric_flux_interpolated
+        else:
+
+            telluric_flux_interpolated = telluric_line_fluxes[veloce_flux_finite_pixels]
+            veloce_science_flux /= telluric_flux_interpolated
 
     veloce_flux_normalised_with_korg_flux = normalise_veloce_flux_via_smoothed_ratio_to_korg_flux(veloce_wavelength_vac_rv_shifted, veloce_science_flux, korg_flux_interpolated, normalisation_buffers, debug=debug)
 
@@ -249,7 +251,7 @@ def make_veloce_and_korg_spectrum_compatible(wavelength_coefficients,veloce_scie
             
         # Show Korg Flux with Tellurics
         if telluric_line_wavelengths is None:
-            label = 'Korg Flux with Veloce Tellurics'
+            label = 'Korg Flux'
         else:
             label = 'Korg Flux with Hinkle Tellurics'
         ax.plot(
@@ -258,19 +260,22 @@ def make_veloce_and_korg_spectrum_compatible(wavelength_coefficients,veloce_scie
             c = 'C1', lw = 0.5, label = label
         )
 
-        # Show Telluric Flux
-        if telluric_line_fluxes is not None:
+        if telluric_line_wavelengths is not None:
             ax.plot(
-                veloce_wavelength_air_rv_shifted,
-                telluric_flux_interpolated,
-                c = 'C2', lw = 0.5, label = 'Telluric Flux'
+                veloce_wavelength_vac_rv_shifted,
+                korg_flux_without_tellurics,
+                c = 'C3', lw = 0.5, label = 'Korg Flux without Tellurics'
             )
 
         # Show Veloce Flux
+        if telluric_line_wavelengths is None:
+            label = 'Normalised Veloce Flux'
+        else:
+            label = 'Normalised Veloce Flux (Telluric Corrected)'
         ax.plot(
             veloce_wavelength_vac_rv_shifted,
             veloce_flux_normalised_with_korg_flux,
-            c = 'C0', lw = 0.5, label = 'Normalised Veloce Flux'
+            c = 'C0', lw = 0.5, label = label
         )
         
         # Residuals
@@ -362,7 +367,7 @@ def fit_wavelength_solution_with_korg_spectrum(order, veloce_fits_file, radial_v
     barycentric_velocity = veloce_fits_file[0].header['BARYVEL']
 
     # If telluric lines have been observed for the given science spectrum via BStars, we will use them.
-    if 'telluric' in veloce_fits_file[order].data.columns.names:
+    if telluric_line_fluxes is None:
         telluric_line_wavelengths = None # They will are already on the same wavelength as the science spectrum
         telluric_line_fluxes = veloce_fits_file[order].data['telluric']
 
@@ -415,7 +420,7 @@ def fit_wavelength_solution_with_korg_spectrum(order, veloce_fits_file, radial_v
         debug=True
     )
 
-def calculate_wavelength_coefficients_with_korg_synthesis(veloce_fits_file, korg_wavelength_vac, korg_flux, order_selection=None, enforce_vrad=None, debug=False):
+def calculate_wavelength_coefficients_with_korg_synthesis(veloce_fits_file, korg_wavelength_vac, korg_flux, order_selection=None, enforce_vrad=None, telluric_hinkle_or_bstar = 'hinkle', debug=False):
     """
     Calculate the wavelength coefficients to match the Veloce spectra to the Korg synthetic spectra.
 
@@ -425,6 +430,7 @@ def calculate_wavelength_coefficients_with_korg_synthesis(veloce_fits_file, korg
         korg_flux (array): flux of the Korg synthetic spectra,
         order_selection (array): array to select orders to be used in the comparison,
         enforce_vrad (float): enforce a radial velocity shift in km/s.
+        telluric_hinkle_or_bstar (str): 'hinkle' or 'bstar' to select the telluric spectrum to be used.
         debug (bool): print/plot debug information.
 
     Returns:
@@ -440,7 +446,7 @@ def calculate_wavelength_coefficients_with_korg_synthesis(veloce_fits_file, korg
 
     # To avoid reading in the archival telluric spectrum for each order, we will do it once here.
     # Unless we use the telluric spectrum observed, then we can simply skip this step.
-    if 'telluric' not in veloce_fits_file[1].data.columns.names:
+    if telluric_hinkle_or_bstar == 'hinkle':
         hinkle_atlas = Table.read(Path(__file__).resolve().parent / 'hinkle_2000_atlas' / 'hinkle_2000_solar_arcturus_telluric_atlas.fits')
         telluric_line_wavelengths = np.array(hinkle_atlas['WAVELENGTH'])
         telluric_line_fluxes = degrade_spectral_resolution(
