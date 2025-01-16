@@ -458,7 +458,7 @@ def calculate_wavelength_coefficients_with_korg_synthesis(veloce_fits_file, korg
         
     if order_selection is not None:
         orders = order_selection
-        print(' --> Calculating coefficients for orders '+','.join(orders))
+        print('  --> Calculating coefficients for orders '+','.join(orders))
     else:
         orders = []
         for ccd in ['1','2','3']:

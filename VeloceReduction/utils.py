@@ -31,12 +31,31 @@ import astroquery
 from astroquery.simbad import Simbad
 Simbad.add_votable_fields('ids')
 Simbad.add_votable_fields('velocity')
-Simbad.add_votable_fields('fe_h')
 Simbad.add_votable_fields('parallax')
-Simbad.add_votable_fields('fluxdata(B)')
-Simbad.add_votable_fields('fluxdata(V)')
-Simbad.add_votable_fields('fluxdata(G)')
-Simbad.add_votable_fields('fluxdata(R)')
+if astroquery.__version__ < '0.4.8':
+    Simbad.add_votable_fields('fe_h')
+    simbad_teff = 'Fe_H_Teff'
+    simbad_logg = 'Fe_H_log_g'
+    simbad_fe_h = 'Fe_H_Fe_H'
+    simbad_fe_h_ref = 'Fe_H_bibcode'
+    Simbad.add_votable_fields('fluxdata(B)'); simbad_b = 'FLUX_B'
+    Simbad.add_votable_fields('fluxdata(V)'); simbad_v = 'FLUX_V'
+    Simbad.add_votable_fields('fluxdata(G)'); simbad_g = 'FLUX_G'
+    Simbad.add_votable_fields('fluxdata(R)'); simbad_r = 'FLUX_R'
+    plx_error = 'PLX_ERROR'
+    rvz_error = 'RVZ_ERROR'
+else:
+    Simbad.add_votable_fields('mesFe_h')
+    simbad_teff = 'mesfe_h.teff'
+    simbad_logg = 'mesfe_h.log_g'
+    simbad_fe_h = 'mesfe_h.fe_h'
+    simbad_fe_h_ref = 'mesfe_h.bibcode'
+    Simbad.add_votable_fields('B'); simbad_b = 'B'
+    Simbad.add_votable_fields('V'); simbad_v = 'V'
+    Simbad.add_votable_fields('G'); simbad_g = 'G'
+    Simbad.add_votable_fields('R'); simbad_r = 'R'
+    plx_error = 'plx_err'
+    rvz_error = 'rvz_err'
 
 def apply_velocity_shift_to_wavelength_array(velocity_in_kms, wavelength_array):
     """
@@ -775,15 +794,6 @@ def update_fits_header_via_crossmatch_with_simbad(fits_header):
             print('  --> '+object_id+' not a valid Simbad entry. Crossmatching via Ra/Dec within 2 arcsec.')
             object_coordinate = SkyCoord(ra = float(ra), dec = float(dec), frame='icrs', unit='deg')
             simbad_match = Simbad.query_region(object_coordinate, radius=2*u.arcsec)
-    
-    # Veloce is meant to observe only down to 12th magnitude.
-    # Let's test if the object is bright enough for Veloce (G < 12 mag or V < 12 mag) and print a warning if not.
-    if 'FLUX_G' in simbad_match.keys():
-        if simbad_match['FLUX_G'] > 12:
-            print('  --> Warnging: Match fainter than G > 12 mag. Right match for a Veloce observations?')
-    elif 'FLUX_V' in simbad_match.keys():
-        if simbad_match['FLUX_V'] > 12:
-            print('  --> Warnging: Match fainter than V > 12 mag. Right match for a Veloce observations?')
 
     # Let's check how many matches we got and return if there are none:
     if len(simbad_match) == 0:
@@ -792,14 +802,24 @@ def update_fits_header_via_crossmatch_with_simbad(fits_header):
     elif len(simbad_match) == 1:
         simbad_match = simbad_match[0]
     else:
-        print('  --> Found more than one entry in Simbar. Using the first match')
+        print('  --> Found more than one entry in Simbad. Using the first match.')
         simbad_match = simbad_match[0]
-    
-    print('astroquery version: ',astroquery.__version__)
-    print('simbad_match.keys()',simbad_match.keys())
+
+    # Veloce is meant to observe only down to 12th magnitude.
+    # Let's test if the object is bright enough for Veloce (G < 12 mag or V < 12 mag) and print a warning if not.
+    if simbad_g in simbad_match.keys():
+        if abs(simbad_match[simbad_g])>=0.0:
+            if simbad_match[simbad_g] > 12:
+                print('  --> Warnging: Match fainter than G > 12 mag. Right match for a Veloce observations?')
+        elif simbad_v in simbad_match.keys():
+            if simbad_match[simbad_v] > 12:
+                print('  --> Warnging: Match fainter than V > 12 mag. Right match for a Veloce observations?')
+    elif simbad_v in simbad_match.keys():
+        if simbad_match[simbad_v] > 12:
+            print('  --> Warnging: Match fainter than V > 12 mag. Right match for a Veloce observations?')
 
     # Let's add some more information from the crossmatches with HIP/2MASS/Gaia DR3 and other literature where available
-    ids = simbad_match['IDS']
+    ids = simbad_match['ids']
     unique_ids = np.array(ids.split("|"))
     match_with_hip_tmass_gaia = []
     
@@ -820,38 +840,43 @@ def update_fits_header_via_crossmatch_with_simbad(fits_header):
 
     # Now let's add some literature information
     # Add literature information on radial velocity
-    if 'RVZ_RADVEL' in simbad_match.keys():
-        fits_header['VRAD_LIT'] = (simbad_match['RVZ_RADVEL'], 'Radial velocity from Simbad')
-    if 'RVZ_ERROR' in simbad_match.keys():
-        fits_header['HIERARCH E_VRAD_LIT'] = (simbad_match['RVZ_ERROR'], 'Radial velocity error from Simbad')
-    if 'RVZ_BIBCODE' in simbad_match.keys():
-        fits_header['VRAD_BIB'] = (simbad_match['RVZ_BIBCODE'], 'Bibcode of Simbad VRAD')
+    if 'rvz_radvel' in simbad_match.keys():
+        fits_header['VRAD_LIT'] = (simbad_match['rvz_radvel'], 'Radial velocity from Simbad')
+    if rvz_error in simbad_match.keys():
+        fits_header['HIERARCH E_VRAD_LIT'] = (simbad_match[rvz_error], 'Radial velocity error from Simbad')
+    if 'rvz_bibcode' in simbad_match.keys():
+        fits_header['VRAD_BIB'] = (simbad_match['rvz_bibcode'], 'Bibcode of Simbad VRAD')
+
     if np.all(['VRAD_LIT' in fits_header.keys(),'E_VRAD_LIT' in fits_header.keys()]):
         print('  --> Found literature VRAD/E_VRAD in Simbad: '+str(fits_header['VRAD_LIT'])+' +/- '+str(fits_header['E_VRAD_LIT'])+' km/s by '+str(fits_header['VRAD_BIB']))
     elif 'VRAD_LIT' in fits_header.keys():
         print('  --> Found literature VRAD in Simbad: '+str(fits_header['VRAD_LIT'])+' km/s by '+str(fits_header['VRAD_BIB']))
 
     # Add literature information on stellar parameters Teff/logg/[Fe/H]
-    if 'Fe_H_Teff' in simbad_match.keys():
-        fits_header['TEFF_LIT'] = (simbad_match['Fe_H_Teff'], 'Effective temperature from Simbad')
-    if 'Fe_H_log_g' in simbad_match.keys():
-        fits_header['LOGG_LIT'] = (simbad_match['Fe_H_log_g'], 'Surface gravity from Simbad')
-    if 'Fe_H_Fe_H' in simbad_match.keys():
-        fits_header['FE_H_LIT'] = (simbad_match['Fe_H_Fe_H'], 'Iron abundance from Simbad')
-    if 'Fe_H_bibcode' in simbad_match.keys():
-        fits_header['TLF_BIB'] = (simbad_match['Fe_H_bibcode'], 'Bibcode of Simbad TEFF/LOGG/FE_H')
+    if simbad_teff in simbad_match.keys():
+        fits_header['TEFF_LIT'] = (simbad_match[simbad_teff], 'Effective temperature from Simbad')
+    if simbad_logg in simbad_match.keys():
+        fits_header['LOGG_LIT'] = (simbad_match[simbad_logg], 'Surface gravity from Simbad')
+    if simbad_fe_h in simbad_match.keys():
+        fits_header['FE_H_LIT'] = (simbad_match[simbad_fe_h], 'Iron abundance from Simbad')
+    if simbad_fe_h_ref in simbad_match.keys():
+        fits_header['TLF_BIB'] = (simbad_match[simbad_fe_h_ref], 'Bibcode of Simbad TEFF/LOGG/FE_H')
+
     if np.all(['TEFF_LIT' in fits_header.keys(),'TEFF_LIT' in fits_header.keys(),'LOGG_LIT' in fits_header.keys(),'FE_H_LIT' in fits_header.keys()]):
         print('  --> Found literature TEFF/LOGG/FE_H in Simbad: '+str(fits_header['TEFF_LIT'])+'/'+str(fits_header['LOGG_LIT'])+'/'+str(fits_header['FE_H_LIT'])+' by '+str(fits_header['TLF_BIB']))
     elif 'FE_H_LIT' in fits_header.keys():
         print('  --> Found literature FE_H in Simbad: '+str(fits_header['FE_H_LIT'])+' by '+str(fits_header['TLF_BIB']))
 
     # Add information on B/V/G/R filters (where available) and parallax
-    for bvgr_filter in ['B','V','G','R']:
-        if abs(simbad_match['FLUX_'+bvgr_filter]) >= 0.0:
-            fits_header[bvgr_filter+'MAG'] = (simbad_match['FLUX_'+bvgr_filter], 'Mag in '+bvgr_filter+' ('+simbad_match['FLUX_BIBCODE_'+bvgr_filter]+')')
+    for bvgr_filter in [simbad_b,simbad_v,simbad_g,simbad_r]:
+        if abs(simbad_match[bvgr_filter]) >= 0.0:
+            try:
+                fits_header[bvgr_filter+'MAG'] = (simbad_match[bvgr_filter], 'Mag in '+bvgr_filter+' ('+simbad_match['FLUX_BIBCODE_'+bvgr_filter]+')')
+            except:
+                fits_header[bvgr_filter+'MAG'] = (simbad_match[bvgr_filter], 'Mag in '+bvgr_filter)
 
-    fits_header['PLX'] = (simbad_match['PLX_VALUE'], 'Parallax in mas ('+simbad_match['PLX_BIBCODE']+')')
-    fits_header['E_PLX'] = (simbad_match['PLX_ERROR'], 'Parallax error in mas ('+simbad_match['PLX_BIBCODE']+')')
+    fits_header['PLX'] = (simbad_match['plx_value'], 'Parallax in mas ('+simbad_match['plx_bibcode']+')')
+    fits_header['E_PLX'] = (simbad_match[plx_error], 'Parallax error in mas ('+simbad_match['plx_bibcode']+')')
 
     return(fits_header)
 
@@ -872,23 +897,23 @@ def find_best_radial_velocity_from_fits_header(fits_header):
         print('  --> Found VRAD from Veloce measurements: '+str(fits_header['VRAD'])+' +/- '+str(fits_header['E_VRAD'])+' km/s')
         if fits_header['E_VRAD'] < fits_header['E_VRAD_LIT']:
             vrad_for_calibration = fits_header['VRAD']
-            print('  --> Using VRAD from Veloce measurements, as it has a smaller uncertainty.')
+            print('  --> Using VRAD from Veloce measurements because it has a smaller uncertainty.')
         else:
             vrad_for_calibration = fits_header['VRAD_LIT']
-            print('  --> Using literature VRAD from Simbad, as it has a smaller uncertainty.')
+            print('  --> Using literature VRAD from Simbad because it has a smaller uncertainty.')
     elif 'E_VRAD' in fits_header:
         if 'VRAD_LIT' in fits_header:
             print('  --> Found literature VRAD in Simbad: '+str(fits_header['VRAD_LIT'])+' by '+str(fits_header['VRAD_BIB'])+' but without uncertainty.')
         print('  --> Found VRAD from Veloce measurements: '+str(fits_header['VRAD'])+' +/- '+str(fits_header['E_VRAD'])+' km/s')
         vrad_for_calibration = fits_header['VRAD']
-        print('  --> Using VRAD from Veloce measurements, as no literature VRAD with uncertainty is available.')
+        print('  --> Using VRAD from Veloce measurements because no literature VRAD with uncertainty is available.')
     elif 'VRAD_LIT' in fits_header:
         if 'E_VRAD_LIT' in fits_header:
             print('  --> Found literature VRAD in Simbad: '+str(fits_header['VRAD_LIT'])+' +/- '+str(fits_header['E_VRAD_LIT'])+' km/s by '+str(fits_header['VRAD_BIB']))
         else:
             print('  --> Found literature VRAD in Simbad: '+str(fits_header['VRAD_LIT'])+' by '+str(fits_header['VRAD_BIB'])+' but without uncertainty.')
         vrad_for_calibration = fits_header['VRAD_LIT']
-        print('  --> Using literature VRAD from Simbad, as no Veloce VRAD is available.')
+        print('  --> Using literature VRAD from Simbad because no Veloce VRAD is available.')
     else:
         raise ValueError('No valid option for VRAD avaialble. Aborting calibration via synthesis.')
 

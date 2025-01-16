@@ -10,7 +10,7 @@ setup(
         'astropy',
         'scipy',
         'matplotlib',
-        'astroquery',
+        'astroquery>=0.4.7',
     ],
     scripts=['./VeloceReduction_tutorial.py'],
     # Metadata

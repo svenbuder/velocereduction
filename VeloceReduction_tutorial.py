@@ -76,7 +76,6 @@ def get_script_input():
         # 4Amp example
 #         jupyter_date = "231121"
 
-
 #         jupyter_date = "240201"
 #         jupyter_date = "240321"
 #         jupyter_date = "240921"
@@ -284,7 +283,7 @@ for science_object in list(science_runs.keys()):
         science_object,
         optimise_lc_solution=False,
         correct_barycentric_velocity=True,
-        create_overview_pdf=True
+        create_overview_pdf=False
     )
     print('  -> Succesfully calibrated wavelength with diagnostic plots for '+science_object+'\n')
 #     except:
