@@ -1035,7 +1035,7 @@ def optimise_tramline_polynomial(overscan_subtracted_images, order, order_ranges
                     ax2.plot(
                         x_pixels_to_be_tested_for_tramline,
                         x_pixel_values_to_be_tested_for_tramline,
-                        labbel = 'Flat'
+                        label = 'Flat'
                     )
                     ax2.plot(
                         x_pixels_to_be_tested_for_tramline[above_threshold],

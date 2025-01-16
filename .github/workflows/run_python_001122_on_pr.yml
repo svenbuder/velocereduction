@@ -20,7 +20,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install numpy scipy astropy matplotlib
+          pip install numpy scipy astropy matplotlib astroquery
 
       - name: Check free memory
         run: free -m | tee memory_usage.txt
