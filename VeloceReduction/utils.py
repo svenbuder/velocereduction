@@ -27,6 +27,7 @@ import astropy.units as u
 SSO = EarthLocation.of_site('Siding Spring Observatory')
 
 # Astroquery package
+import astroquery
 from astroquery.simbad import Simbad
 Simbad.add_votable_fields('ids')
 Simbad.add_votable_fields('velocity')
@@ -794,6 +795,9 @@ def update_fits_header_via_crossmatch_with_simbad(fits_header):
         print('  --> Found more than one entry in Simbar. Using the first match')
         simbad_match = simbad_match[0]
     
+    print('astroquery version: ',astroquery.__version__)
+    print('simbad_match.keys()',simbad_match.keys())
+
     # Let's add some more information from the crossmatches with HIP/2MASS/Gaia DR3 and other literature where available
     ids = simbad_match['IDS']
     unique_ids = np.array(ids.split("|"))
