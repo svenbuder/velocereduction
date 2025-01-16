@@ -133,7 +133,7 @@ master_flat, _ = VR.extraction.extract_orders(
     update_tramlines_based_on_flat = True, # Would update and overwrite
     # ./VeloceReduction/tramline_information/tramline_begin_end_ccd_*_oder_*.txt
     debug_overscan = False,
-    debug_tramlines = True # Would create a tramlines trace PDF under
+    debug_tramlines = False # Would create a tramlines trace PDF under
     # reduced_data/YYMMDD/debug/debug_tramlines_flat.pdf
 )
 
