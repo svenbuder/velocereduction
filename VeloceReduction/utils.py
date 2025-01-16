@@ -6,22 +6,36 @@ import subprocess
 import platform
 import os
 
-
+# Numpy package
 import numpy as np
 
+# Scipy package
 from scipy.special import wofz
 from scipy.interpolate import interp1d
 from scipy.ndimage import gaussian_filter1d
 from scipy.optimize import curve_fit
 
+# Matplotlib package
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 
+# Astropy package
 from astropy.io import fits
 from astropy.time import Time
 from astropy.coordinates import SkyCoord, EarthLocation
 import astropy.units as u
 SSO = EarthLocation.of_site('Siding Spring Observatory')
+
+# Astroquery package
+from astroquery.simbad import Simbad
+Simbad.add_votable_fields('ids')
+Simbad.add_votable_fields('velocity')
+Simbad.add_votable_fields('fe_h')
+Simbad.add_votable_fields('parallax')
+Simbad.add_votable_fields('fluxdata(B)')
+Simbad.add_votable_fields('fluxdata(V)')
+Simbad.add_votable_fields('fluxdata(G)')
+Simbad.add_votable_fields('fluxdata(R)')
 
 def apply_velocity_shift_to_wavelength_array(velocity_in_kms, wavelength_array):
     """
@@ -720,3 +734,241 @@ def degrade_spectral_resolution(wavelength, flux, original_resolution, target_re
     degraded_flux = gaussian_filter1d(flux, mean_sigma)
 
     return(degraded_flux)
+
+def update_fits_header_via_crossmatch_with_simbad(fits_header):
+    """
+    Update the FITS header by crossmatching the object ID with Simbad and adding relevant information.
+
+    Parameters:
+        fits_header (astropy.io.fits.header.Header): The FITS header to be updated. It should contain the following keys:
+            - 'OBJECT': The name of the observed object.
+            - 'MEANRA': The mean right ascension of the observation.
+            - 'MEANDEC': The mean declination of the observation.
+
+    Returns:
+        astropy.io.fits.header.Header: The updated FITS header with additional information from the Simbad crossmatch.
+    """
+
+    # Let's get the most important info from the existing fits_header
+    object_id = fits_header['OBJECT']
+    ra        = fits_header['MEANRA']
+    dec       = fits_header['MEANDEC']
+
+    # Let's identify what catalogue the object_id is from likely
+    # We test for HIP and Gaia DR3, otherwise we crossmatch via RA/Dec.
+    if object_id[:3] == 'HIP':
+        print('\n  --> Identified '+object_id+' as a HIP catalogue entry. Crossmatching accordingly.')
+        simbad_match = Simbad.query_object(object_id)        
+    elif object_id.isdigit() and len(object_id) > 10:
+        print('\n  --> Identified '+object_id+' as a likely Gaia DR3 source_id. Crossmatching accordingly.')
+        simbad_match = Simbad.query_object('Gaia DR3 '+object_id)
+    elif '_' in object_id:
+        print('\n  --> '+object_id+' looks like a non-catalogue entry. Crossmatching via Ra/Dec within 2 arcsec.')
+        object_coordinate = SkyCoord(ra = float(ra), dec = float(dec), frame='icrs', unit='deg')
+        simbad_match = Simbad.query_region(object_coordinate, radius=2*u.arcsec)
+    else:
+        print('\n  --> '+object_id+' does not look like either Gaia DR3 or HIP entry. Crossmatching with Simbad first and otherwise via Ra/Dec.')
+        try:
+            simbad_match = Simbad.query_object(object_id)
+        except:
+            print('  --> '+object_id+' not a valid Simbad entry. Crossmatching via Ra/Dec within 2 arcsec.')
+            object_coordinate = SkyCoord(ra = float(ra), dec = float(dec), frame='icrs', unit='deg')
+            simbad_match = Simbad.query_region(object_coordinate, radius=2*u.arcsec)
+    
+    # Veloce is meant to observe only down to 12th magnitude.
+    # Let's test if the object is bright enough for Veloce (G < 12 mag or V < 12 mag) and print a warning if not.
+    if 'FLUX_G' in simbad_match.keys():
+        if simbad_match['FLUX_G'] > 12:
+            print('  --> Warnging: Match fainter than G > 12 mag. Right match for a Veloce observations?')
+    elif 'FLUX_V' in simbad_match.keys():
+        if simbad_match['FLUX_V'] > 12:
+            print('  --> Warnging: Match fainter than V > 12 mag. Right match for a Veloce observations?')
+
+    # Let's check how many matches we got and return if there are none:
+    if len(simbad_match) == 0:
+        print('  --> Did not find a match in Simbad.')
+        return(fits_header)
+    elif len(simbad_match) == 1:
+        simbad_match = simbad_match[0]
+    else:
+        print('  --> Found more than one entry in Simbar. Using the first match')
+        simbad_match = simbad_match[0]
+    
+    # Let's add some more information from the crossmatches with HIP/2MASS/Gaia DR3 and other literature where available
+    ids = simbad_match['IDS']
+    unique_ids = np.array(ids.split("|"))
+    match_with_hip_tmass_gaia = []
+    
+    # Let's check if the star is in HIP, 2MASS, and Gaia DR3 according to Simbad
+    if 'HIP ' in ids:
+        hip = unique_ids[[x[:4] == 'HIP ' for x in unique_ids]][0]
+        match_with_hip_tmass_gaia.append(hip)
+        fits_header['HIP_ID'] = (int(hip[4:]), 'Hipparcos Catalogue Identifier')
+    if '2MASS ' in ids:
+        tmass = unique_ids[[x[:6] == '2MASS ' for x in unique_ids]][0]
+        match_with_hip_tmass_gaia.append(tmass)
+        fits_header['TMASS_ID'] = (tmass[7:], '2MASS catalogue identifier (2MASS J removed)')
+    if 'Gaia DR3 ' in ids:
+        source_id = unique_ids[[x[:9] == 'Gaia DR3 ' for x in unique_ids]][0]
+        match_with_hip_tmass_gaia.append(source_id)
+        fits_header['SOURCE_ID'] = (int(source_id[9:]), 'Gaia DR3 source_id (Gaia DR3 removed)')
+    print('  --> Matches in HIP/2MASS/Gaia DR3: '+', '.join(match_with_hip_tmass_gaia))
+
+    # Now let's add some literature information
+    # Add literature information on radial velocity
+    if 'RVZ_RADVEL' in simbad_match.keys():
+        fits_header['VRAD_LIT'] = (simbad_match['RVZ_RADVEL'], 'Radial velocity from Simbad')
+    if 'RVZ_ERROR' in simbad_match.keys():
+        fits_header['HIERARCH E_VRAD_LIT'] = (simbad_match['RVZ_ERROR'], 'Radial velocity error from Simbad')
+    if 'RVZ_BIBCODE' in simbad_match.keys():
+        fits_header['VRAD_BIB'] = (simbad_match['RVZ_BIBCODE'], 'Bibcode of Simbad VRAD')
+    if np.all(['VRAD_LIT' in fits_header.keys(),'E_VRAD_LIT' in fits_header.keys()]):
+        print('  --> Found literature VRAD/E_VRAD in Simbad: '+str(fits_header['VRAD_LIT'])+' +/- '+str(fits_header['E_VRAD_LIT'])+' km/s by '+str(fits_header['VRAD_BIB']))
+    elif 'VRAD_LIT' in fits_header.keys():
+        print('  --> Found literature VRAD in Simbad: '+str(fits_header['VRAD_LIT'])+' km/s by '+str(fits_header['VRAD_BIB']))
+
+    # Add literature information on stellar parameters Teff/logg/[Fe/H]
+    if 'Fe_H_Teff' in simbad_match.keys():
+        fits_header['TEFF_LIT'] = (simbad_match['Fe_H_Teff'], 'Effective temperature from Simbad')
+    if 'Fe_H_log_g' in simbad_match.keys():
+        fits_header['LOGG_LIT'] = (simbad_match['Fe_H_log_g'], 'Surface gravity from Simbad')
+    if 'Fe_H_Fe_H' in simbad_match.keys():
+        fits_header['FE_H_LIT'] = (simbad_match['Fe_H_Fe_H'], 'Iron abundance from Simbad')
+    if 'Fe_H_bibcode' in simbad_match.keys():
+        fits_header['TLF_BIB'] = (simbad_match['Fe_H_bibcode'], 'Bibcode of Simbad TEFF/LOGG/FE_H')
+    if np.all(['TEFF_LIT' in fits_header.keys(),'TEFF_LIT' in fits_header.keys(),'LOGG_LIT' in fits_header.keys(),'FE_H_LIT' in fits_header.keys()]):
+        print('  --> Found literature TEFF/LOGG/FE_H in Simbad: '+str(fits_header['TEFF_LIT'])+'/'+str(fits_header['LOGG_LIT'])+'/'+str(fits_header['FE_H_LIT'])+' by '+str(fits_header['TLF_BIB']))
+    elif 'FE_H_LIT' in fits_header.keys():
+        print('  --> Found literature FE_H in Simbad: '+str(fits_header['FE_H_LIT'])+' by '+str(fits_header['TLF_BIB']))
+
+    # Add information on B/V/G/R filters (where available) and parallax
+    for bvgr_filter in ['B','V','G','R']:
+        if abs(simbad_match['FLUX_'+bvgr_filter]) >= 0.0:
+            fits_header[bvgr_filter+'MAG'] = (simbad_match['FLUX_'+bvgr_filter], 'Mag in '+bvgr_filter+' ('+simbad_match['FLUX_BIBCODE_'+bvgr_filter]+')')
+
+    fits_header['PLX'] = (simbad_match['PLX_VALUE'], 'Parallax in mas ('+simbad_match['PLX_BIBCODE']+')')
+    fits_header['E_PLX'] = (simbad_match['PLX_ERROR'], 'Parallax error in mas ('+simbad_match['PLX_BIBCODE']+')')
+
+    return(fits_header)
+
+def find_best_radial_velocity_from_fits_header(fits_header):
+    """
+    Find the best radial velocity measurement from literature and Veloce measurements.
+
+    Parameters:
+        fits_header (astropy.io.fits.header.Header): The FITS header of the 0th extension of Veloce spectra containing the radial velocity information.
+
+    Returns:
+        float: The best radial velocity measurement for calibration.
+    """
+
+    # Check which VRAD measurement has a smaller uncertainty and use that one
+    if 'E_VRAD' in fits_header and 'E_VRAD_LIT' in fits_header:
+        print('  --> Found literature VRAD in Simbad: '+str(fits_header['VRAD_LIT'])+' +/- '+str(fits_header['E_VRAD_LIT'])+' km/s by '+str(fits_header['VRAD_BIB']))
+        print('  --> Found VRAD from Veloce measurements: '+str(fits_header['VRAD'])+' +/- '+str(fits_header['E_VRAD'])+' km/s')
+        if fits_header['E_VRAD'] < fits_header['E_VRAD_LIT']:
+            vrad_for_calibration = fits_header['VRAD']
+            print('  --> Using VRAD from Veloce measurements, as it has a smaller uncertainty.')
+        else:
+            vrad_for_calibration = fits_header['VRAD_LIT']
+            print('  --> Using literature VRAD from Simbad, as it has a smaller uncertainty.')
+    elif 'E_VRAD' in fits_header:
+        if 'VRAD_LIT' in fits_header:
+            print('  --> Found literature VRAD in Simbad: '+str(fits_header['VRAD_LIT'])+' by '+str(fits_header['VRAD_BIB'])+' but without uncertainty.')
+        print('  --> Found VRAD from Veloce measurements: '+str(fits_header['VRAD'])+' +/- '+str(fits_header['E_VRAD'])+' km/s')
+        vrad_for_calibration = fits_header['VRAD']
+        print('  --> Using VRAD from Veloce measurements, as no literature VRAD with uncertainty is available.')
+    elif 'VRAD_LIT' in fits_header:
+        if 'E_VRAD_LIT' in fits_header:
+            print('  --> Found literature VRAD in Simbad: '+str(fits_header['VRAD_LIT'])+' +/- '+str(fits_header['E_VRAD_LIT'])+' km/s by '+str(fits_header['VRAD_BIB']))
+        else:
+            print('  --> Found literature VRAD in Simbad: '+str(fits_header['VRAD_LIT'])+' by '+str(fits_header['VRAD_BIB'])+' but without uncertainty.')
+        vrad_for_calibration = fits_header['VRAD_LIT']
+        print('  --> Using literature VRAD from Simbad, as no Veloce VRAD is available.')
+    else:
+        raise ValueError('No valid option for VRAD avaialble. Aborting calibration via synthesis.')
+
+    return(vrad_for_calibration)
+
+def find_closest_korg_spectrum(available_korg_spectra,fits_header):
+    """
+    Find the closest Korg spectrum based on the object's properties and literature values.
+
+    Parameters:
+        available_korg_spectra (dict): A dictionary containing the available Korg spectra with their names as keys.
+        fits_header (astropy.io.fits.header.Header): The FITS header of the 0th extension of Veloce spectra containing the object information.
+
+    Returns:
+        str: The name of the closest Korg spectrum to be used for calibration.
+    """
+
+    print('  -> Available Korg Spectra: '+', '.join(list(available_korg_spectra.keys())[2:]))
+
+    # If the star is radial velocity standard 18 Sco, let's use the 18 Sco spectrum.
+    if fits_header['OBJECT'] == 'HIP79672':
+        closest_korg_spectrum = '18sco'
+        print('  --> Object is 18Sco. Using 18Sco spectrum.')
+    # Let's check if we have a literature TEFF/LOGG/FE_H available
+    elif 'TEFF_LIT' in fits_header.keys() and 'LOGG_LIT' in fits_header.keys() and 'FE_H_LIT' in fits_header.keys():
+        print('  --> Literature values for TEFF/LOGG/FE_H are: '+str(fits_header['TEFF_LIT'])+'/'+str(fits_header['LOGG_LIT'])+'/'+str(fits_header['FE_H_LIT']))
+        # If the star is a giant with TEFF < 5000 and LOGG < 3.5, use 'arcturus'
+        if fits_header['TEFF_LIT'] < 5000 and fits_header['LOGG_LIT'] < 3.5:
+            closest_korg_spectrum = 'arcturus'
+            print('  --> Object is a giant. Using Arcturus spectrum.')
+        elif fits_header['TEFF_LIT'] < 5000 and fits_header['LOGG_LIT'] >= 3.5:
+            closest_korg_spectrum = '61cyga'
+            print('  --> Object is a cool dwarf. Using 61 Cyg A spectrum.')
+        elif fits_header['FE_H_LIT'] < -0.25:
+            closest_korg_spectrum = 'hd22879'
+            print('  --> Object is metal-poor dwarf. Using HD22879 spectrum.')
+        else:
+            print('  --> Object is a dwarf. Using Sun spectrum.')
+
+    # Let's use the Sun, if there is no information on TEFF/LOGG/FE_H available.
+    elif 'FE_H_LIT' in fits_header.keys():
+        if fits_header['FE_H_LIT'] < -0.25:
+            closest_korg_spectrum = 'hd22879'
+            print('  --> Object is metal-poor. Using HD22879 spectrum.')
+        else:
+            closest_korg_spectrum = 'sun'
+            print('  --> Object has solar [Fe/H]. Using Sun spectrum.')
+
+    # If we have no stellar parameters, let's use the absolute magnitude.
+    elif 'PLX' in fits_header.keys():
+        if fits_header['PLX'] > 0:
+            if 'G' in fits_header.keys():
+                absolute_mag = fits_header['G'] + 5 * np.log10(fits_header['PLX']/10)
+                print('  --> Object has no stellar parameters measured, but absolute M_G is '+"{:.1f}".format(absolute_mag))
+            elif 'V' in fits_header.keys():
+                absolute_mag = fits_header['V'] + 5 * np.log10(fits_header['PLX']/10)
+                print('  --> Object has no stellar parameters measured, but absolute M_V is '+"{:.1f}".format(absolute_mag))
+            else:
+                print('  --> Object has no stellar parameters measured, nor absolute magnitude (although parallax available). Using Sun spectrum by default.')
+                closest_korg_spectrum = 'sun'
+                return(closest_korg_spectrum)
+
+            # Let's try to estimate a color. Assume color = 0.5 if none available
+            if 'B' in fits_header.keys() and 'R' in fits_header.keys():
+                color = fits_header['B'] - fits_header['R']
+            elif 'V' in fits_header.keys() and 'R' in fits_header.keys():
+                color = fits_header['V'] - fits_header['R']
+            else:
+                color = 0.5
+            
+            if absolute_mag < 8 and color > 1:
+                closest_korg_spectrum = 'arcturus'
+                print('  --> Object is likely giant based on magnitude (< 8 mag) and color  (> 1 mag). Using Arcturus spectrum.')
+            elif absolute_mag >= 8 and color > 1:
+                closest_korg_spectrum = '61cyga'
+                print('  --> Object is likely cool dwarf based on magnitude (> 8 mag) and color (> 1 mag). Using 61 Cyg A spectrum.')
+            else:
+                closest_korg_spectrum = 'sun'
+                print('  --> Object is likely dwarf based on color. Using Sun spectrum.')
+        else:
+            closest_korg_spectrum = 'sun'
+            print('  --> Object has no stellar parameters measured, nor absolute magnitude (parallax measurement is negative). Using Sun spectrum by default.')
+    else:
+        closest_korg_spectrum = 'sun'
+        print('  --> No TEFF/LOGG/FE_H nor absolute magnitude values available. Using Sun by default.')
+
+    return(closest_korg_spectrum)

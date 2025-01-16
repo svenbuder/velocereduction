@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 
 from VeloceReduction.utils import polynomial_function, wavelength_vac_to_air, apply_velocity_shift_to_wavelength_array, degrade_spectral_resolution
 
-def read_korg_syntheses():
+def read_available_korg_syntheses():
     """
     Read synthetic spectra synthesised with the synthesis tool Korg (https://github.com/ajwheeler/Korg.jl).
     The code is run in julia and we thus use spectra precomputed and provided as part of this repository.
@@ -420,7 +420,7 @@ def fit_wavelength_solution_with_korg_spectrum(order, veloce_fits_file, radial_v
         debug=True
     )
 
-def calculate_wavelength_coefficients_with_korg_synthesis(veloce_fits_file, korg_wavelength_vac, korg_flux, order_selection=None, enforce_vrad=None, telluric_hinkle_or_bstar = 'hinkle', debug=False):
+def calculate_wavelength_coefficients_with_korg_synthesis(veloce_fits_file, korg_wavelength_vac, korg_flux, vrad_for_calibration, order_selection=None, enforce_vrad=None, telluric_hinkle_or_bstar = 'hinkle', debug=False):
     """
     Calculate the wavelength coefficients to match the Veloce spectra to the Korg synthetic spectra.
 
@@ -428,6 +428,7 @@ def calculate_wavelength_coefficients_with_korg_synthesis(veloce_fits_file, korg
         veloce_fits_file (str): path to the Veloce spectrum to be compared,
         korg_wavelength_vac (array): vacuum wavelengths of the Korg synthetic spectra,
         korg_flux (array): flux of the Korg synthetic spectra,
+        vrad_for_calibration (float): radial velocity in km/s to be used for the calibration,
         order_selection (array): array to select orders to be used in the comparison,
         enforce_vrad (float): enforce a radial velocity shift in km/s.
         telluric_hinkle_or_bstar (str): 'hinkle' or 'bstar' to select the telluric spectrum to be used.
@@ -437,12 +438,8 @@ def calculate_wavelength_coefficients_with_korg_synthesis(veloce_fits_file, korg
         wavelength_coefficients (array): coefficients to apply to the wavelength solution of the Veloce spectrum.
     """
 
-    if enforce_vrad is not None:
-        radial_velocity = enforce_vrad
-        print(f'Enforcing a radial velocity shift of {radial_velocity} km/s.')
-    else:
-        radial_velocity = veloce_fits_file[0].header['VRAD']
-        print(f'Enforcing a radial velocity shift of {radial_velocity} km/s.')
+
+    print(f'\n  --> Starting wavelength with Korg synthesis and radial velocity shift of {vrad_for_calibration} km/s.')
 
     # To avoid reading in the archival telluric spectrum for each order, we will do it once here.
     # Unless we use the telluric spectrum observed, then we can simply skip this step.
@@ -461,7 +458,7 @@ def calculate_wavelength_coefficients_with_korg_synthesis(veloce_fits_file, korg
         
     if order_selection is not None:
         orders = order_selection
-        print('Calculating coefficients for orders '+','.join(orders))
+        print(' --> Calculating coefficients for orders '+','.join(orders))
     else:
         orders = []
         for ccd in ['1','2','3']:
@@ -469,11 +466,11 @@ def calculate_wavelength_coefficients_with_korg_synthesis(veloce_fits_file, korg
             if ccd == '2': orders.append(['ccd_2_order_'+str(x) for x in np.arange(140, 103-1, -1)])
             if ccd == '3': orders.append(['ccd_3_order_'+str(x) for x in np.arange(104,  65-1, -1)])
         orders = np.concatenate((orders))
-        print('Calculating coefficients for all orders (138-167 for CCD1, 103-140 for CCD2, and 65-104 for CCD3).')
+        print('  --> Calculating coefficients for all orders (138-167 for CCD1, 103-140 for CCD2, and 65-104 for CCD3).')
 
     # Read the dictionary of left and right buffers that will be used when calculating the normalisation function between Veloce and Korg spectrum.
     normalisation_buffers = read_korg_normalisation_buffers()
 
     # Loop over all orders and fit the wavelength solution to the Korg synthetic spectrum.
     for order in orders:
-        fit_wavelength_solution_with_korg_spectrum(order, veloce_fits_file, radial_velocity, korg_wavelength_vac, korg_flux, normalisation_buffers[order], telluric_line_wavelengths, telluric_line_fluxes, debug=debug)
+        fit_wavelength_solution_with_korg_spectrum(order, veloce_fits_file, vrad_for_calibration, korg_wavelength_vac, korg_flux, normalisation_buffers[order], telluric_line_wavelengths, telluric_line_fluxes, debug=debug)
