@@ -76,7 +76,6 @@ def get_script_input():
         # 4Amp example
 #         jupyter_date = "231121"
 
-
 #         jupyter_date = "240201"
 #         jupyter_date = "240321"
 #         jupyter_date = "240921"
@@ -124,7 +123,7 @@ calibration_runs, science_runs = VR.utils.identify_calibration_and_science_runs(
 
 
 # Extract Master Flat
-print('Extracting Master Flat')
+print('\nExtracting Master Flat')
 master_flat, _ = VR.extraction.extract_orders(
     ccd1_runs = calibration_runs['Flat_60.0'],
     ccd2_runs = calibration_runs['Flat_1.0'],
@@ -138,7 +137,7 @@ master_flat, _ = VR.extraction.extract_orders(
 )
 
 # Extract Master ThXe
-print('Extracting Master ThXe')
+print('\nExtracting Master ThXe')
 master_thxe, _ = VR.extraction.extract_orders(
     ccd1_runs = calibration_runs['FibTh_180.0'],
     ccd2_runs = calibration_runs['FibTh_60.0'],
@@ -149,7 +148,7 @@ master_thxe, _ = VR.extraction.extract_orders(
 )
 
 # Extract Master LC
-print('Extracting Master LC')
+print('\nExtracting Master LC')
 master_lc, _ = VR.extraction.extract_orders(
     ccd1_runs = calibration_runs['SimLC'],
     ccd2_runs = calibration_runs['SimLC'],
@@ -162,18 +161,18 @@ master_lc, _ = VR.extraction.extract_orders(
 # Extract Darks
 master_darks = dict()
 if len(calibration_runs['Darks']) > 0:
-    print('Extracting Darks')
+    print('\nExtracting Darks')
     for dark_exposure in calibration_runs['Darks'].keys():
         print('  --> '+str(dark_exposure)+': '+','.join(calibration_runs['Darks'][dark_exposure]))
         master_darks[dark_exposure] = VR.extraction.get_master_dark(calibration_runs['Darks'][dark_exposure])
 else:
-    print('No Dark exposure found for '+config.date+'. Using Archvial exposure from 001122 (2Amp.)')
+    print('\nNo Dark exposure found for '+config.date+'. Using Archvial exposure from 001122 (2Amp.)')
     master_darks['1800.0'] = VR.extraction.get_master_dark(calibration_runs['Darks'], archival=True)
 
 # Extract BStars -> Telluric lines
 master_bstars = dict()
 if len(calibration_runs['Bstar']) > 0:
-    print('Extracting Bstar-Tellurics')
+    print('\nExtracting Bstar-Tellurics')
     for bstar_exposure in calibration_runs['Bstar'].keys():
         print('  --> '+str(bstar_exposure)+': '+', '.join(calibration_runs['Bstar'][bstar_exposure]))
         telluric_flux, telluric_mjd = VR.extraction.get_tellurics_from_bstar(
@@ -187,86 +186,90 @@ if len(calibration_runs['Bstar']) > 0:
 
 # Extract Science Objects and save them into FITS files under reduced_data/
 for science_object in list(science_runs.keys()):
-    print('Extracting '+science_object)
-    try:
-        science, science_noise, science_header = VR.extraction.extract_orders(
-            ccd1_runs = science_runs[science_object],
-            ccd2_runs = science_runs[science_object],
-            ccd3_runs = science_runs[science_object],
-            Science=True,
-            master_darks = master_darks, # These are needed to subtract the dark current
-            debug_tramlines = True, # Would create a tramlines trace PDF under
-            # reduced_data/YYMMDD/debug/debug_tramlines_{metadata['OBJECT']}.pdf
-            debug_overscan=False
-        )
+    print('\nExtracting '+science_object)
+#     try:
+    science, science_noise, science_header = VR.extraction.extract_orders(
+        ccd1_runs = science_runs[science_object],
+        ccd2_runs = science_runs[science_object],
+        ccd3_runs = science_runs[science_object],
+        Science=True,
+        master_darks = master_darks, # These are needed to subtract the dark current
+        debug_tramlines = True, # Would create a tramlines trace PDF under
+        # reduced_data/YYMMDD/debug/debug_tramlines_{metadata['OBJECT']}.pdf
+        debug_overscan=False
+    )
 
-        # Find the closest BStar calibration
-        if len(master_bstars) > 0:
-            mjd_science = science_header['UTMJD']
-            mjd_tellurics = np.array(list(master_bstars.keys()))
-            closest_tellurics = mjd_tellurics[np.argmin(np.abs(mjd_tellurics - mjd_science))]
-            print(f'  --> Using telluric from B Star as observed at UTMJD {closest_tellurics} (Science taken at UTMJD {mjd_science})')
-            telluric = master_bstars[closest_tellurics]
-        else:
-            print('No tellurics from B Stars available.')
-            telluric = science; telluric[:] = 1.0
+    # Find the closest BStar calibration
+    if len(master_bstars) > 0:
+        mjd_science = science_header['UTMJD']
+        mjd_tellurics = np.array(list(master_bstars.keys()))
+        closest_tellurics = mjd_tellurics[np.argmin(np.abs(mjd_tellurics - mjd_science))]
+        print(f'  --> Using telluric from B Star as observed at UTMJD {closest_tellurics} (Science taken at UTMJD {mjd_science})')
+        telluric = master_bstars[closest_tellurics]
+    else:
+        print('No tellurics from B Stars available.')
+        telluric = science; telluric[:] = 1.0
 
-        # Create a primary HDU and HDU list
-        primary_hdu = fits.PrimaryHDU()
-        header = primary_hdu.header
-        header['OBJECT']             = (science_header['OBJECT'], 'Name of observed object in night log')
-        header['UTMJD']              = (science_header['UTMJD'],  'Modified Julian Date of observation')
-        header['MEANRA']             = (science_header['MEANRA'], 'Mean Right Ascension of observed object')
-        header['MEANDEC']            = (science_header['MEANDEC'],'Mean Declination of observed object')        
-        header['BARYVEL']            = (0.0,                      'Applied barycentric velocity correction')
-        header['VRAD']               = ('None',                   'Radial velocity estimate')
-        header['E_VRAD']             = ('None',                   'Uncertainty of radial velocity estimate')
-        header['HIERARCH SOURCE_ID'] = (-1,                       'Gaia DR3 source_id')
-        header['HIERARCH TMASS_ID']  = ('HHMMSSSS-DDMMSSS',       'Identifier in 2MASS catalog')
-        hdul = fits.HDUList([primary_hdu])
+    # Create a primary HDU and HDU list
+    primary_hdu = fits.PrimaryHDU()
+    header = primary_hdu.header
+    header['OBJECT']             = (science_header['OBJECT'], 'Name of observed object in night log')
+    header['UTMJD']              = (science_header['UTMJD'],  'Modified Julian Date of observation')
+    header['MEANRA']             = (science_header['MEANRA'], 'Mean Right Ascension of observed object')
+    header['MEANDEC']            = (science_header['MEANDEC'],'Mean Declination of observed object')        
+    header['BARYVEL']            = (0.0,                      'Applied barycentric velocity correction')
+    header['VRAD']               = ('None',                   'Radial velocity estimate')
+    header['E_VRAD']             = ('None',                   'Uncertainty of radial velocity estimate')
 
-        # Extract order ranges and coefficients
-        order_ranges, order_beginning_coeffs, order_ending_coeffs = VR.extraction.read_in_order_tramlines()
+    # Use astroquery to update header with Simbad information (where available)
+    # We try to find matches with HIP/2MASS/Gaia DR3 as well as
+    # radial velocities (VRAD), stellar parameters (TEFF/LOGG/FE_H), and 
+    # magnitudes in B/V/G/R as well as parallax PLX
+    header = VR.utils.update_fits_header_via_crossmatch_with_simbad(header)
 
-        # Loop over your extension names and corresponding data arrays
-        for ext_index, ext_name in enumerate(order_beginning_coeffs):
-            # Create an ImageHDU object for each extension
+    hdul = fits.HDUList([primary_hdu])
 
-            # Apply flat-field calibration to science
-            science[ext_index,:] /= master_flat[ext_index,:]
-            science_noise[ext_index,:] /= master_flat[ext_index,:]
+    # Extract order ranges and coefficients
+    order_ranges, order_beginning_coeffs, order_ending_coeffs = VR.extraction.read_in_order_tramlines()
 
-            # Apply rough renormalisation with outlier-robuster 90th percenile of ~middle of order
-            science_90percentile = np.nanpercentile(science[ext_index,1500:2500],q=90)
-            science[ext_index,:] /= science_90percentile
-            science_noise[ext_index,:] /= science_90percentile
+    # Loop over your extension names and corresponding data arrays
+    for ext_index, ext_name in enumerate(order_beginning_coeffs):
+        # Create an ImageHDU object for each extension
 
-            # Define the columns with appropriate formats
-            col1_def = fits.Column(name='wave_vac',format='E', array=np.arange(len(science[ext_index,:]),dtype=float))
-            col2_def = fits.Column(name='wave_air',format='E', array=np.arange(len(science[ext_index,:]),dtype=float))
-            col3_def = fits.Column(name='science', format='E', array=science[ext_index,:])
-            col4_def = fits.Column(name='science_noise',   format='E', array=science_noise[ext_index,:])
-            col5_def = fits.Column(name='flat',    format='E', array=master_flat[ext_index,:])
-            col6_def = fits.Column(name='thxe',    format='E', array=master_thxe[ext_index,:]/master_flat[ext_index,:])
-            col7_def = fits.Column(name='lc',      format='E', array=master_lc[ext_index,:]/master_flat[ext_index,:])
-            col8_def = fits.Column(name='telluric',format='E', array=telluric[ext_index,:])
+        # Apply flat-field calibration to science
+        science[ext_index,:] /= master_flat[ext_index,:]
+        science_noise[ext_index,:] /= master_flat[ext_index,:]
 
-            # Combine columns to BinTable and add header from primary
-            hdu = fits.BinTableHDU.from_columns([col1_def, col2_def, col3_def, col4_def, col5_def, col6_def, col7_def, col8_def], name=ext_name.lower())
-            hdu.header.extend(header.copy(strip=True), unique=True)
+        # Apply rough renormalisation with outlier-robuster 90th percenile of ~middle of order
+        science_90percentile = np.nanpercentile(science[ext_index,1500:2500],q=90)
+        science[ext_index,:] /= science_90percentile
+        science_noise[ext_index,:] /= science_90percentile
 
-            # Append the HDU to the HDU list
-            hdul.append(hdu)
+        # Define the columns with appropriate formats
+        col1_def = fits.Column(name='wave_vac',format='E', array=np.arange(len(science[ext_index,:]),dtype=float))
+        col2_def = fits.Column(name='wave_air',format='E', array=np.arange(len(science[ext_index,:]),dtype=float))
+        col3_def = fits.Column(name='science', format='E', array=science[ext_index,:])
+        col4_def = fits.Column(name='science_noise',   format='E', array=science_noise[ext_index,:])
+        col5_def = fits.Column(name='flat',    format='E', array=master_flat[ext_index,:])
+        col6_def = fits.Column(name='thxe',    format='E', array=master_thxe[ext_index,:]/master_flat[ext_index,:])
+        col7_def = fits.Column(name='lc',      format='E', array=master_lc[ext_index,:]/master_flat[ext_index,:])
+        col8_def = fits.Column(name='telluric',format='E', array=telluric[ext_index,:])
 
-        # Save to a new FITS file with an extension for each order
-        Path(config.working_directory+'reduced_data/'+config.date+'/'+science_object).mkdir(parents=True, exist_ok=True)
-        spectrum_filename = 'veloce_spectra_'+science_object+'_'+config.date+'.fits'
-        hdul.writeto(config.working_directory+'reduced_data/'+config.date+'/'+science_object+'/'+spectrum_filename, overwrite=True)
+        # Combine columns to BinTable and add header from primary
+        hdu = fits.BinTableHDU.from_columns([col1_def, col2_def, col3_def, col4_def, col5_def, col6_def, col7_def, col8_def], name=ext_name.lower())
 
-        print('  -> Successfully extracted '+science_object)
+        # Append the HDU to the HDU list
+        hdul.append(hdu)
 
-    except:
-        print('  -> Failed to extract '+science_object)
+    # Save to a new FITS file with an extension for each order
+    Path(config.working_directory+'reduced_data/'+config.date+'/'+science_object).mkdir(parents=True, exist_ok=True)
+    spectrum_filename = 'veloce_spectra_'+science_object+'_'+config.date+'.fits'
+    hdul.writeto(config.working_directory+'reduced_data/'+config.date+'/'+science_object+'/'+spectrum_filename, overwrite=True)
+
+    print('\n  --> Successfully extracted '+science_object)
+
+#     except:
+#         print('\n  --> Failed to extract '+science_object)
 
 
 # ## Wavelength calibration
@@ -275,16 +278,16 @@ for science_object in list(science_runs.keys()):
 
 
 for science_object in list(science_runs.keys()):
-    try:
-        VR.calibration.calibrate_wavelength(
-            science_object,
-            optimise_lc_solution=False,
-            correct_barycentric_velocity=True,
-            create_overview_pdf=False
-        )
-        print('  -> Succesfully calibrated wavelength with diagnostic plots for '+science_object+'\n')
-    except:
-        print('  -> Failed to calibrate wavelength for '+science_object+'\n')
+#     try:
+    VR.calibration.calibrate_wavelength(
+        science_object,
+        optimise_lc_solution=False,
+        correct_barycentric_velocity=True,
+        create_overview_pdf=False
+    )
+    print('  -> Succesfully calibrated wavelength with diagnostic plots for '+science_object+'\n')
+#     except:
+#         print('  -> Failed to calibrate wavelength for '+science_object+'\n')
 
 
 # ## Comparison with synthetic spectra
@@ -294,16 +297,28 @@ for science_object in list(science_runs.keys()):
 
 for science_object in list(science_runs.keys()):
     
-    korg_spectra = VR.flux_comparison.read_korg_syntheses()
+    print('\nCalibrating wavelength for '+science_object+' with given radial velocity and synthetic Korg spectrum')
     
-    with fits.open(config.working_directory+'reduced_data/'+config.date+'/'+science_object+'/veloce_spectra_'+science_object+'_'+config.date+'.fits') as veloce_fits_file:
+    with fits.open(config.working_directory+'reduced_data/'+config.date+'/'+science_object+'/veloce_spectra_'+science_object+'_'+config.date+'.fits', mode='update') as veloce_fits_file:
+
+        korg_spectra = VR.flux_comparison.read_available_korg_syntheses()
+        
+        # Find the closest match based on (possibly available) literature TEFF/LOGG/FE_H
+        closest_korg_spectrum = VR.utils.find_closest_korg_spectrum(
+            available_korg_spectra = korg_spectra,
+            fits_header = veloce_fits_file[0].header,
+        )
+
+        # Find the best RV or raise ValueError of none available.
+        vrad_for_calibration = VR.utils.find_best_radial_velocity_from_fits_header(fits_header = veloce_fits_file[0].header)
 
         for order in ['ccd_3_order_71','ccd_3_order_94','ccd_3_order_89']:
 
             VR.flux_comparison.calculate_wavelength_coefficients_with_korg_synthesis(
                 veloce_fits_file,
                 korg_wavelength_vac = korg_spectra['wavelength_vac'],
-                korg_flux = korg_spectra['flux_arcturus'],
+                korg_flux = korg_spectra['flux_'+closest_korg_spectrum],
+                vrad_for_calibration = vrad_for_calibration,
                 order_selection=[order],
                 telluric_hinkle_or_bstar = 'hinkle', # You can choose between 'hinkle' and 'bstar'
                 debug=False
@@ -312,7 +327,8 @@ for science_object in list(science_runs.keys()):
             VR.flux_comparison.calculate_wavelength_coefficients_with_korg_synthesis(
                 veloce_fits_file,
                 korg_wavelength_vac = korg_spectra['wavelength_vac'],
-                korg_flux = korg_spectra['flux_arcturus'],
+                korg_flux = korg_spectra['flux_'+closest_korg_spectrum],
+                vrad_for_calibration = vrad_for_calibration,
                 order_selection=[order],
                 telluric_hinkle_or_bstar = 'bstar', # You can choose between 'hinkle' and 'bstar'
                 debug=False
@@ -338,4 +354,10 @@ print('Memory before starting the reduction was:')
 print(starting_memory)
 print('Memory after running the reduction is:')
 print(get_memory_usage())
+
+
+# In[ ]:
+
+
+
 

@@ -1,8 +1,9 @@
 from setuptools import setup, find_packages
+from VeloceReduction import __version__ as version
 
 setup(
     name='VeloceReduction',
-    version='0.3.0',
+    version=version,
     packages=find_packages(),
     # Add other package dependencies as needed
     install_requires=[
@@ -10,6 +11,7 @@ setup(
         'astropy',
         'scipy',
         'matplotlib',
+        'astroquery>=0.4.7',
     ],
     scripts=['./VeloceReduction_tutorial.py'],
     # Metadata

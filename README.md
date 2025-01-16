@@ -133,6 +133,7 @@ This package requires the following libraries:
 - SciPy
 - matplotlib
 - Astropy
+- Astroquery
 
 ## Author
 
