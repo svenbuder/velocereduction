@@ -1,8 +1,9 @@
 from setuptools import setup, find_packages
+from VeloceReduction import __version__ as version
 
 setup(
     name='VeloceReduction',
-    version='0.4.0',
+    version=version,
     packages=find_packages(),
     # Add other package dependencies as needed
     install_requires=[
