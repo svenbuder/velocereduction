@@ -27,7 +27,7 @@ jobs:
 
       - name: Run Python script
         run: python scripts/VeloceReduction_tutorial.py
-        working-directory: ./
+        working-directory: ./VeloceReduction
 
       - name: Check free memory after script execution
         run: free -m >> memory_usage.txt
