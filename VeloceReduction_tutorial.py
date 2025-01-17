@@ -356,3 +356,9 @@ print(starting_memory)
 print('Memory after running the reduction is:')
 print(get_memory_usage())
 
+
+# In[ ]:
+
+
+
+
