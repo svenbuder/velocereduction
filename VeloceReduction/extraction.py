@@ -1,8 +1,10 @@
+import sys
+from pathlib import Path
+
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
 from scipy.ndimage import median_filter
-from pathlib import Path
 
 from . import config
 from .utils import read_veloce_fits_image_and_metadata, match_month_to_date, polynomial_function, calculate_barycentric_velocity_correction
@@ -38,13 +40,15 @@ def substract_overscan(full_image, metadata, debug_overscan = False):
     if debug_overscan:
         plt.figure()
         plt.hist(full_image.flatten(),bins=np.linspace(975,1025,100))
-        plt.show()
+        if 'ipykernel' in sys.modules:
+            plt.show()
         plt.close()
 
         plt.figure(figsize=(10,10))
         s = plt.imshow(full_image, vmin=975, vmax = 1025)
         plt.colorbar(s)
-        plt.show()
+        if 'ipykernel' in sys.modules:
+            plt.show()
         plt.close()
 
     if metadata['READOUT'] == '4Amp':
@@ -138,7 +142,8 @@ def substract_overscan(full_image, metadata, debug_overscan = False):
         plt.figure(figsize=(10,10))
         s = plt.imshow(trimmed_image, vmin = -5, vmax = 100)
         plt.colorbar(s)
-        plt.show()
+        if 'ipykernel' in sys.modules:
+            plt.show()
         plt.close()
         
     if debug_overscan:
@@ -393,7 +398,8 @@ def convert_bstar_to_telluric(bstar_flux_in_orders, filter_kernel_size=51, debug
             plt.plot(telluric_flux_in_order, label = 'Final telluric flux', lw = 1, c='C0')
             plt.legend(ncol=4)
             plt.ylim(-0.1, 1.5)
-            plt.show()
+            if 'ipykernel' in sys.modules:
+                plt.show()
             plt.close()
 
     return(np.array(telluric_flux_in_orders))
@@ -690,7 +696,8 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
 
         Path(config.working_directory+'reduced_data/'+config.date+'/_debug').mkdir(parents=True, exist_ok=True)
         plt.savefig(config.working_directory+'reduced_data/'+config.date+f'/_debug/debug_tramlines{type}.pdf',dpi=200,bbox_inches='tight')
-        plt.show()
+        if 'ipykernel' in sys.modules:
+            plt.show()
         plt.close()
         
     if Science | Bstar:
@@ -1047,7 +1054,8 @@ def optimise_tramline_polynomial(overscan_subtracted_images, order, order_ranges
                     ax2.set_ylabel('Counts')
                     ax2.set_ylim(0,1.1*np.max(x_pixel_values_to_be_tested_for_tramline))
                     plt.tight_layout()
-                    plt.show()
+                    if 'ipykernel' in sys.modules:
+                        plt.show()
                     plt.close(f2)
                 
                 # We expect slightly different widths for each tramlines in the different CCDs
@@ -1201,7 +1209,8 @@ def optimise_tramline_polynomial(overscan_subtracted_images, order, order_ranges
         ax.legend(loc = 'upper left',fontsize=15)
         if (order == 'ccd_1_order_141') & overwrite:
             plt.savefig(Path(__file__).resolve().parent / 'joss_paper' / f'tramline_extraction_example_{order}.png',dpi=100,bbox_inches='tight')
-        plt.show()
+        if 'ipykernel' in sys.modules:
+            plt.show()
         plt.close(f)
         
     return(order_beginning_fit, order_ending_fit)

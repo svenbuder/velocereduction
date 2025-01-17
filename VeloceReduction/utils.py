@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 import platform
 import os
+import sys
 
 # Numpy package
 import numpy as np
@@ -690,7 +691,8 @@ def monitor_vrad_for_repeat_observations(date, repeated_observations):
                 ax.axhline(np.mean(vrad)+np.std(vrad),c = 'C1',lw=1,ls='dashed')
                 ax.legend()
                 plt.savefig(config.working_directory+'/reduced_data/'+date+'/'+repeated_observation+'_vrad_monitoring.pdf')
-                plt.show()
+                if 'ipykernel' in sys.modules:
+                    plt.show()
                 plt.close()
             else:
                 print('Less than two observations could be read in for '+repeated_observation)

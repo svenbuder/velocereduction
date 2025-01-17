@@ -284,7 +284,7 @@ for science_object in list(science_runs.keys()):
         science_object,
         optimise_lc_solution=False,
         correct_barycentric_velocity=True,
-        create_overview_pdf=False
+        create_overview_pdf=True
     )
     print('  -> Succesfully calibrated wavelength with diagnostic plots for '+science_object+'\n')
 #     except:

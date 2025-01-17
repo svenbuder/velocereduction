@@ -1,4 +1,5 @@
 from pathlib import Path
+import sys
 
 import numpy as np
 from numpy.polynomial.chebyshev import Chebyshev
@@ -290,7 +291,8 @@ def make_veloce_and_korg_spectrum_compatible(wavelength_coefficients,veloce_scie
         ax.legend(ncol=4, loc = 'upper center')
         ax.set_ylim(-0.1,1.25)
         plt.tight_layout()
-        plt.show()
+        if 'ipykernel' in sys.modules:
+            plt.show()
         plt.close()
 
     return(veloce_flux_normalised_with_korg_flux, korg_flux_interpolated)
