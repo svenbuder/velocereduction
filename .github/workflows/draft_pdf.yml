@@ -5,7 +5,7 @@ on:
     paths:
       - joss_paper/paper.md
       - joss_paper/paper.bib
-      - ‎.github/workflows/draft_pdf.yml
+      - .github/workflows/draft_pdf.yml
   release:
     types: [created]
 

@@ -28,19 +28,18 @@ import argparse
 import matplotlib.pyplot as plt
 
 # VeloceReduction modules and function
-from VeloceReduction import config
-import VeloceReduction as VR
+from velocereduction import config
+import velocereduction as VR
 
 from astropy.table import Table
 from scipy.optimize import curve_fit
 from scipy.signal import find_peaks
-from VeloceReduction.utils import get_memory_usage
 
 
 # In[ ]:
 
 
-starting_memory = get_memory_usage()
+starting_memory = VR.utils.get_memory_usage()
 print('Memory before starting the reduction:')
 print(starting_memory)
 
@@ -313,8 +312,10 @@ for science_object in list(science_runs.keys()):
         # Find the best RV or raise ValueError of none available.
         vrad_for_calibration = VR.utils.find_best_radial_velocity_from_fits_header(fits_header = veloce_fits_file[0].header)
 
-        for order in ['ccd_3_order_71','ccd_3_order_94','ccd_3_order_89']:
-
+        # Let's test this for a few orders (or simply set order_selection=None to use all)
+        #for order in ['ccd_3_order_71','ccd_3_order_94','ccd_3_order_89']:
+        for order in ['ccd_3_order_71']:
+        
             VR.flux_comparison.calculate_wavelength_coefficients_with_korg_synthesis(
                 veloce_fits_file,
                 korg_wavelength_vac = korg_spectra['wavelength_vac'],
@@ -354,7 +355,7 @@ VR.utils.monitor_vrad_for_repeat_observations(config.date, repeated_observations
 print('Memory before starting the reduction was:')
 print(starting_memory)
 print('Memory after running the reduction is:')
-print(get_memory_usage())
+print(VR.utils.get_memory_usage())
 
 
 # In[ ]:

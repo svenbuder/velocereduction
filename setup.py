@@ -1,8 +1,8 @@
 from setuptools import setup, find_packages
-from VeloceReduction import __version__ as version
+from velocereduction import __version__ as version
 
 setup(
-    name='VeloceReduction',
+    name='velocereduction',
     version=version,
     packages=find_packages(),
     # Add other package dependencies as needed
@@ -21,7 +21,7 @@ setup(
     long_description=open('README.md').read(),
     long_description_content_type='text/markdown',
     license='MIT',
-    url = "https://github.com/svenbuder/VeloceReduction",
+    url = "https://github.com/svenbuder/velocereduction",
     classifiers = [
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: MIT License",

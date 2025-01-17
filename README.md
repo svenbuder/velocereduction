@@ -1,4 +1,4 @@
-# *VeloceReduction*
+# *velocereduction*
 
 This package is designed for the reduction of spectroscopic data from the [Veloce](https://aat.anu.edu.au/science/instruments/current/veloce/overview) spectrograph.
 

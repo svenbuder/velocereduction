@@ -8,7 +8,7 @@ from scipy.optimize import minimize
 from scipy.ndimage import median_filter
 import matplotlib.pyplot as plt
 
-from VeloceReduction.utils import polynomial_function, wavelength_vac_to_air, apply_velocity_shift_to_wavelength_array, degrade_spectral_resolution
+from .utils import polynomial_function, wavelength_vac_to_air, apply_velocity_shift_to_wavelength_array, degrade_spectral_resolution
 
 def read_available_korg_syntheses():
     """
