@@ -83,7 +83,7 @@ def get_script_input():
 #         jupyter_date = "240219"
 #         jupyter_date = "250111"
         
-        jupyter_working_directory = "./"
+        jupyter_working_directory = "../"
         print("Running in a Jupyter notebook. Using predefined values")
         args = argparse.Namespace(date=jupyter_date, working_directory=jupyter_working_directory)
     else:
@@ -100,7 +100,7 @@ config.date = args.date
 if args.working_directory[:2] in ['./','~/']:
     config.working_directory = str(Path(args.working_directory).resolve())+'/'
 else:
-    config.working_directory = args.working_directory
+    config.working_directory = str(Path(args.working_directory).resolve())+'/'
 print(f"Date: {config.date}, Working Directory: {config.working_directory}")
 
 

@@ -465,6 +465,11 @@ def identify_calibration_and_science_runs(date, raw_data_dir, each_science_run_s
 
     print('\nThe following science observations were identified: '+', '.join(list(science_runs.keys())))
 
+    if len(science_runs) > 0:
+        directory_path = Path(config.working_directory+'reduced_data/'+config.date)
+        directory_path.mkdir(parents=True, exist_ok=True)
+        print('\nWill save reduced data into directory '+str(directory_path))
+
     return(calibration_runs, science_runs)
 
 def interpolate_spectrum(wavelength, flux, target_wavelength):

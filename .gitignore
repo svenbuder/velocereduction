@@ -1,3 +1,6 @@
+build/
+dist/
+*.pyc
 observations/
 tinney_script/
 reduced_data/

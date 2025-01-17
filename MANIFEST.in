@@ -1,5 +1,6 @@
 include LICENSE
 include README.md
-recursive-include observations/001122 *
-recursive-include reduced_data/001122 *
-recursive-include VeloceReduction *.fits *.txt *.png *.pdf
+recursive-include scripts *.py *.ipynb
+recursive-include observations/001122 *.fits *.log
+recursive-include reduced_data/001122 *.fits *.png *.pdf *.txt
+recursive-include VeloceReduction *.ipynb *.fits *.txt *.png *.pdf
