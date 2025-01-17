@@ -431,7 +431,7 @@ def get_tellurics_from_bstar(bstar_information, master_flat, debug=False):
     return(telluric_flux_in_orders, metadata['UTMJD'])
     
 
-def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlines_based_on_flat = False, LC = False, Bstar = False, Science = False, ThXe = False, master_darks = None, exposure_time_threshold_darks = 300, use_tinney_ranges = False, debug_tramlines = False, debug_overscan=False):
+def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlines_based_on_flat = False, LC = False, Bstar = False, Science = False, ThXe = False, master_darks = None, exposure_time_threshold_darks = 300, use_tinney_ranges = False, debug_tramlines = False, debug_rows = False, debug_overscan=False):
     """
     Extracts spectroscopic orders from CCD images for various types of Veloce CCD images
     using predefined tramline ranges and providing detailed debug information.
@@ -450,6 +450,7 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
         exposure_time_threshold_darks (int, float): The threshold exposure time for applying master darks to science images in seconds. Default is 300 (seconds, i.e. 5 minutes).
         use_tinney_ranges (bool): Set to True to use tramline ranges specified by Chris Tinney.
         debug_tramlines (bool): Set to True to display debug plots for tramline extraction.
+        debug_rows (bool): Set to True to display debug plots for row tracing.
         debug_overscan (bool): Set to True to display debug plots for overscan correction.
 
     Returns:
@@ -572,7 +573,7 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
                             order_beginning_coeffs = order_beginning_coeffs,
                             order_ending_coeffs = order_ending_coeffs,
                             overwrite = False,
-                            debug = debug_tramlines
+                            debug = debug_rows
                         )
 
     # Read in the overwritten tramline information for the night
