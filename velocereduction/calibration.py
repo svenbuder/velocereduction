@@ -13,7 +13,7 @@ from matplotlib.backends.backend_pdf import PdfPages
 
 from . import config
 
-from VeloceReduction.utils import polynomial_function, calculate_barycentric_velocity_correction, velocity_shift, fit_voigt_absorption_profile, radial_velocity_from_line_shift, voigt_absorption_profile, wavelength_vac_to_air, wavelength_air_to_vac, lc_peak_gauss, lasercomb_numbers_from_wavelength, lasercomb_wavelength_from_numbers, read_in_wavelength_solution_coefficients_tinney
+from .utils import polynomial_function, calculate_barycentric_velocity_correction, velocity_shift, fit_voigt_absorption_profile, radial_velocity_from_line_shift, voigt_absorption_profile, wavelength_vac_to_air, wavelength_air_to_vac, lc_peak_gauss, lasercomb_numbers_from_wavelength, lasercomb_wavelength_from_numbers, read_in_wavelength_solution_coefficients_tinney
 
 def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, overwrite=False, debug=False, use_ylim=False):
     """

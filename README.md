@@ -1,4 +1,6 @@
-# *VeloceReduction*
+# *velocereduction*
+
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/svenbuder/velocereduction/blob/main/LICENSE)
 
 This package is designed for the reduction of spectroscopic data from the [Veloce](https://aat.anu.edu.au/science/instruments/current/veloce/overview) spectrograph.
 
