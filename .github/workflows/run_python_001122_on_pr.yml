@@ -27,7 +27,7 @@ jobs:
 
       - name: Run Python script
         run: python scripts/VeloceReduction_tutorial.py
-        working-directory: ./VeloceReduction
+        working-directory: ${{ github.workspace }}
 
       - name: Check free memory after script execution
         run: free -m >> memory_usage.txt
