@@ -13,7 +13,7 @@ setup(
         'matplotlib',
         'astroquery>=0.4.7'
     ],
-    scripts=['./VeloceReduction_tutorial.py'],
+    scripts=['./scripts/VeloceReduction_tutorial.py'],
     # Metadata
     author='Sven Buder',
     author_email='sven.buder@anu.edu.au',
