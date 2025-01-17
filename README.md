@@ -1,5 +1,7 @@
 # *velocereduction*
 
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/svenbuder/velocereduction/blob/main/LICENSE)
+
 This package is designed for the reduction of spectroscopic data from the [Veloce](https://aat.anu.edu.au/science/instruments/current/veloce/overview) spectrograph.
 
 Below are two reduced spectra of the solar-like star alpha Centauri A (HIP71683, [Fe/H] = 0.20 dex) on the left and the metal-poor star HD 140283 (HIP76976, [Fe/H] = -2.48) on right right.

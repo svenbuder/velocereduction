@@ -1,3 +1,32 @@
 [build-system]
-requires = ["setuptools", "wheel"]
+requires = ["setuptools >= 61.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
+
+[project]
+name = "velocereduction"
+version = "0.5.1"
+dependencies = [
+    "numpy",
+    "astropy",
+    "scipy",
+    "matplotlib",
+    "astroquery>=0.4.7",
+]
+authors = [{name = "Sven Buder", email = "sven.buder@anu.edu.au"}]
+description = "A package for reducing CCD images from the Veloce echelle spectrograph"
+readme = "README.md"
+license = {file = "LICENSE"}
+keywords = ["astronomy", "spectroscopy", "data-reduction"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
+[tool.setuptools.packages.find]
+where = ["velocereduction"]
+
+[project.urls]
+Homepage = "https://github.com/svenbuder/velocereduction"
+Issues = "https://github.com/svenbuder/velocereduction/issues"
