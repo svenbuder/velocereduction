@@ -26,7 +26,7 @@ jobs:
         run: free -m | tee memory_usage.txt
 
       - name: Run Python script
-        run: python ../scripts/VeloceReduction_tutorial.py
+        run: python scripts/VeloceReduction_tutorial.py
 
       - name: Check free memory after script execution
         run: free -m >> memory_usage.txt
