@@ -11,13 +11,15 @@ setup(
         'astropy',
         'scipy',
         'matplotlib',
-        'astroquery>=0.4.7',
+        'astroquery>=0.4.7'
     ],
     scripts=['./VeloceReduction_tutorial.py'],
     # Metadata
-    author='Sven buder',
+    author='Sven Buder',
     author_email='sven.buder@anu.edu.au',
     description='A package for reducing CCD images from the Veloce echelle spectrograph',
+    long_description=open('README.md').read(),
+    long_description_content_type='text/markdown',
     license='MIT',
     url = "https://github.com/svenbuder/VeloceReduction",
     classifiers = [

@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 import platform
 import os
+import sys
 
 # Numpy package
 import numpy as np
@@ -465,6 +466,11 @@ def identify_calibration_and_science_runs(date, raw_data_dir, each_science_run_s
 
     print('\nThe following science observations were identified: '+', '.join(list(science_runs.keys())))
 
+    if len(science_runs) > 0:
+        directory_path = Path(config.working_directory+'reduced_data/'+config.date)
+        directory_path.mkdir(parents=True, exist_ok=True)
+        print('\nWill save reduced data into directory '+str(directory_path))
+
     return(calibration_runs, science_runs)
 
 def interpolate_spectrum(wavelength, flux, target_wavelength):
@@ -685,7 +691,8 @@ def monitor_vrad_for_repeat_observations(date, repeated_observations):
                 ax.axhline(np.mean(vrad)+np.std(vrad),c = 'C1',lw=1,ls='dashed')
                 ax.legend()
                 plt.savefig(config.working_directory+'/reduced_data/'+date+'/'+repeated_observation+'_vrad_monitoring.pdf')
-                plt.show()
+                if 'ipykernel' in sys.modules:
+                    plt.show()
                 plt.close()
             else:
                 print('Less than two observations could be read in for '+repeated_observation)

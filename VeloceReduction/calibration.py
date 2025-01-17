@@ -1,6 +1,7 @@
 import numpy as np
 np.seterr(divide='ignore', invalid='ignore')
 from pathlib import Path
+import sys
 
 from scipy.optimize import curve_fit
 from scipy.signal import find_peaks
@@ -241,7 +242,8 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, ov
             for peak in peaks:
                 ax.axvline(wavelength[in_panel][peak], c = 'C3', lw=0.5, ls='dashed')
             plt.tight_layout()
-            plt.show()
+            if 'ipykernel' in sys.modules:
+                plt.show()
             plt.close()
 
         # Now that we have the integer peak positions, let's fit more precise Gaussians.
@@ -403,7 +405,8 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, ov
                 plt.ylim(-0.5,0.5)
             plt.legend()
             plt.tight_layout()
-            plt.show()
+            if 'ipykernel' in sys.modules:
+                plt.show()
             plt.close()
 
         return(coeffs_lc)
@@ -829,7 +832,8 @@ def calibrate_wavelength(science_object, optimise_lc_solution=True, correct_bary
 
             plt.tight_layout()
             plt.savefig(input_output_directory+'/veloce_spectra_'+science_object+'_'+config.date+'_rough_rv_estimate.pdf',bbox_inches='tight')
-            plt.show()
+            if 'ipykernel' in sys.modules:
+                plt.show()
             plt.close()
 
     # Let's create an overview PDF if requested
