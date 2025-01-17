@@ -28,10 +28,8 @@ import argparse
 import matplotlib.pyplot as plt
 
 # VeloceReduction modules and function
-print(sys.path)
-
-import velocereduction as VR
 from velocereduction import config
+import velocereduction as VR
 
 from astropy.table import Table
 from scipy.optimize import curve_fit
