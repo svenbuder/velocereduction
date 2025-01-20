@@ -24,7 +24,7 @@ jobs:
           pip install -e .
 
       - name: Run tests
-        run: pytest --cov-branch --cov-report=xml
+        run: pytest --cov-branch --cov-report=xml:coverage.xml tests/
 
       - name: List output files
         run: |
