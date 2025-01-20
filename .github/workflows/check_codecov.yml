@@ -24,7 +24,7 @@ jobs:
           pip install -e .
 
       - name: Run tests
-        run: pytest --cov-branch --cov-report=xml:coverage.xml tests/
+        run: pytest -s --cov-branch --cov-report=xml:coverage_utils.xml tests/
 
       - name: List output files
         run: |
@@ -34,5 +34,5 @@ jobs:
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          file: ./coverage.xml
+          files: ./coverage_utils.xml
 
