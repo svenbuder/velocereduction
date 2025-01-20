@@ -1,13 +1,8 @@
 include LICENSE
 include README.md
+recursive-include observations/001122 *.log
+include scripts/VeloceReduction_tutorial.ipynb
+recursive-include velocereduction *.txt *.fits *.ipynb
 include velocereduction/veloce_reference_data/Veloce_alfCenA.png
 include velocereduction/veloce_reference_data/Veloce_HD140283.png
 include velocereduction/veloce_reference_data/veloce_reduction_ccd_1_order_143.png
-recursive-include scripts *.py *.ipynb
-recursive-include observations/001122 *.log
-recursive-exclude reduced_data *
-recursive-exclude observations/001122/ *.fits
-recursive-include VeloceReduction *.ipynb *.fits *.txt
-recursive-exclude scripts/.ipynb_checkpoints *
-recursive-exclude .DS_STORE *
-recursive-exclude VeloceReduction *.egg-info

@@ -7,8 +7,8 @@ This package is designed for the reduction of spectroscopic data from the [Veloc
 Below are two reduced spectra of the solar-like star alpha Centauri A (HIP71683, [Fe/H] = 0.20 dex) on the left and the metal-poor star HD 140283 (HIP76976, [Fe/H] = -2.48) on right right.
 
 <p align="center">
-  <img src="./VeloceReduction/veloce_reference_data/Veloce_alfCenA.png" width="30%"/>
-  <img src="./VeloceReduction/veloce_reference_data/Veloce_HD140283.png" width="30%"/>
+  <img src="./velocereduction/veloce_reference_data/Veloce_alfCenA.png" width="30%"/>
+  <img src="./velocereduction/veloce_reference_data/Veloce_HD140283.png" width="30%"/>
 </p>
 
 ## Installation
@@ -91,7 +91,7 @@ reduced_data/                                               # Directory where th
 
 An example reduction (blue line) of order 143 for CCD1 is shown here in comparison to a not-optimised model spectrum of the [Korg](https://ajwheeler.github.io/Korg.jl/stable/) spectrum synthesis tool with telluric lines by [Hinkle et al. (2000)](https://ui.adsabs.harvard.edu/abs/2000vnia.book.....H):
 <p align="center">
-  <img src="./VeloceReduction/veloce_reference_data/veloce_reduction_ccd_1_order_143.png" width="100%"/>
+  <img src="./velocereduction/veloce_reference_data/veloce_reduction_ccd_1_order_143.png" width="100%"/>
 </p>
 
 
