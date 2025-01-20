@@ -1,3 +1,4 @@
+import velocereduction
 from velocereduction.utils import update_fits_header_via_crossmatch_with_simbad
 
 # Define the FITS header as a dictionary
