@@ -28,7 +28,7 @@ jobs:
 
       - name: List output files
         run: |
-          ls -l
+          ls -la
 
       - name: Upload results to Codecov
         uses: codecov/codecov-action@v5
