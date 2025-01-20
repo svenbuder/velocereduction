@@ -1,4 +1,4 @@
-from VR.utils import update_fits_header_via_crossmatch_with_simbad
+from velocereduction.utils import update_fits_header_via_crossmatch_with_simbad
 
 # Define the FITS header as a dictionary
 fits_header = {
