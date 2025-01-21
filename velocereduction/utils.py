@@ -790,7 +790,7 @@ def update_fits_header_via_crossmatch_with_simbad(fits_header):
         print('\n  --> '+object_id+' does not look like either Gaia DR3 or HIP entry. Crossmatching with Simbad first and otherwise via Ra/Dec.')
         simbad_match = Simbad.query_object(object_id)
         if len(simbad_match) > 0:
-            print('Found entry in Simbad.')
+            print('  --> Found entry in Simbad.')
             simbad_match_fe_h = simbad_fe_h_query.query_object(object_id)
         else:
             print('  --> '+object_id+' not a valid Simbad entry. Crossmatching via Ra/Dec within 2 arcsec.')
@@ -908,29 +908,43 @@ def find_best_radial_velocity_from_fits_header(fits_header):
         float: The best radial velocity measurement for calibration.
     """
 
+    vrad_value = fits_header.get('VRAD', None)
+    if vrad_value == 'None': vrad_value = None
+    e_vrad_value = fits_header.get('E_VRAD', None)
+    if e_vrad_value == 'None': e_vrad_value = None
+    vrad_lit_value = fits_header.get('VRAD_LIT', None)
+    if vrad_lit_value == 'None': vrad_lit_value = None
+    e_vrad_lit_value = fits_header.get('E_VRAD_LIT', None)
+    if e_vrad_lit_value == 'None': e_vrad_lit_value = None
+    vrad_bib = fits_header.get('VRAD_BIB', 'N/A')
+
     # Check which VRAD measurement has a smaller uncertainty and use that one
-    if 'E_VRAD' in fits_header and 'E_VRAD_LIT' in fits_header:
-        print('  --> Found literature VRAD in Simbad: '+str(fits_header['VRAD_LIT'])+' +/- '+str(fits_header['E_VRAD_LIT'])+' km/s by '+str(fits_header['VRAD_BIB']))
-        print('  --> Found VRAD from Veloce measurements: '+str(fits_header['VRAD'])+' +/- '+str(fits_header['E_VRAD'])+' km/s')
-        if fits_header['E_VRAD'] < fits_header['E_VRAD_LIT']:
-            vrad_for_calibration = fits_header['VRAD']
+    if e_vrad_value is not None and e_vrad_lit_value is not None:
+        print('  --> Found literature VRAD in Simbad: '+str(vrad_lit_value)+' +/- '+str(e_vrad_lit_value)+' km/s by '+str(vrad_bib))
+        print('  --> Found VRAD from Veloce measurements: '+str(vrad_value)+' +/- '+str(e_vrad_value)+' km/s')
+        if e_vrad_value < e_vrad_lit_value:
+            vrad_for_calibration = vrad_value
             print('  --> Using VRAD from Veloce measurements because it has a smaller uncertainty.')
         else:
-            vrad_for_calibration = fits_header['VRAD_LIT']
+            vrad_for_calibration = vrad_lit_value
             print('  --> Using literature VRAD from Simbad because it has a smaller uncertainty.')
-    elif 'E_VRAD' in fits_header:
-        if 'VRAD_LIT' in fits_header:
-            print('  --> Found literature VRAD in Simbad: '+str(fits_header['VRAD_LIT'])+' by '+str(fits_header['VRAD_BIB'])+' but without uncertainty.')
-        print('  --> Found VRAD from Veloce measurements: '+str(fits_header['VRAD'])+' +/- '+str(fits_header['E_VRAD'])+' km/s')
-        vrad_for_calibration = fits_header['VRAD']
+    elif e_vrad_lit_value is not None:
+        if vrad_lit_value is not None:
+            print('  --> Found literature VRAD in Simbad: '+str(vrad_lit_value)+' by '+str(vrad_bib)+' but without uncertainty.')           
+        print('  --> Found VRAD from Veloce measurements: '+str(vrad_value)+' +/- '+str(e_vrad_value)+' km/s')
+        vrad_for_calibration = vrad_value
         print('  --> Using VRAD from Veloce measurements because no literature VRAD with uncertainty is available.')
-    elif 'VRAD_LIT' in fits_header:
-        if 'E_VRAD_LIT' in fits_header:
-            print('  --> Found literature VRAD in Simbad: '+str(fits_header['VRAD_LIT'])+' +/- '+str(fits_header['E_VRAD_LIT'])+' km/s by '+str(fits_header['VRAD_BIB']))
+    elif vrad_lit_value is not None:
+        if e_vrad_lit_value is not None:
+            print('  --> Found literature VRAD in Simbad: '+str(vrad_lit_value)+' +/- '+str(e_vrad_lit_value)+' km/s by '+str(vrad_bib))
         else:
-            print('  --> Found literature VRAD in Simbad: '+str(fits_header['VRAD_LIT'])+' by '+str(fits_header['VRAD_BIB'])+' but without uncertainty.')
-        vrad_for_calibration = fits_header['VRAD_LIT']
+            print('  --> Found literature VRAD in Simbad: '+str(vrad_lit_value)+' by '+str(vrad_bib)+' but without uncertainty.')
+        vrad_for_calibration = vrad_lit_value
         print('  --> Using literature VRAD from Simbad because no Veloce VRAD is available.')
+    elif e_vrad_value is not None:
+        print('  --> Found VRAD from Veloce measurements: '+str(vrad_value)+' +/- '+str(e_vrad_value)+' km/s')
+        vrad_for_calibration = vrad_value
+        print('  --> Using VRAD from Veloce measurements because no literature VRAD is available.')
     else:
         raise ValueError('No valid option for VRAD avaialble. Aborting calibration via synthesis.')
 
@@ -948,7 +962,7 @@ def find_closest_korg_spectrum(available_korg_spectra,fits_header):
         str: The name of the closest Korg spectrum to be used for calibration.
     """
 
-    print('  -> Available Korg Spectra: '+', '.join(list(available_korg_spectra.keys())[2:]))
+    print('    --> Available Korg Spectra: '+', '.join(list(available_korg_spectra.keys())[2:]))
 
     # If the star is radial velocity standard 18 Sco, let's use the 18 Sco spectrum.
     if fits_header['OBJECT'] == 'HIP79672':
@@ -956,40 +970,45 @@ def find_closest_korg_spectrum(available_korg_spectra,fits_header):
         print('  --> Object is 18Sco. Using 18Sco spectrum.')
     # Let's check if we have a literature TEFF/LOGG/FE_H available
     elif 'TEFF_LIT' in fits_header.keys() and 'LOGG_LIT' in fits_header.keys() and 'FE_H_LIT' in fits_header.keys():
-        print('  --> Literature values for TEFF/LOGG/FE_H are: '+str(fits_header['TEFF_LIT'])+'/'+str(fits_header['LOGG_LIT'])+'/'+str(fits_header['FE_H_LIT']))
+        print('    --> Literature values for TEFF/LOGG/FE_H are: '+str(fits_header['TEFF_LIT'])+'/'+str(fits_header['LOGG_LIT'])+'/'+str(fits_header['FE_H_LIT']))
         # If the star is a giant with TEFF < 5000 and LOGG < 3.5, use 'arcturus'
         if fits_header['TEFF_LIT'] < 5000 and fits_header['LOGG_LIT'] < 3.5:
             closest_korg_spectrum = 'arcturus'
-            print('  --> Object is a giant. Using Arcturus spectrum.')
+            print('    --> Object is a giant. Using Arcturus spectrum.')
         elif fits_header['TEFF_LIT'] < 5000 and fits_header['LOGG_LIT'] >= 3.5:
             closest_korg_spectrum = '61cyga'
-            print('  --> Object is a cool dwarf. Using 61 Cyg A spectrum.')
+            print('    --> Object is a cool dwarf. Using 61 Cyg A spectrum.')
         elif fits_header['FE_H_LIT'] < -0.25:
             closest_korg_spectrum = 'hd22879'
-            print('  --> Object is metal-poor dwarf. Using HD22879 spectrum.')
+            print('    --> Object is metal-poor dwarf. Using HD22879 spectrum.')
         else:
-            print('  --> Object is a dwarf. Using Sun spectrum.')
+            closest_korg_spectrum = 'sun'
+            print('    --> Object is a dwarf. Using Sun spectrum.')
 
     # Let's use the Sun, if there is no information on TEFF/LOGG/FE_H available.
     elif 'FE_H_LIT' in fits_header.keys():
         if fits_header['FE_H_LIT'] < -0.25:
             closest_korg_spectrum = 'hd22879'
-            print('  --> Object is metal-poor. Using HD22879 spectrum.')
+            print('    --> Object is metal-poor. Using HD22879 spectrum.')
         else:
             closest_korg_spectrum = 'sun'
-            print('  --> Object has solar [Fe/H]. Using Sun spectrum.')
+            print('    --> Object has solar [Fe/H]. Using Sun spectrum.')
 
-    # If we have no stellar parameters, let's use the absolute magnitude.
-    elif 'PLX' in fits_header.keys():
+    # If we have no stellar parameters, let's use the absolute magnitude (if available).
+    plx_value = fits_header.get('PLX', None)
+    if plx_value is not None and plx_value != 'None':
         if fits_header['PLX'] > 0:
+
+            print('    --> Parallax is '+str(fits_header['PLX'])+' mas.')
+
             if 'G' in fits_header.keys():
                 absolute_mag = fits_header['G'] + 5 * np.log10(fits_header['PLX']/10)
-                print('  --> Object has no stellar parameters measured, but absolute M_G is '+"{:.1f}".format(absolute_mag))
+                print('    --> Object has no stellar parameters measured, but absolute M_G is '+"{:.1f}".format(absolute_mag))
             elif 'V' in fits_header.keys():
                 absolute_mag = fits_header['V'] + 5 * np.log10(fits_header['PLX']/10)
-                print('  --> Object has no stellar parameters measured, but absolute M_V is '+"{:.1f}".format(absolute_mag))
+                print('    --> Object has no stellar parameters measured, but absolute M_V is '+"{:.1f}".format(absolute_mag))
             else:
-                print('  --> Object has no stellar parameters measured, nor absolute magnitude (although parallax available). Using Sun spectrum by default.')
+                print('    --> Object has no stellar parameters measured, nor absolute magnitude (although parallax available). Using Sun spectrum by default.')
                 closest_korg_spectrum = 'sun'
                 return(closest_korg_spectrum)
 
@@ -1003,18 +1022,18 @@ def find_closest_korg_spectrum(available_korg_spectra,fits_header):
             
             if absolute_mag < 8 and color > 1:
                 closest_korg_spectrum = 'arcturus'
-                print('  --> Object is likely giant based on magnitude (< 8 mag) and color  (> 1 mag). Using Arcturus spectrum.')
+                print('    --> Object is likely giant based on magnitude (< 8 mag) and color  (> 1 mag). Using Arcturus spectrum.')
             elif absolute_mag >= 8 and color > 1:
                 closest_korg_spectrum = '61cyga'
-                print('  --> Object is likely cool dwarf based on magnitude (> 8 mag) and color (> 1 mag). Using 61 Cyg A spectrum.')
+                print('    --> Object is likely cool dwarf based on magnitude (> 8 mag) and color (> 1 mag). Using 61 Cyg A spectrum.')
             else:
                 closest_korg_spectrum = 'sun'
-                print('  --> Object is likely dwarf based on color. Using Sun spectrum.')
+                print('    --> Object is likely dwarf based on color. Using Sun spectrum.')
         else:
             closest_korg_spectrum = 'sun'
-            print('  --> Object has no stellar parameters measured, nor absolute magnitude (parallax measurement is negative). Using Sun spectrum by default.')
+            print('    --> Object has no stellar parameters measured, nor absolute magnitude (parallax measurement is negative). Using Sun spectrum by default.')
     else:
         closest_korg_spectrum = 'sun'
-        print('  --> No TEFF/LOGG/FE_H nor absolute magnitude values available. Using Sun by default.')
+        print('    --> No TEFF/LOGG/FE_H nor absolute magnitude values available. Using Sun by default.')
 
     return(closest_korg_spectrum)

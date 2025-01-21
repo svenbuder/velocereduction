@@ -1,5 +1,7 @@
 import numpy as np
 import velocereduction as VR
+from pathlib import Path
+import pytest
 
 def test_apply_velocity_shift_to_wavelength_array():
     print('\n  --> Testing: apply_velocity_shift_to_wavelength_array()')
@@ -33,9 +35,24 @@ def test_voigt_absorption_profile():
     for bounds in [None, ([5400.0, 0.0, 0.0, 0.0, 0.0], [5600.0, 1.0, 1.0, 1.0, 1.0])]:
         print(f"Bounds: {bounds}")
         fit_parameters, fit_covariances = VR.utils.fit_voigt_absorption_profile(wavelength, flux, initial_guess, bounds=bounds)
-        print(f"Fit Parameters: {fit_parameters}")
-        print(f"Fit Covariances: {fit_covariances}")
+        print(f"      Fit Parameters: {fit_parameters}")
+        print(f"      Fit Covariances: {np.shape(fit_covariances)}")
 
+    # Let's test using not the correct bounds
+    with pytest.raises(ValueError) as excinfo:
+        # Call the function with the mock FITS header
+        print('  --> Testing with incorrect bounds -- should raise ValueError and continue testing.')
+        fit_parameters, fit_covariances = VR.utils.fit_voigt_absorption_profile(wavelength, flux, initial_guess, bounds = [(10,10)])
+    assert "Bounds must be a tuple or list of length 2, containing the lower and upper bounds for each of the 5 parameters [line_centre, line_offset, line_depth, sigma, gamma]." in str(excinfo.value)
+
+    # Let's test using not exactly 5 initial guess parameters
+    with pytest.raises(ValueError) as excinfo:
+        initial_guess = [5450.0, 0.5, 0.5, 0.5]
+        # Call the function with the mock FITS header
+        print('  --> Testing with not exactly 5 initial guess parameters -- should raise ValueError and continue testing.')
+        fit_parameters, fit_covariances = VR.utils.fit_voigt_absorption_profile(wavelength, flux, initial_guess)
+    assert "Initial guess must contain 5 values: [line_centre, line_offset, line_depth, sigma, gamma]." in str(excinfo.value)
+    
     print('\n  --> DONE Testing: fit_voigt_absorption_profile() and voigt_absorption_profile()')
 
 def test_lc_peak_gauss():
@@ -47,7 +64,7 @@ def test_lc_peak_gauss():
     amplitude = 1.0
     offset = 0.0
     lc_peak = VR.utils.lc_peak_gauss(pixels, center, sigma, amplitude, offset)
-    print(f"Light Curve Peak for Gaussian with center at {center}, sigma of {sigma}, amplitude of {amplitude}, and offset of {offset}:")
+    print(f"  --> Light Curve Peak for Gaussian with center at {center}, sigma of {sigma}, amplitude of {amplitude}, and offset of {offset}:")
     print(lc_peak)
 
     print('\n  --> DONE Testing: lc_peak_gauss()')
@@ -62,11 +79,26 @@ def test_gaussian_absorption_profile():
     initial_guess = [5500.0, 0.5, 0.5]
 
     for bounds in [None, ([5400.0, 0.0, 0.0], [5600.0, 1.0, 1.0])]:
-        print(f"Bounds: {bounds}")
+        print(f"  Bounds: {bounds}")
         fit_parameters, fit_covariances = VR.utils.fit_gaussian_absorption_profile(wavelength, flux, initial_guess, bounds=bounds)
-        print(f"Fit Parameters: {fit_parameters}")
-        print(f"Fit Covariances: {fit_covariances}")
+        print(f"      Fit Parameters: {fit_parameters}")
+        print(f"      Fit Covariances: {np.shape(fit_covariances)}")
     
+    # Let's test using not the correct bounds
+    with pytest.raises(ValueError) as excinfo:
+        # Call the function with the mock FITS header
+        print('  --> Testing with incorrect bounds -- should raise ValueError and continue testing.')
+        fit_parameters, fit_covariances = VR.utils.fit_gaussian_absorption_profile(wavelength, flux, initial_guess, bounds = [(10,10)])
+    assert "Bounds must be a tuple or list of length 2, containing the lower and upper bounds for each of the 3 parameters [line_centre, line_depth, line_sigma]." in str(excinfo.value)
+
+    # Let's test using not exactly 3 initial guess parameters
+    with pytest.raises(ValueError) as excinfo:
+        initial_guess = [5450.0, 0.5, 0.5, 0.5]
+        # Call the function with the mock FITS header
+        print('  --> Testing with not exactly 3 initial guess parameters -- should raise ValueError and continue testing.')
+        fit_parameters, fit_covariances = VR.utils.fit_gaussian_absorption_profile(wavelength, flux, initial_guess)
+    assert "Initial guess must contain 3 values: [line_centre, line_depth, line_sigma]." in str(excinfo.value)
+
     print('\n  --> DONE Testing: fit_gaussian_absorption_profile() and gaussian_absorption_profile()')
     
 def test_calculate_barycentric_velocity_correction():
@@ -115,7 +147,7 @@ def test_read_veloce_fits_image_and_metadata():
     print('\n  --> Testing: read_veloce_fits_image_and_metadata()')
 
     # Call the function with one of the provided FITS images
-    image, metadata = VR.utils.read_veloce_fits_image_and_metadata('observations/001122/ccd_1/22nov10030.fits')
+    image, metadata = VR.utils.read_veloce_fits_image_and_metadata(str(Path(__file__).resolve().parent)+'/../observations/001122/ccd_1/22nov10030.fits')
     # Print the image and header
     print(f"Image shape: {np.shape(image)}")
     print(f"Metadata: {metadata}")
@@ -127,7 +159,7 @@ def test_identify_calibration_and_science_runs():
 
     # Call the function with the provided raw data directory
     date = '001122'
-    raw_data_dir = 'observations/'
+    raw_data_dir = str(Path(__file__).resolve().parent)+'/../observations/'
 
     for each_science_run_separately in [False, True]:
         print(f"Each Science Run Separately: {each_science_run_separately}")
@@ -314,13 +346,15 @@ def test_find_best_radial_velocity_from_fits_header():
         'VRAD': 234.0,
         'E_VRAD': 1.0,
         'VRAD_LIT': 233.0,
-        'E_VRAD_LIT': 2.0
+        'E_VRAD_LIT': 2.0,
+        'VRAD_BIB': '2018A&A...616A...7S'
     }
     fits_header_vrad_both_veloce_worse = {
         'VRAD': 234.0,
         'E_VRAD': 1.0,
         'VRAD_LIT': 233.0,
-        'E_VRAD_LIT': 0.1
+        'E_VRAD_LIT': 0.1,
+        'VRAD_BIB': '2018A&A...616A...7S'
     }
     fits_header_vrad_veloce_only = {
         'VRAD': 234.0,
@@ -330,21 +364,31 @@ def test_find_best_radial_velocity_from_fits_header():
         'VRAD': 'None',
         'E_VRAD': 'None',
         'VRAD_LIT': 233.0,
-        'E_VRAD_LIT': 0.1
+        'E_VRAD_LIT': 0.1,
+        'VRAD_BIB': '2018A&A...616A...7S'
     }
+
+    for fits_header in [fits_header_vrad_both_veloce_better, fits_header_vrad_both_veloce_worse, fits_header_vrad_veloce_only, fits_header_vrad_literature_only]:
+        # Call the function with the mock FITS header
+        for key, value in fits_header.items():
+            print(f"      {key}: {value}")
+        best_vrad = VR.utils.find_best_radial_velocity_from_fits_header(fits_header)
+        # Print the best radial velocity
+        print(f"  --> Best Radial Velocity: {best_vrad} km/s"+'\n')
+
+    # Now let's test a case that will raise a ValueError
     fits_header_vrad_none = {
         'VRAD': 'None',
         'E_VRAD': 'None',
     }
+    expected_msg = 'No valid option for VRAD avaialble. Aborting calibration via synthesis.'
 
-    for fits_header in [fits_header_vrad_both_veloce_better, fits_header_vrad_both_veloce_worse, fits_header_vrad_veloce_only, fits_header_vrad_literature_only, fits_header_vrad_none]:
-        # Call the function with the mock FITS header
-        for key, value in fits_header.items():
+    for key, value in fits_header.items():
             print(f"      {key}: {value}")
-        print(fits_header)
-        best_vrad, e_best_vrad = VR.utils.find_best_radial_velocity_from_fits_header(fits_header)
-        # Print the best radial velocity
-        print(f"  --> Best Radial Velocity: {best_vrad} +/- {e_best_vrad} km/s"+'\n')
+
+    with pytest.raises(ValueError) as excinfo:
+        best_vrad = VR.utils.find_best_radial_velocity_from_fits_header(fits_header_vrad_none)
+        assert expected_msg in str(excinfo.value), f"Expected message '{expected_msg}' not found in '{str(excinfo.value)}'"
 
     print('\n  --> DONE Testing: find_best_radial_velocity_from_fits_header()')
 
@@ -422,6 +466,10 @@ def test_find_closest_korg_spectrum():
         'G': 5.0,
         'R': 5.0
     }
+    fits_header_negative_parallax = {
+        'OBJECT': 'None parallax',
+        'PLX': -0.1,
+    }
     fits_header_none_parallax = {
         'OBJECT': 'None parallax',
         'PLX': 'None',
@@ -435,9 +483,9 @@ def test_find_closest_korg_spectrum():
         fits_header_18sco, fits_header_cool_giant, fits_header_cool_dwarf, fits_header_metal_poor_dwarf,
         fits_header_solar_dwarf, fits_header_only_low_fe_h, fits_header_only_solar_fe_h, fits_header_only_plx_bgr_cool_dwarf,
         fits_header_only_plx_bgr_warm_dwarf, fits_header_only_plx_vr_cool_dwarf, fits_header_only_plx_vr_warm_dwarf,
-        fits_header_only_plx_bgr_cool_giant, fits_header_none_parallax, fits_header_not_even_parallax
+        fits_header_only_plx_bgr_cool_giant, fits_header_negative_parallax, fits_header_none_parallax, fits_header_not_even_parallax
     ]:
-        print('Testing '+fits_header['OBJECT'])
+        print('  --> Testing '+fits_header['OBJECT'])
         closest_korg_spectrum = VR.utils.find_closest_korg_spectrum(korg_spectra,fits_header)
         print(f"  --> Closest Korg Spectrum for '{fits_header['OBJECT']}': {closest_korg_spectrum}")
 
