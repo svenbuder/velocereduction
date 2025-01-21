@@ -13,7 +13,7 @@ from matplotlib.backends.backend_pdf import PdfPages
 
 from . import config
 
-from .utils import polynomial_function, calculate_barycentric_velocity_correction, velocity_shift, fit_voigt_absorption_profile, radial_velocity_from_line_shift, voigt_absorption_profile, wavelength_vac_to_air, wavelength_air_to_vac, lc_peak_gauss, lasercomb_numbers_from_wavelength, lasercomb_wavelength_from_numbers, read_in_wavelength_solution_coefficients_tinney
+from .utils import polynomial_function, calculate_barycentric_velocity_correction, apply_velocity_shift_to_wavelength_array, fit_voigt_absorption_profile, radial_velocity_from_line_shift, voigt_absorption_profile, wavelength_vac_to_air, wavelength_air_to_vac, lc_peak_gauss, lasercomb_numbers_from_wavelength, lasercomb_wavelength_from_numbers, read_in_wavelength_solution_coefficients_tinney
 
 def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, overwrite=False, debug=False, use_ylim=False):
     """
@@ -487,7 +487,7 @@ def calibrate_single_order(file, order, barycentric_velocity=None, optimise_lc_s
     file[order].data['WAVE_VAC'] = wavelength_solution_vacuum
 
     if barycentric_velocity is not None:
-        file[order].data['WAVE_VAC'] = velocity_shift(barycentric_velocity, file[order].data['WAVE_VAC'])
+        file[order].data['WAVE_VAC'] = apply_velocity_shift_to_wavelength_array(barycentric_velocity, file[order].data['WAVE_VAC'])
 
     # Using conversion from Birch, K. P., & Downs, M. J. 1994, Metro, 31, 315
     # Consistent to the 2024 version of Korg (https://github.com/ajwheeler/Korg.jl)
@@ -538,7 +538,7 @@ def plot_wavelength_calibrated_order_data(order, science_object, file, overview_
     
     # Plot title with radial and barycentric velocity information
     if isinstance(file[0].header['VRAD'], float):
-        wavelength_to_plot = velocity_shift(velocity_in_kms=file[0].header['VRAD'], wavelength_array=wavelength_to_plot)
+        wavelength_to_plot = apply_velocity_shift_to_wavelength_array(velocity_in_kms=file[0].header['VRAD'], wavelength_array=wavelength_to_plot)
         f.suptitle(config.date+' '+science_object+' '+file[order].header['EXTNAME']+ r' $v_\mathrm{rad} = '+str(file[0].header['VRAD'])+r' \pm '+str(file[0].header['E_VRAD'])+r'\,\mathrm{km\,s^{-1}}$, $v_\mathrm{bary} = '+"{:.2f}".format(np.round(file[0].header['BARYVEL'],2))+r'\,\mathrm{km\,s^{-1}}$')
     else:
         f.suptitle(config.date+' '+science_object+' '+file[order].header['EXTNAME']+ r' $v_\mathrm{rad} = N/A, $v_\mathrm{bary} = '+"{:.2f}".format(np.round(file[0].header['BARYVEL'],2))+r'\,\mathrm{km\,s^{-1}}$')
