@@ -34,7 +34,8 @@ Simbad.add_votable_fields('ids')
 Simbad.add_votable_fields('velocity')
 Simbad.add_votable_fields('parallax')
 if astroquery.__version__ < '0.4.8':
-    Simbad.add_votable_fields('fe_h')
+    simbad_fe_h_query = Simbad()
+    simbad_fe_h_query.add_votable_fields('mesFe_h')
     simbad_teff = 'Fe_H_Teff'
     simbad_logg = 'Fe_H_log_g'
     simbad_fe_h = 'Fe_H_Fe_H'
@@ -46,7 +47,8 @@ if astroquery.__version__ < '0.4.8':
     plx_error = 'PLX_ERROR'
     rvz_error = 'RVZ_ERROR'
 else:
-    Simbad.add_votable_fields('mesFe_h')
+    simbad_fe_h_query = Simbad()
+    simbad_fe_h_query.add_votable_fields('mesfe_h')
     simbad_teff = 'mesfe_h.teff'
     simbad_logg = 'mesfe_h.log_g'
     simbad_fe_h = 'mesfe_h.fe_h'
@@ -773,22 +775,28 @@ def update_fits_header_via_crossmatch_with_simbad(fits_header):
     # We test for HIP and Gaia DR3, otherwise we crossmatch via RA/Dec.
     if object_id[:3] == 'HIP':
         print('\n  --> Identified '+object_id+' as a HIP catalogue entry. Crossmatching accordingly.')
-        simbad_match = Simbad.query_object(object_id)        
+        simbad_match = Simbad.query_object(object_id)
+        simbad_match_fe_h = simbad_fe_h_query.query_object(object_id)
     elif object_id.isdigit() and len(object_id) > 10:
         print('\n  --> Identified '+object_id+' as a likely Gaia DR3 source_id. Crossmatching accordingly.')
         simbad_match = Simbad.query_object('Gaia DR3 '+object_id)
+        simbad_match_fe_h = simbad_fe_h_query.query_object('Gaia DR3 '+object_id)
     elif '_' in object_id:
         print('\n  --> '+object_id+' looks like a non-catalogue entry. Crossmatching via Ra/Dec within 2 arcsec.')
         object_coordinate = SkyCoord(ra = float(ra), dec = float(dec), frame='icrs', unit='deg')
         simbad_match = Simbad.query_region(object_coordinate, radius=2*u.arcsec)
+        simbad_match_fe_h = simbad_fe_h_query.query_region(object_coordinate, radius=2*u.arcsec)
     else:
         print('\n  --> '+object_id+' does not look like either Gaia DR3 or HIP entry. Crossmatching with Simbad first and otherwise via Ra/Dec.')
-        try:
-            simbad_match = Simbad.query_object(object_id)
-        except:
+        simbad_match = Simbad.query_object(object_id)
+        if len(simbad_match) > 0:
+            print('Found entry in Simbad.')
+            simbad_match_fe_h = simbad_fe_h_query.query_object(object_id)
+        else:
             print('  --> '+object_id+' not a valid Simbad entry. Crossmatching via Ra/Dec within 2 arcsec.')
             object_coordinate = SkyCoord(ra = float(ra), dec = float(dec), frame='icrs', unit='deg')
             simbad_match = Simbad.query_region(object_coordinate, radius=2*u.arcsec)
+            simbad_match_fe_h = simbad_fe_h_query.query_region(object_coordinate, radius=2*u.arcsec)
 
     # Let's check how many matches we got and return if there are none:
     if len(simbad_match) == 0:
@@ -799,6 +807,13 @@ def update_fits_header_via_crossmatch_with_simbad(fits_header):
     else:
         print('  --> Found more than one entry in Simbad. Using the first match.')
         simbad_match = simbad_match[0]
+    if len(simbad_match_fe_h) == 0:
+        print('  --> Did not find a match in Simbad for Fe/H.')
+    elif len(simbad_match_fe_h) == 1:
+        simbad_match_fe_h = simbad_match_fe_h[0]
+    else:
+        print('  --> Found more than one entry in Simbad for Fe/H. Using the first match.')
+        simbad_match_fe_h = simbad_match_fe_h[0]
 
     # Veloce is meant to observe only down to 12th magnitude.
     # Let's test if the object is bright enough for Veloce (G < 12 mag or V < 12 mag) and print a warning if not.
@@ -847,15 +862,22 @@ def update_fits_header_via_crossmatch_with_simbad(fits_header):
     elif 'VRAD_LIT' in fits_header.keys():
         print('  --> Found literature VRAD in Simbad: '+str(fits_header['VRAD_LIT'])+' km/s by '+str(fits_header['VRAD_BIB']))
 
-    # Add literature information on stellar parameters Teff/logg/[Fe/H]
-    if simbad_teff in simbad_match.keys():
-        fits_header['TEFF_LIT'] = (simbad_match[simbad_teff], 'Effective temperature from Simbad')
-    if simbad_logg in simbad_match.keys():
-        fits_header['LOGG_LIT'] = (simbad_match[simbad_logg], 'Surface gravity from Simbad')
-    if simbad_fe_h in simbad_match.keys():
-        fits_header['FE_H_LIT'] = (simbad_match[simbad_fe_h], 'Iron abundance from Simbad')
-    if simbad_fe_h_ref in simbad_match.keys():
-        fits_header['TLF_BIB'] = (simbad_match[simbad_fe_h_ref], 'Bibcode of Simbad TEFF/LOGG/FE_H')
+    if len(simbad_match_fe_h) > 0:
+        # Add literature information on stellar parameters Teff/logg/[Fe/H]
+        if simbad_teff in simbad_match_fe_h.keys():
+            fits_header['TEFF_LIT'] = (simbad_match_fe_h[simbad_teff], 'Effective temperature from Simbad')
+        if simbad_logg in simbad_match_fe_h.keys():
+            fits_header['LOGG_LIT'] = (simbad_match_fe_h[simbad_logg], 'Surface gravity from Simbad')
+        if simbad_fe_h in simbad_match_fe_h.keys():
+            fits_header['FE_H_LIT'] = (simbad_match_fe_h[simbad_fe_h], 'Iron abundance from Simbad')
+        if simbad_fe_h_ref in simbad_match_fe_h.keys():
+            fits_header['TLF_BIB'] = (simbad_match_fe_h[simbad_fe_h_ref], 'Bibcode of Simbad TEFF/LOGG/FE_H')
+
+    else:
+        fits_header['TEFF_LIT'] = ('None', 'Effective temperature from Simbad')
+        fits_header['LOGG_LIT'] = ('None', 'Surface gravity from Simbad')
+        fits_header['FE_H_LIT'] = ('None', 'Iron abundance from Simbad')
+        fits_header['TLF_BIB'] = ('None', 'Bibcode of Simbad TEFF/LOGG/FE_H')
 
     if np.all(['TEFF_LIT' in fits_header.keys(),'TEFF_LIT' in fits_header.keys(),'LOGG_LIT' in fits_header.keys(),'FE_H_LIT' in fits_header.keys()]):
         print('  --> Found literature TEFF/LOGG/FE_H in Simbad: '+str(fits_header['TEFF_LIT'])+'/'+str(fits_header['LOGG_LIT'])+'/'+str(fits_header['FE_H_LIT'])+' by '+str(fits_header['TLF_BIB']))
