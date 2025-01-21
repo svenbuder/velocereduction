@@ -147,7 +147,7 @@ def substract_overscan(full_image, metadata, debug_overscan = False):
         plt.close()
         
     if debug_overscan:
-        print('  -->',overscan_median, overscan_rms, metadata['READOUT'])
+        print('      -->',overscan_median, overscan_rms, metadata['READOUT'])
         
     return(trimmed_image, overscan_median, overscan_rms, metadata['READOUT'])
 
@@ -471,9 +471,13 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
         - `Science` enables additional metadata extraction.
     """
 
+    # Check if Flat, LC, Bstar, Science, ThXe are all False
+    if not any([Flat, LC, Bstar, Science, ThXe]):
+        raise ValueError('To extract orders appropriately, at least one of the following flags must be set to True: Flat, LC, Bstar, Science, ThXe.')
+
     # Raise ValueError if we try to update tramlines based on flat field images without Flat being True
     if (not Flat) & (update_tramlines_based_on_flat):
-        raise ValueError('Cannot update tramlines based on flat field images if Flat is False')
+        raise ValueError('Can only update tramlines based on flat field images (not possible if Flat is False).')
     
     # Check if exposure_time_threshold_darks is a float or int
     if not isinstance(exposure_time_threshold_darks, (int, float)):
@@ -481,7 +485,7 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
 
     # Raise warning if we use Science exposures but do not provide master darks.
     if (Science) & (master_darks is None):
-        print('  -> Warning: Note using any dark subtraction.')
+        print('     --> Warning: Note using any dark subtraction.')
 
     order_ranges, order_beginning_coefficients, order_ending_coefficients = read_in_order_tramlines()
 
@@ -731,12 +735,10 @@ def find_tramline_beginning_and_ending(order, x_index, x_pixels, previous_beginn
     differences = [x_pixels[i+1] - x_pixels[i] for i in range(len(x_pixels) - 1)]
 
     if debug:
-        print('x_index:')
-        print(x_index)
-        print('x_pixels:')
-        print(x_pixels)
-        print('differences')
-        print(differences)
+        print('\n  --> Debugging Traminline Beginning/Ending for Order:',order)
+        print('  --> x_index:',x_index)
+        print('  --> x_pixels:',x_pixels[0],'...',x_pixels[-1])
+        print('  --> Differences:',differences)
 
     # Initialise tramline_beginning and tramline_ending as nans    
     tramline_beginning = np.nan
@@ -764,12 +766,11 @@ def find_tramline_beginning_and_ending(order, x_index, x_pixels, previous_beginn
                     current_gap = 0
                 else:
                     if debug:
-                        print('Not using: ',x_pixels[i]+1, x_pixels[i]+1 - tramline_beginning, 'expected: ',expected_tramline_width-3,expected_tramline_width+3)
+                        print('  --> Not using: '+str(x_pixels[i]+1)+' with width '+str(x_pixels[i]+1 - tramline_beginning)+' because the following width was expected: '+str(expected_tramline_width-3)+'-'+str(expected_tramline_width+3))
                     current_gap = 0
                     
     if debug:
-        print('x_index Initial Beginning/End')
-        print(x_index, tramline_beginning, tramline_ending)
+        print('  --> x_index Initial Beginning/End: ',x_index, tramline_beginning, tramline_ending)
                     
     # Force new beginning to be close to beginning of previous pixel within tolerance_to_previous
     if (np.abs(previous_beginning - tramline_beginning) > tolerance_to_previous):
@@ -779,7 +780,7 @@ def find_tramline_beginning_and_ending(order, x_index, x_pixels, previous_beginn
     elif np.isnan(tramline_beginning):
         if previous_beginning > 2:
             if debug:
-                print('-> tramline_beginning = previous_beginning')
+                print('  --> Correction 1: Setting tramline_beginning = previous_beginning')
             # For CCD1, we know that positions tend to decrease downwards -- but let's make sure it's not left of the search range!
             if order[4] == '1':
                 tramline_beginning = np.max([x_pixels[0]+5,previous_beginning - 1])
@@ -799,40 +800,40 @@ def find_tramline_beginning_and_ending(order, x_index, x_pixels, previous_beginn
                 tramline_beginning = previous_beginning.clip(min = x_pixels[0]+5, max = x_pixels[-1]-5)
         else:
             if debug:
-                print('-> beginning too far left')
+                print('  --> Exception 1: Beginning too far left; returning (np.nan,np.nan)')
             return(np.nan, np.nan)
 
     # Force new ending to be close to ending of previous pixel within tolerance_to_previous
     if (np.abs(previous_ending - tramline_ending) > tolerance_to_previous) & (previous_ending - tramline_beginning < expected_tramline_width+3):
         if debug:
-            print('Difference previous_ending - tramline_ending above tolerance of '+str(tolerance_to_previous)+' and previous ending within expected_tramline_width')
+            print('  --> Correction 2: Setting tramline_ending = previous_ending, because difference previous_ending - tramline_ending above tolerance of '+str(tolerance_to_previous)+' and previous ending within expected_tramline_width')
         tramline_ending = previous_ending
     # Replace with previous, if we could not find a tramline_ending
     # but only if the previous tramline_ending is not too close to the left edge
     elif np.isnan(tramline_ending):
         if previous_ending > 2:
             if debug:
-                print('-> tramline_ending = previous_ending')
+                print('  --> Correction 3: Too far off from previous ending. Setting tramline_ending = previous_ending.clip(min = x_pixels[0]+5, max = x_pixels[-1]-5)')
             tramline_ending = previous_ending.clip(min = x_pixels[0]+5, max = x_pixels[-1]-5)
         else:
             if debug:
-                print('-> ending too far left 1')
+                print('  --> Exception 2: Ending too far left 1, returning (np.nan,np.nan)')
             return(np.nan, np.nan)
     # If the tramline ending is too close to left edge, we return nans
     elif tramline_ending <= expected_tramline_width+3:
         if debug:
-            print('-> ending too far left 2')
+            print('  --> Exception 3: Ending too far left 2, returning (np.nan,np.nan)')
         return(np.nan, np.nan)
     
     # Make sure that the tramlines are reasonably wide.
     # We expect a tramline with width expected_tramline_width within tolerance.
     if tramline_ending - tramline_beginning < expected_tramline_width-4:
         if debug:
-            print('-> not wide enough', tramline_ending - tramline_beginning)
+            print('  --> Exception 4: Tramline not wide enough: ', tramline_ending - tramline_beginning, ' (expexting ',expected_tramline_width,'). Returning (np.nan,np.nan)')
         return(np.nan, np.nan)
 
     if debug:
-        print('-> end, ',tramline_beginning, tramline_ending)
+        print('  --> No Exception. Using: ',tramline_beginning, tramline_ending)
     
     return(tramline_beginning, tramline_ending)
 
@@ -1081,7 +1082,7 @@ def optimise_tramline_polynomial(overscan_subtracted_images, order, order_ranges
                 )
                 
                 if debug_find_tramline_row:
-                    print(x_index, tramline_beginning, tramline_ending, tramline_ending-tramline_beginning)
+                    print('  --> x_index, beginning, ending, width: ',x_index, tramline_beginning, tramline_ending, tramline_ending-tramline_beginning)
 
                 x_pixels_tramline = []
                 if np.isfinite(tramline_beginning) & np.isfinite(tramline_ending):
@@ -1129,11 +1130,11 @@ def optimise_tramline_polynomial(overscan_subtracted_images, order, order_ranges
             )[0]
         except:
             if debug:
-                print('Could not fit end of order '+order+'. Using old ending.')
+                print('  --> Could not fit end of order '+order+'. Using old ending.')
             order_ending_fit = old_order_ending
     else:
         if debug:
-            print('Skipping fitting for '+order+'. Using old values.')
+            print('  --> Skipping fitting for '+order+'. Using old values.')
         order_beginning_fit = old_order_beginning
         order_ending_fit = old_order_ending
 
@@ -1195,14 +1196,13 @@ def optimise_tramline_polynomial(overscan_subtracted_images, order, order_ranges
             np.nanmin([np.nanmax(order_xrange_end) + 20, image_dimensions[1] + 20])
         )
 
-        print('Order: ',order_ending_fit)
-        print('Old vs New with old/new buffers: ',old_buffer, buffer[order])
-        print('Beginning:')
-        print('  --> Old: ',[f"{number:.4e}" for number in old_order_beginning])
-        print('  --> New: ',[f"{number:.4e}" for number in order_beginning_fit])
-        print('Ending:')
-        print('  --> Old: ',[f"{number:.4e}" for number in old_order_ending])
-        print('  --> New: ',[f"{number:.4e}" for number in order_ending_fit])
+        print('  --> Old vs New with old/new buffers: ',old_buffer, buffer[order])
+        print('  --> Beginning:')
+        print('      --> Old: ',[f"{number:.4e}" for number in old_order_beginning])
+        print('      --> New: ',[f"{number:.4e}" for number in order_beginning_fit])
+        print('  --> Ending:')
+        print('      --> Old: ',[f"{number:.4e}" for number in old_order_ending])
+        print('      --> New: ',[f"{number:.4e}" for number in order_ending_fit])
         
         ax.set_xlabel('X Pixels (Zoom)',fontsize=15)
         ax.set_ylabel('Y Pixels',fontsize=15)
