@@ -123,6 +123,11 @@ def fit_voigt_absorption_profile(wavelength, flux, initial_guess, bounds=None):
                amplitude, Gaussian sigma, and Lorentzian gamma.
     """
 
+    if len(initial_guess) != 5:
+        raise ValueError("Initial guess must contain 5 values: [line_centre, line_offset, line_depth, sigma, gamma].")
+    if bounds is not None and len(bounds) != 2:
+        raise ValueError("Bounds must be a tuple or list of length 2, containing the lower and upper bounds for each of the 5 parameters [line_centre, line_offset, line_depth, sigma, gamma].")
+
     # Fit a Voigt Profile to the spectrum
     if bounds is not None:
         popt, pcov = curve_fit(voigt_absorption_profile, wavelength, flux, p0=initial_guess, bounds=bounds)
@@ -194,6 +199,11 @@ def fit_gaussian_absorption_profile(wavelength, flux, initial_guess, bounds=None
     This function is particularly useful for analyzing astronomical spectra to characterize the properties
     of absorption lines.
     """
+
+    if len(initial_guess) != 3:
+        raise ValueError("Initial guess must contain 3 values: [line_centre, line_depth, line_sigma].")
+    if bounds is not None and len(bounds) != 2:
+        raise ValueError("Bounds must be a tuple or list of length 2, containing the lower and upper bounds for each of the 3 parameters [line_centre, line_depth, line_sigma].")
 
     # Fit a Gaussian to the spectrum
     if bounds is not None:
@@ -600,16 +610,14 @@ def check_repeated_observations(science_runs):
 
     # Loop through each key in the input dictionary
     for key in science_runs.keys():
-        # Assume the format is target_run and split to get the target and the run identifier
-        for key in science_runs.keys():
         # Check if the key contains an underscore and split appropriately
-            if '_' in key:
-                target, run = key.rsplit('_', 1)
-                # Collect runs associated with each target
-                if target in target_runs:
-                    target_runs[target].append(run)
-                else:
-                    target_runs[target] = [run]
+        if '_' in key:
+            target, run = key.rsplit('_', 1)
+            # Collect runs associated with each target
+            if target in target_runs:
+                target_runs[target].append(run)
+            else:
+                target_runs[target] = [run]
 
     # Create a dictionary to store targets with multiple observations
     repeated_observations = {target: runs for target, runs in target_runs.items() if len(runs) > 1}

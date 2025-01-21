@@ -7,7 +7,7 @@ def test_apply_velocity_shift_to_wavelength_array():
     velocity_in_kms = 10.0
     wavelength_array = np.arange(5000, 6000, 1)
     shifted_wavelength = utils.apply_velocity_shift_to_wavelength_array(velocity_in_kms, wavelength_array)
-    print(f"wavelength after velocity shift of {velocity_in_kms} km/s: {shifted_wavelength}")
+    print(f"wavelength after velocity shift of {velocity_in_kms} km/s: {shifted_wavelength[:3]} from {wavelength_array[:3]} (truncated at first 3 elements)")
 
     print('\n  --> DONE Testing: apply_velocity_shift_to_wavelength_array()')
 
@@ -16,7 +16,7 @@ def test_radial_velocity_from_line_shift():
 
     line_centre_observed = 6560.0
     line_centre_rest = 6562.7970
-    vrad = utils.radial_velocity_from_line_shift()
+    vrad = utils.radial_velocity_from_line_shift(line_centre_observed, line_centre_rest)
     print(f"Radial Velocity: {vrad} km/s based on observed line centre at {line_centre_observed} Angstroms and rest line centre at {line_centre_rest} Angstroms.")
 
     print('\n  --> DONE Testing: radial_velocity_from_line_shift()')
@@ -26,10 +26,11 @@ def test_voigt_absorption_profile():
 
     # Create a mock absorption profile
     wavelength = np.arange(5000, 6000, 1)
-    flux = 1.0 - np.exp(-0.5 * (wavelength - 5500.0)**2 / 100.0**2)
-    initial_guess = [0.1, 5500.0, 100.0, 0.1]
+    flux = 1.0 - np.exp(-0.7 * (wavelength - 5500.0)**2 / 10.0**2)
+    # line_centre, line_offset, line_depth, sigma, gamma
+    initial_guess = [5450.0, 0.5, 0.5, 0.5, 0.5]
 
-    for bounds in [None, ([0.0, 5400.0, 50.0, 0.0], [1.0, 5600.0, 150.0, 1.0])]:
+    for bounds in [None, ([5400.0, 0.0, 0.0, 0.0, 0.0], [5600.0, 1.0, 1.0, 1.0, 1.0])]:
         print(f"Bounds: {bounds}")
         fit_parameters, fit_covariances = utils.fit_voigt_absorption_profile(wavelength, flux, initial_guess, bounds=bounds)
         print(f"Fit Parameters: {fit_parameters}")
@@ -40,13 +41,14 @@ def test_voigt_absorption_profile():
 def test_lc_peak_gauss():
     print('\n  --> Testing: lc_peak_gauss()')
 
-    pixels = np.arange(0, 100, 1)
-    center = 50.0
-    sigma = 10.0
+    pixels = np.arange(0, 10, 1)
+    center = 5.0
+    sigma = 2.0
     amplitude = 1.0
     offset = 0.0
     lc_peak = utils.lc_peak_gauss(pixels, center, sigma, amplitude, offset)
-    print(f"Light Curve Peak: {lc_peak} for Gaussian with center at {center}, sigma of {sigma}, amplitude of {amplitude}, and offset of {offset}")
+    print(f"Light Curve Peak for Gaussian with center at {center}, sigma of {sigma}, amplitude of {amplitude}, and offset of {offset}:")
+    print(lc_peak)
 
     print('\n  --> DONE Testing: lc_peak_gauss()')
 
@@ -55,10 +57,11 @@ def test_gaussian_absorption_profile():
 
     # Create a mock absorption profile
     wavelength = np.arange(5000, 6000, 1)
-    flux = 1.0 - np.exp(-0.5 * (wavelength - 5500.0)**2 / 100.0**2)
-    initial_guess = [0.1, 5500.0, 100.0, 0.1]
+    flux = 1.0 - np.exp(-0.7 * (wavelength - 5500.0)**2 / 10.0**2)
+    # line_centre, line_depth, line_sigma
+    initial_guess = [5500.0, 0.5, 0.5]
 
-    for bounds in [None, ([0.0, 5400.0, 50.0, 0.0], [1.0, 5600.0, 150.0, 1.0])]:
+    for bounds in [None, ([5400.0, 0.0, 0.0], [5600.0, 1.0, 1.0])]:
         print(f"Bounds: {bounds}")
         fit_parameters, fit_covariances = utils.fit_gaussian_absorption_profile(wavelength, flux, initial_guess, bounds=bounds)
         print(f"Fit Parameters: {fit_parameters}")
@@ -66,11 +69,19 @@ def test_gaussian_absorption_profile():
     
     print('\n  --> DONE Testing: fit_gaussian_absorption_profile() and gaussian_absorption_profile()')
     
-def test_calculate_barycentric_velocity_correction(fits_header):
+def test_calculate_barycentric_velocity_correction():
     print('\n  --> Testing: calculate_barycentric_velocity_correction()')
 
+    # Mock FITS headers for testing
+    fits_header_hip = {
+        'OBJECT': 'HIP69673',
+        'MEANRA': 213.907739365913,  # Right Ascension in decimal degrees
+        'MEANDEC': 19.1682209854537, # Declination in decimal degrees
+        'UTMJD': 60359.7838614119    # Modified Julian Date at start of exposure
+    }
+
     # Call the function with the mock FITS header
-    barycentric_velocity_correction = utils.calculate_barycentric_velocity_correction(fits_header)
+    barycentric_velocity_correction = utils.calculate_barycentric_velocity_correction(fits_header_hip)
     # Print the barycentric velocity correction
     print(f"Barycentric Velocity Correction: {barycentric_velocity_correction} km/s")
 
@@ -107,7 +118,7 @@ def test_read_veloce_fits_image_and_metadata():
     image, metadata = utils.read_veloce_fits_image_and_metadata('observations/001122/ccd_1/22nov10030.fits')
     # Print the image and header
     print(f"Image shape: {np.shape(image)}")
-    print(f"Metadata: {header}")
+    print(f"Metadata: {metadata}")
 
     print('\n  --> DONE Testing: read_veloce_fits_image_and_metadata()')
 
@@ -135,7 +146,7 @@ def test_interpolate_spectrum():
     # Call the function with the mock spectrum
     interpolated_flux = utils.interpolate_spectrum(wavelength, flux, target_wavelength)
     # Print the interpolated flux
-    print(f"Interpolated flux (shape {np.shape(interpolated_flux)}) from flux with shape {np.shape(flux)} onto target wavelength with shape {np.shape(target_wavelength)}.")
+    print(f"Interpolated flux with shape {np.shape(interpolated_flux)} from flux with shape {np.shape(flux)} onto target wavelength with shape {np.shape(target_wavelength)}.")
 
     print('\n  --> DONE Testing: interpolate_spectrum()')
 
@@ -167,6 +178,7 @@ def test_read_in_wavelength_solution_coefficients_tinney():
     # Call the function with the provided wavelength solution coefficients
     coefficients = utils.read_in_wavelength_solution_coefficients_tinney()
     # Print the coefficients
+    print(coefficients)
     print(f"Found Tinney Wavelength Solution Coefficients for {len(coefficients)} orders.")
     print(f"First entry ({list(coefficients.keys())[0]}): {coefficients[0]}")
 
@@ -176,7 +188,7 @@ def test_wavelength_vac_to_air():
     print('\n  --> Testing: wavelength_vac_to_air()')
 
     # Call the function with the provided wavelength solution coefficients
-    for wavelength_vac in [6562.7970, np.arange(5000, 6000, 100)]:
+    for wavelength_vac in [6562.7970, np.arange(5000, 6000, 250)]:
         wavelength_air = utils.wavelength_vac_to_air(wavelength_vac)
         # Print the coefficients
         print(f"Vacuum Wavelength: {wavelength_vac} Angstroms --> Air Wavelength: {wavelength_air} Angstroms")
@@ -187,7 +199,7 @@ def test_wavelength_air_to_vac():
     print('\n  --> Testing: wavelength_air_to_vac()')
 
     # Call the function with the provided wavelength solution coefficients
-    for wavelength_air in [6563.2410, np.arange(5000, 6000, 100)]:
+    for wavelength_air in [6563.2410, np.arange(5000, 6000, 250)]:
         wavelength_vac = utils.wavelength_air_to_vac(wavelength_air)
         # Print the coefficients
         print(f"Air Wavelength: {wavelength_air} Angstroms --> Vacuum Wavelength: {wavelength_vac} Angstroms")
@@ -199,11 +211,11 @@ def test_check_repeated_observations():
 
     science_runs_with_repeated_observations = {
         'HIP1234': ['0001','0002'],
-        'HIP1111_0001': ['0003'],
-        'HIP1111_0002': ['0004'],
+        'HIP69673_0150': ['0150'],
+        'HIP69673_0151': ['0151'],
     }
     science_runs_witout_repeated_observations = {
-        'HIP1234': ['0001','0002']
+        'HIP69673': ['0150','0151']
     }
 
     # Run function with and without repeat observations
@@ -217,7 +229,7 @@ def test_monitor_vrad_for_repeat_observations():
     print('\n  --> Testing: monitor_vrad_for_repeat_observations()')
 
     date = '001122'
-    repeated_observations = ['0150','0151']
+    repeated_observations = {'HIP69673': ['0150', '0151']}
 
     utils.monitor_vrad_for_repeat_observations(date, repeated_observations)
 
@@ -235,7 +247,7 @@ def test_degrade_spectral_resolution():
     print('\n  --> Testing: degrade_spectral_resolution()')
 
     # Create a mock spectrum
-    wavelength = np.arange(5000, 6000, 1)
+    wavelength = np.arange(5400, 5600, 1)
     flux = 1.0 - np.exp(-0.5 * (wavelength - 5500.0)**2 / 10.0**2)
     original_resolution = 300000.
     target_resolution = 80000.
@@ -243,25 +255,16 @@ def test_degrade_spectral_resolution():
     # Call the function with the provided wavelength solution coefficients
     degraded_flux = utils.degrade_spectral_resolution(wavelength, flux, original_resolution, target_resolution)
     # Print the coefficients
+    high_res_not_one = np.where(flux != 1.0)[0]
+    low_res_not_one = np.where(degraded_flux != 1.0)[0]
     print(f"Original Resolution: {original_resolution} --> Target Resolution: {target_resolution}")
-    print(f"Original Flux: {flux} --> Degraded Flux: {degraded_flux}")
+    print(f"Flux != 1.0 at {len(high_res_not_one)} indices in high resolution spectrum.")
+    print(f"Flux != 1.0 at {len(low_res_not_one)} indices in low resolution spectrum.")
 
     print('\n  --> DONE Testing: degrade_spectral_resolution()')
 
 def test_update_fits_header_via_crossmatch_with_simbad(fits_header):
     print('\n  --> Testing: update_fits_header_via_crossmatch_with_simbad()')
-
-    # Call the function with the mock FITS header
-    updated_header = utils.update_fits_header_via_crossmatch_with_simbad(fits_header)
-    # Print the updated header to see the changes
-    print("Updated FITS Header for OBJECT "+fits_header['OBJECT']+":")
-    for key, value in updated_header.items():
-        print(f"{key}: {value}")
-
-    print('\n  --> DONE Testing: update_fits_header_via_crossmatch_with_simbad()')
-
-# Run the test function
-if __name__ == "__main__":
 
     # Mock FITS headers for testing
     fits_header_hip = {
@@ -285,6 +288,19 @@ if __name__ == "__main__":
         'UTMJD': -21.25097632    # Modified Julian Date at start of exposure
     }
 
+    for fits_header in [fits_header_hip, fits_header_gaia, fits_header_other]:
+        # Call the function with the mock FITS header
+        updated_header = utils.update_fits_header_via_crossmatch_with_simbad(fits_header)
+        # Print the updated header to see the changes
+        print("Updated FITS Header for OBJECT "+fits_header['OBJECT']+":")
+        for key, value in updated_header.items():
+            print(f"{key}: {value}")
+
+    print('\n  --> DONE Testing: update_fits_header_via_crossmatch_with_simbad()')
+
+# Run the test function
+if __name__ == "__main__":
+
     test_apply_velocity_shift_to_wavelength_array()
     
     test_radial_velocity_from_line_shift()
@@ -295,7 +311,7 @@ if __name__ == "__main__":
     
     test_gaussian_absorption_profile()
 
-    test_calculate_barycentric_velocity_correction(fits_header_hip)
+    test_calculate_barycentric_velocity_correction()
 
     test_match_month_to_date()
 
@@ -325,12 +341,6 @@ if __name__ == "__main__":
 
     test_degrade_spectral_resolution()
 
-    print('  --> Testing test_update_fits_header_via_crossmatch_with_simbad with three expected OBJECTs:')
-    print('      --> Hipparcos name ("HIP*"),')
-    print('      --> Gaia DR3 source_id (int64 with >10 digits), and')
-    print('      --> other name ("23_LZ_Gmag8").')
-    test_update_fits_header_via_crossmatch_with_simbad(fits_header_hip)
-    test_update_fits_header_via_crossmatch_with_simbad(fits_header_gaia)
-    test_update_fits_header_via_crossmatch_with_simbad(fits_header_other)
+    test_update_fits_header_via_crossmatch_with_simbad()
 
     print('\n  DONE Testing: utils.py')
