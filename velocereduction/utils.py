@@ -233,26 +233,6 @@ def calculate_barycentric_velocity_correction(fits_header):
     ).to(u.km/u.s).value
     return vbary_corr_kms
 
-def velocity_shift(velocity_in_kms, wavelength_array):
-    """
-    Applies a Doppler shift to a wavelength array based on the provided radial velocity. The Doppler effect
-    shifts the wavelengths of emitted light depending on the relative motion of the source towards or away from the observer.
-
-    Parameters:
-        velocity_in_kms (float): The radial velocity in kilometers per second. A positive value indicates
-                                 that the object is moving away from the observer, resulting in a redshift;
-                                 a negative value indicates motion towards the observer, resulting in a blueshift.
-        wavelength_array (array): The array of wavelengths to be shifted. Each wavelength in the array is
-                                  adjusted according to the Doppler formula to reflect the effects of the
-                                  radial velocity.
-
-    Returns:
-        array: A new array containing the shifted wavelengths. The shift is calculated using the formula:
-               shifted_wavelength = original_wavelength / (1 + (velocity_in_kms / c))
-               where 'c' is the speed of light in km/s (approximately 299,792.458 km/s).
-    """
-    return(wavelength_array / (1.+velocity_in_kms/299792.458))
-
 def match_month_to_date(date):
     """
     Extracts the month from a date string formatted as 'YYYYMMDD' or 'YYMMDD' and returns it as a three-letter abbreviation.
