@@ -1,12 +1,12 @@
 import numpy as np
-from velocereduction import utils
+import velocereduction as VR
 
 def test_apply_velocity_shift_to_wavelength_array():
     print('\n  --> Testing: apply_velocity_shift_to_wavelength_array()')
 
     velocity_in_kms = 10.0
     wavelength_array = np.arange(5000, 6000, 1)
-    shifted_wavelength = utils.apply_velocity_shift_to_wavelength_array(velocity_in_kms, wavelength_array)
+    shifted_wavelength = VR.utils.apply_velocity_shift_to_wavelength_array(velocity_in_kms, wavelength_array)
     print(f"wavelength after velocity shift of {velocity_in_kms} km/s: {shifted_wavelength[:3]} from {wavelength_array[:3]} (truncated at first 3 elements)")
 
     print('\n  --> DONE Testing: apply_velocity_shift_to_wavelength_array()')
@@ -16,7 +16,7 @@ def test_radial_velocity_from_line_shift():
 
     line_centre_observed = 6560.0
     line_centre_rest = 6562.7970
-    vrad = utils.radial_velocity_from_line_shift(line_centre_observed, line_centre_rest)
+    vrad = VR.utils.radial_velocity_from_line_shift(line_centre_observed, line_centre_rest)
     print(f"Radial Velocity: {vrad} km/s based on observed line centre at {line_centre_observed} Angstroms and rest line centre at {line_centre_rest} Angstroms.")
 
     print('\n  --> DONE Testing: radial_velocity_from_line_shift()')
@@ -32,7 +32,7 @@ def test_voigt_absorption_profile():
 
     for bounds in [None, ([5400.0, 0.0, 0.0, 0.0, 0.0], [5600.0, 1.0, 1.0, 1.0, 1.0])]:
         print(f"Bounds: {bounds}")
-        fit_parameters, fit_covariances = utils.fit_voigt_absorption_profile(wavelength, flux, initial_guess, bounds=bounds)
+        fit_parameters, fit_covariances = VR.utils.fit_voigt_absorption_profile(wavelength, flux, initial_guess, bounds=bounds)
         print(f"Fit Parameters: {fit_parameters}")
         print(f"Fit Covariances: {fit_covariances}")
 
@@ -46,7 +46,7 @@ def test_lc_peak_gauss():
     sigma = 2.0
     amplitude = 1.0
     offset = 0.0
-    lc_peak = utils.lc_peak_gauss(pixels, center, sigma, amplitude, offset)
+    lc_peak = VR.utils.lc_peak_gauss(pixels, center, sigma, amplitude, offset)
     print(f"Light Curve Peak for Gaussian with center at {center}, sigma of {sigma}, amplitude of {amplitude}, and offset of {offset}:")
     print(lc_peak)
 
@@ -63,7 +63,7 @@ def test_gaussian_absorption_profile():
 
     for bounds in [None, ([5400.0, 0.0, 0.0], [5600.0, 1.0, 1.0])]:
         print(f"Bounds: {bounds}")
-        fit_parameters, fit_covariances = utils.fit_gaussian_absorption_profile(wavelength, flux, initial_guess, bounds=bounds)
+        fit_parameters, fit_covariances = VR.utils.fit_gaussian_absorption_profile(wavelength, flux, initial_guess, bounds=bounds)
         print(f"Fit Parameters: {fit_parameters}")
         print(f"Fit Covariances: {fit_covariances}")
     
@@ -81,7 +81,7 @@ def test_calculate_barycentric_velocity_correction():
     }
 
     # Call the function with the mock FITS header
-    barycentric_velocity_correction = utils.calculate_barycentric_velocity_correction(fits_header_hip)
+    barycentric_velocity_correction = VR.utils.calculate_barycentric_velocity_correction(fits_header_hip)
     # Print the barycentric velocity correction
     print(f"Barycentric Velocity Correction: {barycentric_velocity_correction} km/s")
 
@@ -92,7 +92,7 @@ def test_match_month_to_date():
 
     # Call the function with the mock FITS header
     for date in ['000122','000222','000322','000422','000522','000622','000722','000822','000922','001022','001122','001222']:
-        month = utils.match_month_to_date(date)
+        month = VR.utils.match_month_to_date(date)
         # Print the month
         print(f"Month for {date}: {month}")
 
@@ -104,7 +104,7 @@ def test_polynomial_function():
     # Call the function with mock data
     x = np.arange(0, 10, 1)
     coeffs = [320.0, 0.5, 0.1, 0.01, 0.001]
-    y = utils.polynomial_function(x, *coeffs)
+    y = VR.utils.polynomial_function(x, *coeffs)
 
     # Print the polynomial function
     print(f"Polynomial Function: {coeffs[0]} + {coeffs[1]}*x + {coeffs[2]}*x^2 + {coeffs[3]}*x^3 + {coeffs[4]}*x^4")
@@ -115,7 +115,7 @@ def test_read_veloce_fits_image_and_metadata():
     print('\n  --> Testing: read_veloce_fits_image_and_metadata()')
 
     # Call the function with one of the provided FITS images
-    image, metadata = utils.read_veloce_fits_image_and_metadata('observations/001122/ccd_1/22nov10030.fits')
+    image, metadata = VR.utils.read_veloce_fits_image_and_metadata('observations/001122/ccd_1/22nov10030.fits')
     # Print the image and header
     print(f"Image shape: {np.shape(image)}")
     print(f"Metadata: {metadata}")
@@ -131,7 +131,7 @@ def test_identify_calibration_and_science_runs():
 
     for each_science_run_separately in [False, True]:
         print(f"Each Science Run Separately: {each_science_run_separately}")
-        utils.identify_calibration_and_science_runs(date, raw_data_dir, each_science_run_separately)
+        VR.utils.identify_calibration_and_science_runs(date, raw_data_dir, each_science_run_separately)
 
     print('\n  --> DONE Testing: identify_calibration_and_science_runs()')
 
@@ -144,7 +144,7 @@ def test_interpolate_spectrum():
     target_wavelength = np.arange(5000, 6000, 0.5)
 
     # Call the function with the mock spectrum
-    interpolated_flux = utils.interpolate_spectrum(wavelength, flux, target_wavelength)
+    interpolated_flux = VR.utils.interpolate_spectrum(wavelength, flux, target_wavelength)
     # Print the interpolated flux
     print(f"Interpolated flux with shape {np.shape(interpolated_flux)} from flux with shape {np.shape(flux)} onto target wavelength with shape {np.shape(target_wavelength)}.")
 
@@ -156,7 +156,7 @@ def test_lasercomb_wavelength_from_numbers():
     n = np.arange(18000, 19000, 100)
     repeat_frequency_ghz = 25.00000000
     offset_frequency_ghz = 9.56000000000
-    wavelength = utils.lasercomb_wavelength_from_numbers(n, repeat_frequency_ghz, offset_frequency_ghz)
+    wavelength = VR.utils.lasercomb_wavelength_from_numbers(n, repeat_frequency_ghz, offset_frequency_ghz)
     print(f"n = {n}, repeat_frequency_ghz = {repeat_frequency_ghz}, offset_frequency_ghz = {offset_frequency_ghz} --> wavelength = {wavelength}")
 
     print('\n  --> DONE Testing: lasercomb_wavelength_from_numbers()')
@@ -167,7 +167,7 @@ def test_lasercomb_numbers_from_wavelength():
     wavelength = np.arange(5000, 6000, 100)
     repeat_frequency_ghz = 25.00000000
     offset_frequency_ghz = 9.56000000000
-    n = utils.lasercomb_numbers_from_wavelength(wavelength, repeat_frequency_ghz, offset_frequency_ghz)
+    n = VR.utils.lasercomb_numbers_from_wavelength(wavelength, repeat_frequency_ghz, offset_frequency_ghz)
     print(f"wavelength = {wavelength}, repeat_frequency_ghz = {repeat_frequency_ghz}, offset_frequency_ghz = {offset_frequency_ghz} --> n = {n}")
 
     print('\n  --> DONE Testing: lasercomb_numbers_from_wavelength()')
@@ -176,7 +176,7 @@ def test_read_in_wavelength_solution_coefficients_tinney():
     print('\n  --> Testing: read_in_wavelength_solution_coefficients_tinney()')
 
     # Call the function with the provided wavelength solution coefficients
-    coefficients = utils.read_in_wavelength_solution_coefficients_tinney()
+    coefficients = VR.utils.read_in_wavelength_solution_coefficients_tinney()
     # Print the coefficients
     print(f"Found Tinney Wavelength Solution Coefficients for {len(coefficients)} orders.")
     expected_order = 'ccd_3_order_70'
@@ -189,7 +189,7 @@ def test_wavelength_vac_to_air():
 
     # Call the function with the provided wavelength solution coefficients
     for wavelength_vac in [6562.7970, np.arange(5000, 6000, 250)]:
-        wavelength_air = utils.wavelength_vac_to_air(wavelength_vac)
+        wavelength_air = VR.utils.wavelength_vac_to_air(wavelength_vac)
         # Print the coefficients
         print(f"Vacuum Wavelength: {wavelength_vac} Angstroms --> Air Wavelength: {wavelength_air} Angstroms")
 
@@ -200,7 +200,7 @@ def test_wavelength_air_to_vac():
 
     # Call the function with the provided wavelength solution coefficients
     for wavelength_air in [6563.2410, np.arange(5000, 6000, 250)]:
-        wavelength_vac = utils.wavelength_air_to_vac(wavelength_air)
+        wavelength_vac = VR.utils.wavelength_air_to_vac(wavelength_air)
         # Print the coefficients
         print(f"Air Wavelength: {wavelength_air} Angstroms --> Vacuum Wavelength: {wavelength_vac} Angstroms")
 
@@ -220,7 +220,7 @@ def test_check_repeated_observations():
 
     # Run function with and without repeat observations
     for science_runs in [science_runs_with_repeated_observations,science_runs_witout_repeated_observations]:
-        repeated_observations = utils.check_repeated_observations(science_runs)
+        repeated_observations = VR.utils.check_repeated_observations(science_runs)
         print(f"Repeated Observations: {repeated_observations}")
 
     print('\n  --> DONE Testing: check_repeated_observations()')
@@ -231,14 +231,14 @@ def test_monitor_vrad_for_repeat_observations():
     date = '001122'
     repeated_observations = {'HIP69673': ['0150', '0151']}
 
-    utils.monitor_vrad_for_repeat_observations(date, repeated_observations)
+    VR.utils.monitor_vrad_for_repeat_observations(date, repeated_observations)
 
     print('\n  --> DONE Testing: monitor_vrad_for_repeat_observations()')
 
 def test_get_memory_usage():
     print('\n  --> Testing: get_memory_usage()')
 
-    memory_usage = utils.get_memory_usage()
+    memory_usage = VR.utils.get_memory_usage()
     print(f"Memory Usage: {memory_usage}")
 
     print('\n  --> DONE Testing: get_memory_usage()')
@@ -253,7 +253,7 @@ def test_degrade_spectral_resolution():
     target_resolution = 80000.
 
     # Call the function with the provided wavelength solution coefficients
-    degraded_flux = utils.degrade_spectral_resolution(wavelength, flux, original_resolution, target_resolution)
+    degraded_flux = VR.utils.degrade_spectral_resolution(wavelength, flux, original_resolution, target_resolution)
     # Print the coefficients
     high_res_not_one = np.where(flux != 1.0)[0]
     low_res_not_one = np.where(degraded_flux != 1.0)[0]
@@ -281,6 +281,13 @@ def test_update_fits_header_via_crossmatch_with_simbad():
         'UTMJD': 60359.7838614119    # Modified Julian Date at start of exposure
     }
 
+    fits_header_18Sco = {
+        'OBJECT': '18 Sco',
+        'MEANRA': 243.90633606006,  # Right Ascension in decimal degrees
+        'MEANDEC': -8.37164116155, # Declination in decimal degrees
+        'UTMJD': 60359.7838614119 # Modified Julian Date at start of exposure
+    }
+
     fits_header_other = {
         'OBJECT': '23_LZ_Gmag8',
         'MEANRA': 180.2385559,  # Right Ascension in decimal degrees
@@ -288,15 +295,153 @@ def test_update_fits_header_via_crossmatch_with_simbad():
         'UTMJD': 60359.7838614119 # Modified Julian Date at start of exposure
     }
 
-    for fits_header in [fits_header_hip, fits_header_gaia, fits_header_other]:
+    for fits_header in [fits_header_hip, fits_header_gaia, fits_header_18Sco, fits_header_other]:
         # Call the function with the mock FITS header
-        updated_header = utils.update_fits_header_via_crossmatch_with_simbad(fits_header)
+        updated_header = VR.utils.update_fits_header_via_crossmatch_with_simbad(fits_header)
         # Print the updated header to see the changes
         print("  --> Updated FITS Header for OBJECT "+fits_header['OBJECT']+":")
         for key, value in updated_header.items():
             print(f"      {key}: {value}")
 
     print('\n  --> DONE Testing: update_fits_header_via_crossmatch_with_simbad()')
+
+
+def test_find_best_radial_velocity_from_fits_header():
+    print('\n  --> Testing: find_best_radial_velocity_from_fits_header()')
+
+    # Mock FITS headers for testing
+    fits_header_vrad_both_veloce_better = {
+        'VRAD': 234.0,
+        'E_VRAD': 1.0,
+        'VRAD_LIT': 233.0,
+        'E_VRAD_LIT': 2.0
+    }
+    fits_header_vrad_both_veloce_worse = {
+        'VRAD': 234.0,
+        'E_VRAD': 1.0,
+        'VRAD_LIT': 233.0,
+        'E_VRAD_LIT': 0.1
+    }
+    fits_header_vrad_veloce_only = {
+        'VRAD': 234.0,
+        'E_VRAD': 1.0,
+    }
+    fits_header_vrad_literature_only = {
+        'VRAD': 'None',
+        'E_VRAD': 'None',
+        'VRAD_LIT': 233.0,
+        'E_VRAD_LIT': 0.1
+    }
+    fits_header_vrad_none = {
+        'VRAD': 'None',
+        'E_VRAD': 'None',
+    }
+
+    for fits_header in [fits_header_vrad_both_veloce_better, fits_header_vrad_both_veloce_worse, fits_header_vrad_veloce_only, fits_header_vrad_literature_only, fits_header_vrad_none]:
+        # Call the function with the mock FITS header
+        for key, value in fits_header.items():
+            print(f"      {key}: {value}")
+        print(fits_header)
+        best_vrad, e_best_vrad = VR.utils.find_best_radial_velocity_from_fits_header(fits_header)
+        # Print the best radial velocity
+        print(f"  --> Best Radial Velocity: {best_vrad} +/- {e_best_vrad} km/s"+'\n')
+
+    print('\n  --> DONE Testing: find_best_radial_velocity_from_fits_header()')
+
+def test_find_closest_korg_spectrum():
+    print('\n  --> Testing: find_closest_korg_spectrum()')
+
+    korg_spectra = VR.flux_comparison.read_available_korg_syntheses()
+
+    # Mock FITS headers for testing
+    fits_header_18sco = {
+        'OBJECT': 'HIP79672'
+    }
+    fits_header_cool_giant = {
+        'OBJECT': 'Cool Giant',
+        'TEFF_LIT': 4500.0,
+        'LOGG_LIT': 2.5,
+        'FE_H_LIT': -0.5
+    }
+    fits_header_cool_dwarf = {
+        'OBJECT': 'Cool Dwarf',
+        'TEFF_LIT': 4500.0,
+        'LOGG_LIT': 4.5,
+        'FE_H_LIT': -0.5
+    }
+    fits_header_metal_poor_dwarf = {
+        'OBJECT': 'Metal Poor Dwarf',
+        'TEFF_LIT': 5500.0,
+        'LOGG_LIT': 4.5,
+        'FE_H_LIT': -0.5
+    }
+    fits_header_solar_dwarf = {
+        'OBJECT': 'Solar Dwarf',
+        'TEFF_LIT': 5500.0,
+        'LOGG_LIT': 4.5,
+        'FE_H_LIT': 0.0
+    }
+    fits_header_only_low_fe_h = {
+        'OBJECT': 'Only [Fe/H], metal poor',
+        'FE_H_LIT': -0.5
+    }
+    fits_header_only_solar_fe_h = {
+        'OBJECT': 'Only [Fe/H], Solar',
+        'FE_H_LIT': 0.0
+    }
+    fits_header_only_plx_bgr_cool_dwarf = {
+        'OBJECT': 'Only CMD BGR cool dwarf',
+        'PLX': 10.0,
+        'B': 12.0,
+        'G': 10.0,
+        'R': 10.0
+    }
+    fits_header_only_plx_bgr_warm_dwarf = {
+        'OBJECT': 'Only CMD BGR warm dwarf',
+        'PLX': 10.0,
+        'B': 10.0,
+        'G': 10.0,
+        'R': 10.0
+    }
+    fits_header_only_plx_vr_cool_dwarf = {
+        'OBJECT': 'Only CMD VR cool dwarf',
+        'PLX': 10.0,
+        'V': 11.0,
+        'R': 10.0
+    }
+    fits_header_only_plx_vr_warm_dwarf = {
+        'OBJECT': 'Only CMD VR warm dwarf',
+        'PLX': 10.0,
+        'V': 10.0,
+        'R': 10.0
+    }
+    fits_header_only_plx_bgr_cool_giant = {
+        'OBJECT': 'Only CMD, cool giant',
+        'PLX': 10.0,
+        'B': 7.0,
+        'G': 5.0,
+        'R': 5.0
+    }
+    fits_header_none_parallax = {
+        'OBJECT': 'None parallax',
+        'PLX': 'None',
+    }
+    fits_header_not_even_parallax = {
+        'OBJECT': 'Not even parallax'
+    }
+
+    # Let's loop through all cases
+    for fits_header in [
+        fits_header_18sco, fits_header_cool_giant, fits_header_cool_dwarf, fits_header_metal_poor_dwarf,
+        fits_header_solar_dwarf, fits_header_only_low_fe_h, fits_header_only_solar_fe_h, fits_header_only_plx_bgr_cool_dwarf,
+        fits_header_only_plx_bgr_warm_dwarf, fits_header_only_plx_vr_cool_dwarf, fits_header_only_plx_vr_warm_dwarf,
+        fits_header_only_plx_bgr_cool_giant, fits_header_none_parallax, fits_header_not_even_parallax
+    ]:
+        print('Testing '+fits_header['OBJECT'])
+        closest_korg_spectrum = VR.utils.find_closest_korg_spectrum(korg_spectra,fits_header)
+        print(f"  --> Closest Korg Spectrum for '{fits_header['OBJECT']}': {closest_korg_spectrum}")
+
+    print('\n  --> DONE Testing: find_closest_korg_spectrum()')
 
 # Run the test function
 if __name__ == "__main__":
@@ -343,4 +488,8 @@ if __name__ == "__main__":
 
     test_update_fits_header_via_crossmatch_with_simbad()
 
-    print('\n  DONE Testing: utils.py')
+    test_find_best_radial_velocity_from_fits_header()
+
+    test_find_closest_korg_spectrum()
+
+    print('\n  DONE Testing: VR.utils.py')

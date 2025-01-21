@@ -820,13 +820,13 @@ def update_fits_header_via_crossmatch_with_simbad(fits_header):
     if simbad_g in simbad_match.keys():
         if abs(simbad_match[simbad_g])>=0.0:
             if simbad_match[simbad_g] > 12:
-                print('  --> Warnging: Match fainter than G > 12 mag. Right match for a Veloce observations?')
+                print('  --> Warning: Match fainter than G > 12 mag. Right match for a Veloce observations?')
         elif simbad_v in simbad_match.keys():
             if simbad_match[simbad_v] > 12:
-                print('  --> Warnging: Match fainter than V > 12 mag. Right match for a Veloce observations?')
+                print('  --> Warning: Match fainter than V > 12 mag. Right match for a Veloce observations?')
     elif simbad_v in simbad_match.keys():
         if simbad_match[simbad_v] > 12:
-            print('  --> Warnging: Match fainter than V > 12 mag. Right match for a Veloce observations?')
+            print('  --> Warning: Match fainter than V > 12 mag. Right match for a Veloce observations?')
 
     # Let's add some more information from the crossmatches with HIP/2MASS/Gaia DR3 and other literature where available
     ids = simbad_match['ids']
