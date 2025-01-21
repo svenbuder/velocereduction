@@ -50,6 +50,9 @@ def test_read_in_order_tramlines():
 def test_get_master_dark():
     print('\n  --> Testing: get_master_dark()')
 
+    VR.config.date = '001122'
+    VR.config.working_directory = str(Path(__file__).resolve().parent)+'/../'
+
     runs = ['0224']
 
     print('      with archival=False')
@@ -65,11 +68,14 @@ def test_get_master_dark():
 def test_extract_orders_flats():
     print('\n  --> Testing: extraction()')
 
-    calibration_runs, science_runs = VR.utils.identify_calibration_and_science_runs(
-        VR.config.date,
-        VR.config.working_directory+'observations/',
-        each_science_run_separately = False
-    )
+    VR.config.date = '001122'
+    VR.config.working_directory = str(Path(__file__).resolve().parent)+'/../'
+
+    calibration_runs = {
+        'Flat_60.0': ['0030'],
+        'Flat_1.0': ['0016'],
+        'Flat_0.1': ['0009']
+    }
 
     print('\n  --> Extracting Master Flat')
 
@@ -124,9 +130,6 @@ def test_extract_orders_flats():
 
 # Run the test function
 if __name__ == "__main__":
-
-    VR.config.date = '001122'
-    VR.config.working_directory = str(Path(__file__).resolve().parent)+'/../'
 
     # test_substract_overscan()
 
