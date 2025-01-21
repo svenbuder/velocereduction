@@ -147,7 +147,7 @@ def substract_overscan(full_image, metadata, debug_overscan = False):
         plt.close()
         
     if debug_overscan:
-        print(overscan_median, overscan_rms, metadata['READOUT'])
+        print('  -->',overscan_median, overscan_rms, metadata['READOUT'])
         
     return(trimmed_image, overscan_median, overscan_rms, metadata['READOUT'])
 
@@ -329,7 +329,7 @@ def get_master_dark(runs, archival=False):
         if not archival:
             date = config.date
         else:
-            runs = ['0224','0225','0226']
+            runs = ['0224']
             date = '001122'
 
         for run in runs:
