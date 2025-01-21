@@ -9,6 +9,8 @@ setup(
         "scipy",
         "matplotlib",
         "astroquery>=0.4.7",
+        "pytest",
+        "pytest-cov",
     ],
     author="Sven Buder",
     author_email="sven.buder@anu.edu.au",
