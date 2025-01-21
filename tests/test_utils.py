@@ -178,9 +178,9 @@ def test_read_in_wavelength_solution_coefficients_tinney():
     # Call the function with the provided wavelength solution coefficients
     coefficients = utils.read_in_wavelength_solution_coefficients_tinney()
     # Print the coefficients
-    print(coefficients)
     print(f"Found Tinney Wavelength Solution Coefficients for {len(coefficients)} orders.")
-    print(f"First entry ({list(coefficients.keys())[0]}): {coefficients[0]}")
+    expected_order = 'ccd_3_order_70'
+    print(f"First entry ({expected_order}): f{coefficients[expected_order]}")
 
     print('\n  --> DONE Testing: read_in_wavelength_solution_coefficients_tinney()')
 
@@ -263,7 +263,7 @@ def test_degrade_spectral_resolution():
 
     print('\n  --> DONE Testing: degrade_spectral_resolution()')
 
-def test_update_fits_header_via_crossmatch_with_simbad(fits_header):
+def test_update_fits_header_via_crossmatch_with_simbad():
     print('\n  --> Testing: update_fits_header_via_crossmatch_with_simbad()')
 
     # Mock FITS headers for testing

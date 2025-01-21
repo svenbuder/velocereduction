@@ -674,7 +674,7 @@ def monitor_vrad_for_repeat_observations(date, repeated_observations):
                 )
                 ax.set_xlabel('Modified Julian Date MJD - '+str(int(np.floor(utmjd[0]))),fontsize=15)
                 ax.set_ylabel(r'Radial Velocity $v_\mathrm{rad}~/~\mathrm{km\,s^{-1}}$',fontsize=15)
-                ax.axhline(np.mean(vrad),c = 'C3',lw=2,ls='dashed',label = r'$\leftangle v_\mathrm{rad} \rightangle = '+"{:.2f}".format(np.round(np.mean(vrad),2))+r' \pm '+"{:.2f}".format(np.round(np.std(vrad),2))+r'\,\mathrm{km\,s^{-1}}$')
+                ax.axhline(np.mean(vrad),c = 'C3',lw=2,ls='dashed',label = r'$\langle v_\mathrm{rad} \rangle = '+"{:.2f}".format(np.round(np.mean(vrad),2))+r' \pm '+"{:.2f}".format(np.round(np.std(vrad),2))+r'\,\mathrm{km\,s^{-1}}$')
                 ax.axhline(np.mean(vrad)-np.std(vrad),c = 'C1',lw=1,ls='dashed')
                 ax.axhline(np.mean(vrad)+np.std(vrad),c = 'C1',lw=1,ls='dashed')
                 ax.legend()
