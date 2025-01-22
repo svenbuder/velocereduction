@@ -208,94 +208,94 @@ def make_veloce_and_korg_spectrum_compatible(wavelength_coefficients,veloce_scie
     )
     relevant_korg_spectrum_region[np.isnan(np.array(korg_flux))] = False
     if len(np.where(relevant_korg_spectrum_region)[0]) == 0:
-        print('Korg:   ',korg_wavelength_vac[0],korg_wavelength_vac[-1])
-        print('Needed: ',veloce_wavelength_vac_rv_shifted[0]  - 5,veloce_wavelength_vac_rv_shifted[-1] + 5)
-        raise ValueError('No relevant Korg spectrum available')
-
-    # Interpolate the Korg spectrum onto the Veloce wavelength grid
-    korg_flux_interpolated = np.interp(
-        veloce_wavelength_vac_rv_shifted,
-        korg_wavelength_vac[relevant_korg_spectrum_region],
-        np.array(korg_flux)[relevant_korg_spectrum_region]
-    )
-
-    # Incorporate telluric lines into the Korg spectrum, if they were provided.
-    if telluric_line_fluxes is not None:
-
-        # Test if the telluric spectrum has a wavelength array associated with it, or we can assume it is the same as the Veloce spectrum
-        if telluric_line_wavelengths is not None:
-            # Shift telluric lines from their presumably rest-wavlength onto the Veloce wavelength
-            # We expect the wavelength to be in air.
-            telluric_flux_interpolated = np.interp(
-                veloce_wavelength_air_rv_shifted,
-                apply_velocity_shift_to_wavelength_array(
-                    radial_velocity+barycentric_velocity,
-                    telluric_line_wavelengths
-                ),
-                telluric_line_fluxes,
-                # assume no telluric absorption lines outside the expected region
-                left = 1.0,
-                right = 1.0
-            )
-            # Multiply the Korg spectrum with the telluric spectrum
-            korg_flux_without_tellurics = korg_flux_interpolated.copy()
-            korg_flux_interpolated *= telluric_flux_interpolated
-
-        else:
-
-            telluric_flux_interpolated = telluric_line_fluxes[veloce_flux_finite_pixels]
-            veloce_science_flux /= telluric_flux_interpolated
-
-    veloce_flux_normalised_with_korg_flux = normalise_veloce_flux_via_smoothed_ratio_to_korg_flux(veloce_wavelength_vac_rv_shifted, veloce_science_flux, korg_flux_interpolated, normalisation_buffers, debug=debug)
-
-    # Visualise the Veloce and Korg spectra if debug is enabled
-    if debug:
-        f, ax = plt.subplots(figsize=(15,3))
-            
-        # Show Korg Flux with Tellurics
-        if telluric_line_wavelengths is None:
-            label = 'Korg Flux'
-        else:
-            label = 'Korg Flux with Hinkle Tellurics'
-        ax.plot(
+        print('  --> Korg:   ',korg_wavelength_vac[0],korg_wavelength_vac[-1])
+        print('  --> Needed: ',veloce_wavelength_vac_rv_shifted[0]  - 5,veloce_wavelength_vac_rv_shifted[-1] + 5)
+        raise ValueError('  --> No relevant Korg spectrum available.')
+    else:
+        # Interpolate the Korg spectrum onto the Veloce wavelength grid
+        korg_flux_interpolated = np.interp(
             veloce_wavelength_vac_rv_shifted,
-            korg_flux_interpolated,
-            c = 'C1', lw = 0.5, label = label
+            korg_wavelength_vac[relevant_korg_spectrum_region],
+            np.array(korg_flux)[relevant_korg_spectrum_region]
         )
 
-        if telluric_line_wavelengths is not None:
+        # Incorporate telluric lines into the Korg spectrum, if they were provided.
+        if telluric_line_fluxes is not None:
+
+            # Test if the telluric spectrum has a wavelength array associated with it, or we can assume it is the same as the Veloce spectrum
+            if telluric_line_wavelengths is not None:
+                # Shift telluric lines from their presumably rest-wavlength onto the Veloce wavelength
+                # We expect the wavelength to be in air.
+                telluric_flux_interpolated = np.interp(
+                    veloce_wavelength_air_rv_shifted,
+                    apply_velocity_shift_to_wavelength_array(
+                        radial_velocity+barycentric_velocity,
+                        telluric_line_wavelengths
+                    ),
+                    telluric_line_fluxes,
+                    # assume no telluric absorption lines outside the expected region
+                    left = 1.0,
+                    right = 1.0
+                )
+                # Multiply the Korg spectrum with the telluric spectrum
+                korg_flux_without_tellurics = korg_flux_interpolated.copy()
+                korg_flux_interpolated *= telluric_flux_interpolated
+
+            else:
+
+                telluric_flux_interpolated = telluric_line_fluxes[veloce_flux_finite_pixels]
+                veloce_science_flux /= telluric_flux_interpolated
+
+        veloce_flux_normalised_with_korg_flux = normalise_veloce_flux_via_smoothed_ratio_to_korg_flux(veloce_wavelength_vac_rv_shifted, veloce_science_flux, korg_flux_interpolated, normalisation_buffers, debug=debug)
+
+        # Visualise the Veloce and Korg spectra if debug is enabled
+        if debug:
+            f, ax = plt.subplots(figsize=(15,3))
+                
+            # Show Korg Flux with Tellurics
+            if telluric_line_wavelengths is None:
+                label = 'Korg Flux'
+            else:
+                label = 'Korg Flux with Hinkle Tellurics'
             ax.plot(
                 veloce_wavelength_vac_rv_shifted,
-                korg_flux_without_tellurics,
-                c = 'C3', lw = 0.5, label = 'Korg Flux without Tellurics'
+                korg_flux_interpolated,
+                c = 'C1', lw = 0.5, label = label
             )
 
-        # Show Veloce Flux
-        if telluric_line_wavelengths is None:
-            label = 'Normalised Veloce Flux'
-        else:
-            label = 'Normalised Veloce Flux (Telluric Corrected)'
-        ax.plot(
-            veloce_wavelength_vac_rv_shifted,
-            veloce_flux_normalised_with_korg_flux,
-            c = 'C0', lw = 0.5, label = label
-        )
-        
-        # Residuals
-        ax.plot(
-            veloce_wavelength_vac_rv_shifted,
-            korg_flux_interpolated - veloce_flux_normalised_with_korg_flux,
-            c = 'C4', lw = 0.5, label = 'Residuals Korg - Veloce'
-        )
+            if telluric_line_wavelengths is not None:
+                ax.plot(
+                    veloce_wavelength_vac_rv_shifted,
+                    korg_flux_without_tellurics,
+                    c = 'C3', lw = 0.5, label = 'Korg Flux without Tellurics'
+                )
 
-        ax.set_xlabel(r'Wavelength $\lambda_\mathrm{vac}~/~\mathrm{\AA}$')
-        ax.set_ylabel('Flux\n'+r'$f_\lambda~/~\mathrm{norm.}$')
-        ax.legend(ncol=4, loc = 'upper center')
-        ax.set_ylim(-0.1,1.25)
-        plt.tight_layout()
-        if 'ipykernel' in sys.modules:
-            plt.show()
-        plt.close()
+            # Show Veloce Flux
+            if telluric_line_wavelengths is None:
+                label = 'Normalised Veloce Flux'
+            else:
+                label = 'Normalised Veloce Flux (Telluric Corrected)'
+            ax.plot(
+                veloce_wavelength_vac_rv_shifted,
+                veloce_flux_normalised_with_korg_flux,
+                c = 'C0', lw = 0.5, label = label
+            )
+            
+            # Residuals
+            ax.plot(
+                veloce_wavelength_vac_rv_shifted,
+                korg_flux_interpolated - veloce_flux_normalised_with_korg_flux,
+                c = 'C4', lw = 0.5, label = 'Residuals Korg - Veloce'
+            )
+
+            ax.set_xlabel(r'Wavelength $\lambda_\mathrm{vac}~/~\mathrm{\AA}$')
+            ax.set_ylabel('Flux\n'+r'$f_\lambda~/~\mathrm{norm.}$')
+            ax.legend(ncol=4, loc = 'upper center')
+            ax.set_ylim(-0.1,1.25)
+            plt.tight_layout()
+            if 'ipykernel' in sys.modules:
+                plt.show()
+            plt.close()
 
     return(veloce_flux_normalised_with_korg_flux, korg_flux_interpolated)
 
@@ -468,11 +468,11 @@ def calculate_wavelength_coefficients_with_korg_synthesis(veloce_fits_file, korg
     else:
         orders = []
         for ccd in ['1','2','3']:
-            if ccd == '1': orders.append(['ccd_1_order_'+str(x) for x in np.arange(167, 138-1, -1)])
+            if ccd == '1': orders.append(['ccd_1_order_'+str(x) for x in np.arange(153, 138-1, -1)])
             if ccd == '2': orders.append(['ccd_2_order_'+str(x) for x in np.arange(140, 103-1, -1)])
             if ccd == '3': orders.append(['ccd_3_order_'+str(x) for x in np.arange(104,  65-1, -1)])
         orders = np.concatenate((orders))
-        print('  --> Calculating coefficients for all orders (138-167 for CCD1, 103-140 for CCD2, and 65-104 for CCD3).')
+        print('  --> Calculating coefficients for all orders, that is, 138-153 for CCD1 (neglecting 154-167), 103-140 for CCD2, and 65-104 for CCD3.')
 
     # Read the dictionary of left and right buffers that will be used when calculating the normalisation function between Veloce and Korg spectrum.
     normalisation_buffers = read_korg_normalisation_buffers()

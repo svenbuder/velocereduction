@@ -1017,31 +1017,26 @@ def find_closest_korg_spectrum(available_korg_spectra,fits_header):
         if fits_header['TEFF_LIT'] < 5000 and fits_header['LOGG_LIT'] < 3.5:
             closest_korg_spectrum = 'arcturus'
             print('    --> Object is a giant. Using Arcturus spectrum.')
+            return(closest_korg_spectrum)
         elif fits_header['TEFF_LIT'] < 5000 and fits_header['LOGG_LIT'] >= 3.5:
             closest_korg_spectrum = '61cyga'
             print('    --> Object is a cool dwarf. Using 61 Cyg A spectrum.')
+            return(closest_korg_spectrum)
         elif fits_header['FE_H_LIT'] < -0.25:
             closest_korg_spectrum = 'hd22879'
             print('    --> Object is metal-poor dwarf. Using HD22879 spectrum.')
+            return(closest_korg_spectrum)
         else:
             closest_korg_spectrum = 'sun'
             print('    --> Object is a dwarf. Using Sun spectrum.')
-
-    # Let's use the Sun, if there is no information on TEFF/LOGG/FE_H available.
-    elif 'FE_H_LIT' in fits_header.keys():
-        if fits_header['FE_H_LIT'] < -0.25:
-            closest_korg_spectrum = 'hd22879'
-            print('    --> Object is metal-poor. Using HD22879 spectrum.')
-        else:
-            closest_korg_spectrum = 'sun'
-            print('    --> Object has solar [Fe/H]. Using Sun spectrum.')
+            return(closest_korg_spectrum)
 
     # If we have no stellar parameters, let's use the absolute magnitude (if available).
     plx_value = fits_header.get('PLX', None)
     if plx_value is not None and plx_value != 'None':
         if fits_header['PLX'] > 0:
 
-            print('    --> Parallax is '+str(fits_header['PLX'])+' mas.')
+            print('    --> No stellar parameters, but parallax is '+str(fits_header['PLX'])+' mas.')
 
             if 'G' in fits_header.keys():
                 absolute_mag = fits_header['G'] + 5 * np.log10(fits_header['PLX']/10)
@@ -1050,7 +1045,7 @@ def find_closest_korg_spectrum(available_korg_spectra,fits_header):
                 absolute_mag = fits_header['V'] + 5 * np.log10(fits_header['PLX']/10)
                 print('    --> Object has no stellar parameters measured, but absolute M_V is '+"{:.1f}".format(absolute_mag))
             else:
-                print('    --> Object has no stellar parameters measured, nor absolute magnitude (although parallax available). Using Sun spectrum by default.')
+                print('    --> Object has no stellar parameters measured, nor any magnitudes (although parallax available). Using Sun spectrum by default.')
                 closest_korg_spectrum = 'sun'
                 return(closest_korg_spectrum)
 
@@ -1073,9 +1068,9 @@ def find_closest_korg_spectrum(available_korg_spectra,fits_header):
                 print('    --> Object is likely dwarf based on color. Using Sun spectrum.')
         else:
             closest_korg_spectrum = 'sun'
-            print('    --> Object has no stellar parameters measured, nor absolute magnitude (parallax measurement is negative). Using Sun spectrum by default.')
+            print('    --> Object has no stellar parameters nor absolute magnitude (parallax measurement is negative). Using Sun spectrum by default.')
     else:
         closest_korg_spectrum = 'sun'
-        print('    --> No TEFF/LOGG/FE_H nor absolute magnitude values available. Using Sun by default.')
+        print('    --> Object has neither stellar parameters nor parallax measurement. Using Sun spectrum by default.')
 
     return(closest_korg_spectrum)

@@ -25,7 +25,8 @@ def test_calculate_wavelength_coefficients_with_korg_synthesis():
         # Find the best RV or raise ValueError of none available.
         vrad_for_calibration = VR.utils.find_best_radial_velocity_from_fits_header(fits_header = veloce_fits_file[0].header)
 
-        # Let's test this for a few orders (or simply set order_selection=None to use all)
+        print('  --> Testing order ccd_3_order_71 with telluric form Bstar and debug=True')
+        # Let's test this for one order with bstar
         for order in ['ccd_3_order_71']:
         
             VR.flux_comparison.calculate_wavelength_coefficients_with_korg_synthesis(
@@ -37,16 +38,31 @@ def test_calculate_wavelength_coefficients_with_korg_synthesis():
                 telluric_hinkle_or_bstar = 'bstar', # You can choose between 'hinkle' and 'bstar'
                 debug=True
             )
-
+    
+        print('  --> Testing: ValueError raised if order does not have valid Korg flux, e.g. for ccd_1_order_167.')
+        with pytest.raises(ValueError) as excinfo:
+            # Let's test this for all orders with hinkle
             VR.flux_comparison.calculate_wavelength_coefficients_with_korg_synthesis(
                 veloce_fits_file,
                 korg_wavelength_vac = korg_spectra['wavelength_vac'],
                 korg_flux = korg_spectra['flux_'+closest_korg_spectrum],
                 vrad_for_calibration = vrad_for_calibration,
-                order_selection=[order],
+                order_selection=['ccd_1_order_167'],
                 telluric_hinkle_or_bstar = 'hinkle', # You can choose between 'hinkle' and 'bstar'
-                debug=True
+                debug=False
             )
+        print(f'  --> ValueError raised as expected: {excinfo.value}')
+
+        print('  --> Testing all valid orders with telluric form Hinkle and debug=False')
+        VR.flux_comparison.calculate_wavelength_coefficients_with_korg_synthesis(
+            veloce_fits_file,
+            korg_wavelength_vac = korg_spectra['wavelength_vac'],
+            korg_flux = korg_spectra['flux_'+closest_korg_spectrum],
+            vrad_for_calibration = vrad_for_calibration,
+            order_selection=None,
+            telluric_hinkle_or_bstar = 'hinkle', # You can choose between 'hinkle' and 'bstar'
+            debug=False
+        )
 
     print('\n  --> DONE Testing: calculate_wavelength_coefficients_with_korg_synthesis()')
     

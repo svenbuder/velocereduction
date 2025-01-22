@@ -924,4 +924,4 @@ def fit_thxe_polynomial_coefficients(debug=False):
             print('      --> Result with previous solution:   ',[f"{number:.4e}" for number in thxe_coefficients])
 
         # Save the fitted polynomial coefficients to a text file
-        np.savetxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_f{order}_thxe.txt', thxe_coefficients)
+        np.savetxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_{order}_thxe.txt', thxe_coefficients)
