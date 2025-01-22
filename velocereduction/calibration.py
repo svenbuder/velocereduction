@@ -130,11 +130,8 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, ov
         wavelength = polynomial_function(np.arange(4128)-2064,*previous_calibration_coefficients)*10
 
         # Identify the range for which we will fit the peaks
-        if order_name in lc_range.keys():
-            lc_beginning, lc_ending = lc_range[order_name]
-        else:
-            lc_beginning = 500
-            lc_ending = 3700
+        lc_beginning, lc_ending = lc_range[order_name]
+        # previous defaults have been: lc_beginning = 500, lc_ending = 3700
         in_panel = np.arange(lc_beginning,lc_ending+1)
         close_to_in_panel = np.arange(lc_beginning-100,np.min([lc_ending+100,4127]))
 
