@@ -2,7 +2,7 @@ name: Run tests and upload coverage
 
 on:
   pull_request:
-    types: [opened, synchronize] 
+    types: [opened, synchronize, closed] 
 
 jobs:
   test:

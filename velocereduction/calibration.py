@@ -846,12 +846,12 @@ def calibrate_wavelength(science_object, optimise_lc_solution=True, correct_bary
     else:
         print('  -> Not creating overview PDF.\n')
 
-def fit_thxe_polynomial_coefficients():
+def fit_thxe_polynomial_coefficients(debug=False):
     """
     Fits a polynomial function to the pixel-to-wavelength relationship for the ThXe calibration lamp.
 
     Parameters:
-        None
+        debug (bool, optional): If True, the function will print additional information and diagnostic output during execution.
 
     Returns:
         None: The function saves the fitted polynomial coefficients to a text file for each order.
@@ -866,16 +866,60 @@ def fit_thxe_polynomial_coefficients():
     orders = np.concatenate((orders))
 
     for order in orders:
+
+        if debug:
+            print('\n  --> Fitting ThXe coefficients for order '+order)
+
         # Read in ThXe pixel and wavelength data
         thxe_pixels_and_wavelengths = np.array(np.loadtxt(Path(__file__).resolve().parent / 'veloce_reference_data' / 'thxe_pixels_and_positions' / f'{order}_px_wl.txt'))
+
+        # Read in a previous wavelength solution
+        try:
+            initial_wavelength_coefficients = np.loadtxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_{order}_korg.txt')
+            if debug:
+                print('      --> Initial solution from Korg:      ',[f"{number:.4e}" for number in initial_wavelength_coefficients])    
+        except:
+            try:
+                initial_wavelength_coefficients = np.loadtxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_{order}_lc.txt')
+                if debug:
+                    print('      --> Initial solution from LC:        ',[f"{number:.4e}" for number in initial_wavelength_coefficients])
+            except:
+                initial_wavelength_coefficients = np.loadtxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_{order}_thxe.txt')
+                if debug:
+                    print('      --> Initial solution from ThXe:      ',[f"{number:.4e}" for number in initial_wavelength_coefficients])
+
+        bounds = (
+            # lower bounds
+            [
+                initial_wavelength_coefficients[0] - 0.5,
+                initial_wavelength_coefficients[1] - 2e-04,
+                initial_wavelength_coefficients[2] - 2e-08,
+                initial_wavelength_coefficients[3] - 2e-12,
+                initial_wavelength_coefficients[4] - 2e-14,
+                initial_wavelength_coefficients[5] - 2e-16
+            ], 
+            # upper bounds
+            [
+                initial_wavelength_coefficients[0] + 0.5,
+                initial_wavelength_coefficients[1] + 2e-04,
+                initial_wavelength_coefficients[2] + 2e-08,
+                initial_wavelength_coefficients[3] + 2e-12,
+                initial_wavelength_coefficients[4] + 2e-14,
+                initial_wavelength_coefficients[5] + 2e-16
+            ]
+        )
 
         # Fit a polynomial function to pixel and wavelength data
         thxe_coefficients, _ = curve_fit(
             polynomial_function,
             thxe_pixels_and_wavelengths[:,0] - 2064,
             thxe_pixels_and_wavelengths[:,1],
-            p0=[np.median(thxe_pixels_and_wavelengths[:,1]), 0.05, 0.0, 0.0, 0.0, 0.0]
+            p0=initial_wavelength_coefficients,
+            bounds = bounds
         )
+
+        if debug:
+            print('      --> Result with previous solution:   ',[f"{number:.4e}" for number in thxe_coefficients])
 
         # Save the fitted polynomial coefficients to a text file
         np.savetxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_f{order}_thxe.txt', thxe_coefficients)
