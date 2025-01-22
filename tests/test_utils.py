@@ -157,6 +157,21 @@ def test_read_veloce_fits_image_and_metadata():
 def test_identify_calibration_and_science_runs():
     print('\n  --> Testing: identify_calibration_and_science_runs()')
 
+    raw_data_dir = str(Path(__file__).resolve().parent)+'/../observations/'
+
+    # Call the function with a non-existing date
+    with pytest.raises(ValueError) as excinfo:
+        date = '001322'
+        VR.utils.identify_calibration_and_science_runs(date, raw_data_dir)
+    print(f'  --> ValueError raised: {excinfo.value}')
+
+    # Call the function with the provided raw data directory
+    date = '001122'
+    for each_science_run_separately in [False, True]:
+        print(f"  --> Testin with each_science_run_separately: {each_science_run_separately}")
+        VR.utils.identify_calibration_and_science_runs(date, raw_data_dir, each_science_run_separately)
+
+
     # Call the function with the provided raw data directory
     date = '001122'
     raw_data_dir = str(Path(__file__).resolve().parent)+'/../observations/'
@@ -263,8 +278,12 @@ def test_monitor_vrad_for_repeat_observations():
     date = '001122'
     repeated_observations = {'HIP69673': ['0150', '0151']}
 
+    print('\n  --> Testing with repeated observations')
     VR.config.working_directory = str(Path(__file__).resolve().parent)+'/../'
+    VR.utils.monitor_vrad_for_repeat_observations(date, repeated_observations)
 
+    print('\n  --> Testing without repeated observations')
+    repeated_observations = {}
     VR.utils.monitor_vrad_for_repeat_observations(date, repeated_observations)
 
     print('\n  --> DONE Testing: monitor_vrad_for_repeat_observations()')
@@ -317,7 +336,7 @@ def test_update_fits_header_via_crossmatch_with_simbad():
 
     fits_header_18Sco = {
         'OBJECT': '18 Sco',
-        'MEANRA': 243.90633606006,  # Right Ascension in decimal degrees
+        'MEANRA': 243.905279,  # Right Ascension in decimal degrees
         'MEANDEC': -8.37164116155, # Declination in decimal degrees
         'UTMJD': 60359.7838614119 # Modified Julian Date at start of exposure
     }
@@ -325,11 +344,25 @@ def test_update_fits_header_via_crossmatch_with_simbad():
     fits_header_other = {
         'OBJECT': '23_LZ_Gmag8',
         'MEANRA': 180.2385559,  # Right Ascension in decimal degrees
-        'MEANDEC': -21.25097632, # Declination in decimal degrees
+        'MEANDEC': -08.369341, # Declination in decimal degrees
         'UTMJD': 60359.7838614119 # Modified Julian Date at start of exposure
     }
 
-    for fits_header in [fits_header_hip, fits_header_gaia, fits_header_18Sco, fits_header_other]:
+    fits_header_18sco_with_different_name= {
+        'OBJECT': 'Fake Star 18 Sco',
+        'MEANRA': 243.905279,  # Right Ascension in decimal degrees
+        'MEANDEC': -08.369341, # Declination in decimal degrees
+        'UTMJD': 60359.7838614119 # Modified Julian Date at start of exposure
+    }
+
+    fits_header_fake_star = {
+        'OBJECT': 'Fake Star',
+        'MEANRA': 0.0,  # Right Ascension in decimal degrees
+        'MEANDEC': 0.0, # Declination in decimal degrees
+        'UTMJD': 60359.7838614119 # Modified Julian Date at start of exposure
+    }
+
+    for fits_header in [fits_header_hip, fits_header_gaia, fits_header_18Sco, fits_header_other, fits_header_18sco_with_different_name, fits_header_fake_star]:
         # Call the function with the mock FITS header
         updated_header = VR.utils.update_fits_header_via_crossmatch_with_simbad(fits_header)
         # Print the updated header to see the changes
