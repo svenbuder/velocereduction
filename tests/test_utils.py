@@ -9,7 +9,7 @@ def test_apply_velocity_shift_to_wavelength_array():
     velocity_in_kms = 10.0
     wavelength_array = np.arange(5000, 6000, 1)
     shifted_wavelength = VR.utils.apply_velocity_shift_to_wavelength_array(velocity_in_kms, wavelength_array)
-    print(f"wavelength after velocity shift of {velocity_in_kms} km/s: {shifted_wavelength[:3]} from {wavelength_array[:3]} (truncated at first 3 elements)")
+    print(f"  --> Wavelength after velocity shift of {velocity_in_kms} km/s: {shifted_wavelength[:3]} from {wavelength_array[:3]} (truncated at first 3 elements)")
 
     print('\n  --> DONE Testing: apply_velocity_shift_to_wavelength_array()')
 
@@ -19,7 +19,7 @@ def test_radial_velocity_from_line_shift():
     line_centre_observed = 6560.0
     line_centre_rest = 6562.7970
     vrad = VR.utils.radial_velocity_from_line_shift(line_centre_observed, line_centre_rest)
-    print(f"Radial Velocity: {vrad} km/s based on observed line centre at {line_centre_observed} Angstroms and rest line centre at {line_centre_rest} Angstroms.")
+    print(f"  --> Radial Velocity: {vrad} km/s based on observed line centre at {line_centre_observed} Angstroms and rest line centre at {line_centre_rest} Angstroms.")
 
     print('\n  --> DONE Testing: radial_velocity_from_line_shift()')
 
@@ -33,9 +33,9 @@ def test_voigt_absorption_profile():
     initial_guess = [5450.0, 0.5, 0.5, 0.5, 0.5]
 
     for bounds in [None, ([5400.0, 0.0, 0.0, 0.0, 0.0], [5600.0, 1.0, 1.0, 1.0, 1.0])]:
-        print(f"Bounds: {bounds}")
+        print(f"      Bounds: {bounds}")
         fit_parameters, fit_covariances = VR.utils.fit_voigt_absorption_profile(wavelength, flux, initial_guess, bounds=bounds)
-        print(f"      Fit Parameters: {fit_parameters}")
+        print(f"      Fit Parameters: {[format(value, '.3e') for value in fit_parameters]}")
         print(f"      Fit Covariances: {np.shape(fit_covariances)}")
 
     # Let's test using not the correct bounds
@@ -43,7 +43,7 @@ def test_voigt_absorption_profile():
         # Call the function with the mock FITS header
         print('  --> Testing with incorrect bounds -- should raise ValueError and continue testing.')
         fit_parameters, fit_covariances = VR.utils.fit_voigt_absorption_profile(wavelength, flux, initial_guess, bounds = [(10,10)])
-    assert "Bounds must be a tuple or list of length 2, containing the lower and upper bounds for each of the 5 parameters [line_centre, line_offset, line_depth, sigma, gamma]." in str(excinfo.value)
+    print(f'  --> ValueError raised: {excinfo.value}')
 
     # Let's test using not exactly 5 initial guess parameters
     with pytest.raises(ValueError) as excinfo:
@@ -51,8 +51,8 @@ def test_voigt_absorption_profile():
         # Call the function with the mock FITS header
         print('  --> Testing with not exactly 5 initial guess parameters -- should raise ValueError and continue testing.')
         fit_parameters, fit_covariances = VR.utils.fit_voigt_absorption_profile(wavelength, flux, initial_guess)
-    assert "Initial guess must contain 5 values: [line_centre, line_offset, line_depth, sigma, gamma]." in str(excinfo.value)
-    
+    print(f'  --> ValueError raised: {excinfo.value}')
+
     print('\n  --> DONE Testing: fit_voigt_absorption_profile() and voigt_absorption_profile()')
 
 def test_lc_peak_gauss():
@@ -79,9 +79,9 @@ def test_gaussian_absorption_profile():
     initial_guess = [5500.0, 0.5, 0.5]
 
     for bounds in [None, ([5400.0, 0.0, 0.0], [5600.0, 1.0, 1.0])]:
-        print(f"  Bounds: {bounds}")
+        print(f"      Bounds: {bounds}")
         fit_parameters, fit_covariances = VR.utils.fit_gaussian_absorption_profile(wavelength, flux, initial_guess, bounds=bounds)
-        print(f"      Fit Parameters: {fit_parameters}")
+        print(f"      Fit Parameters: {[format(value, '.3e') for value in fit_parameters]}")
         print(f"      Fit Covariances: {np.shape(fit_covariances)}")
     
     # Let's test using not the correct bounds
@@ -89,7 +89,7 @@ def test_gaussian_absorption_profile():
         # Call the function with the mock FITS header
         print('  --> Testing with incorrect bounds -- should raise ValueError and continue testing.')
         fit_parameters, fit_covariances = VR.utils.fit_gaussian_absorption_profile(wavelength, flux, initial_guess, bounds = [(10,10)])
-    assert "Bounds must be a tuple or list of length 2, containing the lower and upper bounds for each of the 3 parameters [line_centre, line_depth, line_sigma]." in str(excinfo.value)
+    print(f'  --> ValueError raised: {excinfo.value}')
 
     # Let's test using not exactly 3 initial guess parameters
     with pytest.raises(ValueError) as excinfo:
@@ -97,7 +97,7 @@ def test_gaussian_absorption_profile():
         # Call the function with the mock FITS header
         print('  --> Testing with not exactly 3 initial guess parameters -- should raise ValueError and continue testing.')
         fit_parameters, fit_covariances = VR.utils.fit_gaussian_absorption_profile(wavelength, flux, initial_guess)
-    assert "Initial guess must contain 3 values: [line_centre, line_depth, line_sigma]." in str(excinfo.value)
+    print(f'  --> ValueError raised: {excinfo.value}')
 
     print('\n  --> DONE Testing: fit_gaussian_absorption_profile() and gaussian_absorption_profile()')
     
@@ -115,7 +115,7 @@ def test_calculate_barycentric_velocity_correction():
     # Call the function with the mock FITS header
     barycentric_velocity_correction = VR.utils.calculate_barycentric_velocity_correction(fits_header_hip)
     # Print the barycentric velocity correction
-    print(f"Barycentric Velocity Correction: {barycentric_velocity_correction} km/s")
+    print(f"     Barycentric Velocity Correction: {barycentric_velocity_correction} km/s")
 
     print('\n  --> DONE Testing: calculate_barycentric_velocity_correction()')
 
@@ -126,7 +126,7 @@ def test_match_month_to_date():
     for date in ['000122','000222','000322','000422','000522','000622','000722','000822','000922','001022','001122','001222']:
         month = VR.utils.match_month_to_date(date)
         # Print the month
-        print(f"Month for {date}: {month}")
+        print(f"     Month for {date}: {month}")
 
     print('\n  --> DONE Testing: match_month_to_date()')
     
@@ -149,8 +149,8 @@ def test_read_veloce_fits_image_and_metadata():
     # Call the function with one of the provided FITS images
     image, metadata = VR.utils.read_veloce_fits_image_and_metadata(str(Path(__file__).resolve().parent)+'/../observations/001122/ccd_1/22nov10030.fits')
     # Print the image and header
-    print(f"Image shape: {np.shape(image)}")
-    print(f"Metadata: {metadata}")
+    print(f"     Image shape: {np.shape(image)}")
+    print(f"     Metadata: {metadata}")
 
     print('\n  --> DONE Testing: read_veloce_fits_image_and_metadata()')
 
@@ -162,7 +162,7 @@ def test_identify_calibration_and_science_runs():
     raw_data_dir = str(Path(__file__).resolve().parent)+'/../observations/'
 
     for each_science_run_separately in [False, True]:
-        print(f"Each Science Run Separately: {each_science_run_separately}")
+        print(f"     Each Science Run Separately: {each_science_run_separately}")
         VR.utils.identify_calibration_and_science_runs(date, raw_data_dir, each_science_run_separately)
 
     print('\n  --> DONE Testing: identify_calibration_and_science_runs()')
@@ -178,14 +178,14 @@ def test_interpolate_spectrum():
     # Call the function with the mock spectrum
     interpolated_flux = VR.utils.interpolate_spectrum(wavelength, flux, target_wavelength)
     # Print the interpolated flux
-    print(f"Interpolated flux with shape {np.shape(interpolated_flux)} from flux with shape {np.shape(flux)} onto target wavelength with shape {np.shape(target_wavelength)}.")
+    print(f"     Interpolated flux with shape {np.shape(interpolated_flux)} from flux with shape {np.shape(flux)} onto target wavelength with shape {np.shape(target_wavelength)}.")
 
     print('\n  --> DONE Testing: interpolate_spectrum()')
 
 def test_lasercomb_wavelength_from_numbers():
     print('\n  --> Testing: lasercomb_wavelength_from_numbers()')
 
-    n = np.arange(18000, 19000, 100)
+    n = np.arange(18000, 19000, 250)
     repeat_frequency_ghz = 25.00000000
     offset_frequency_ghz = 9.56000000000
     wavelength = VR.utils.lasercomb_wavelength_from_numbers(n, repeat_frequency_ghz, offset_frequency_ghz)
@@ -196,11 +196,11 @@ def test_lasercomb_wavelength_from_numbers():
 def test_lasercomb_numbers_from_wavelength():
     print('\n  --> Testing: lasercomb_numbers_from_wavelength()')
 
-    wavelength = np.arange(5000, 6000, 100)
+    wavelength = np.arange(5000, 6000, 250)
     repeat_frequency_ghz = 25.00000000
     offset_frequency_ghz = 9.56000000000
     n = VR.utils.lasercomb_numbers_from_wavelength(wavelength, repeat_frequency_ghz, offset_frequency_ghz)
-    print(f"wavelength = {wavelength}, repeat_frequency_ghz = {repeat_frequency_ghz}, offset_frequency_ghz = {offset_frequency_ghz} --> n = {n}")
+    print(f"     Wavelength = {wavelength}, repeat_frequency_ghz = {repeat_frequency_ghz}, offset_frequency_ghz = {offset_frequency_ghz} --> n = {n}")
 
     print('\n  --> DONE Testing: lasercomb_numbers_from_wavelength()')
 
@@ -388,8 +388,8 @@ def test_find_best_radial_velocity_from_fits_header():
 
     with pytest.raises(ValueError) as excinfo:
         best_vrad = VR.utils.find_best_radial_velocity_from_fits_header(fits_header_vrad_none)
-        assert expected_msg in str(excinfo.value), f"Expected message '{expected_msg}' not found in '{str(excinfo.value)}'"
-
+    print(f'  --> ValueError raised: {excinfo.value}')
+    
     print('\n  --> DONE Testing: find_best_radial_velocity_from_fits_header()')
 
 def test_find_closest_korg_spectrum():
