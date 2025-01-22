@@ -108,9 +108,12 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, ov
     lc_range['ccd_2_order_103'] = [140,3200]
 
     # Check if the order is in the range of orders we can optimise
-    if not ((order_name[4] != '1') & (order_name != 'ccd_3_order_65')):
-        raise ValueError('This function is only implemented for CCD3 (exepct order 65) and CCD2 orders 103-134')
+    if order_name not in lc_range.keys():
+        raise ValueError('This function is only implemented for CCD3 (exepct order 65) and CCD2 orders 103-134, not your order '+order_name)
     else:
+
+        if debug:
+            print('  --> Optimising wavelength solution with LC peaks for '+order_name)
 
         # Use wavelength coefficients according to the following preference:
         # 1) Coefficients fitted with 18Sco and Korg synthesis
@@ -143,7 +146,7 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, ov
         if order_name[4] == '3':
             peak_distance1 = 6
             peak_distance2 = 8
-        elif int(order_name[-3]) > 118:
+        elif int(order_name[-3:]) > 118:
             peak_distance1 = 4
             peak_distance2 = 6
         else:
@@ -224,9 +227,9 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, ov
 
             if debug:
                 if len(new_peaks_added) > 0:
-                    print('Found '+str(len(new_peaks_added))+' gaps: ', new_peaks_added)
+                    print('      --> Found '+str(len(new_peaks_added))+' gaps: ', new_peaks_added)
                 else:
-                    print('Found 0 gaps')
+                    print('      --> Found 0 gaps')
 
         # Plot the laser rough comb peaks if we want to debug
         if debug:
@@ -275,7 +278,7 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, ov
                     fine_peaks.append(popt[0])
             except:
                 if debug:
-                    print('Failed fit for peak '+str(peak)+' at position '+str(peak+lc_beginning))
+                    print('      --> Failed fit for finer peak '+str(peak)+' at position '+str(peak+lc_beginning)+'. Using rough peak.')
                 fine_peaks.append(peak)
         fine_peaks = np.array(fine_peaks)
 
@@ -304,12 +307,12 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, ov
 
         # In some cases, the number of peaks and modes differ. In this case, we only use the first n peaks and modes.
         if debug:
-            print('peaks: ',len(peaks))
-            print('modes: ',len(lc_wavelengths))
+            print('    --> Peaks found: ',len(peaks))
+            print('    --> Modes found: ',len(lc_wavelengths))
         if len(peaks) != len(lc_wavelengths):
             use_peaks_and_modes = np.min([len(peaks),len(lc_wavelengths)])
             if debug:
-                print('Only using first '+str(use_peaks_and_modes)+' entries')
+                print('    --> Only using first '+str(use_peaks_and_modes)+' entries')
         else:
             use_peaks_and_modes = len(peaks)
 
@@ -338,7 +341,7 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, ov
         if len(rms_velocity_x_sigma_outlier) > 0:
 
             if debug:
-                print('Refitting wavelength solution after clipping '+str(len(rms_velocity_x_sigma_outlier))+' '+str(rms_sigma)+'-sigma RMS velocity outliers: ',np.round(lc_pixels_to_fit[rms_velocity_x_sigma_outlier]+2064))
+                print('    --> Refitting wavelength solution after clipping '+str(len(rms_velocity_x_sigma_outlier))+' '+str(rms_sigma)+'-sigma RMS velocity outliers: ',np.round(lc_pixels_to_fit[rms_velocity_x_sigma_outlier]+2064))
                 plt.scatter(
                     lc_pixels_to_fit[rms_velocity_x_sigma_outlier]+2064,
                     lc_wavelengths_to_fit[rms_velocity_x_sigma_outlier] - (polynomial_function(lc_pixels_to_fit[rms_velocity_x_sigma_outlier],*coeffs_lc)*10),
@@ -376,7 +379,7 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, ov
             )
             plt.plot(
                 np.arange(4128),
-                np.zoers(4128),
+                np.zeros(4128),
                 label = 'LC Wavelength Solution'
             )
 
@@ -411,7 +414,7 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, ov
 
         return(coeffs_lc)
 
-def calibrate_single_order(file, order, barycentric_velocity=None, optimise_lc_solution=True):
+def calibrate_single_order(file, order, barycentric_velocity=None, optimise_lc_solution=True, debug=False):
     """
     Calibrates a single spectral order by fitting a polynomial to the pixel-to-wavelength relationship 
     and optionally applying a barycentric velocity correction. The calibration updates the wavelength 
@@ -428,6 +431,7 @@ def calibrate_single_order(file, order, barycentric_velocity=None, optimise_lc_s
                                                 If None, no correction is applied.
         optimise_lc_solution (bool, optional):  If True, the function will use the laser comb data of the FITS extension
                                                 and optimise the wavelength solution based on refitted peaks of the laser comb.
+        debug (bool, optional):                 If True, the function will generate diagnostic plots showing the wavelength solution.
         
     Returns:
         None: The function modifies the 'file' object in-place, updating the wavelength data for the specified order.
@@ -477,7 +481,7 @@ def calibrate_single_order(file, order, barycentric_velocity=None, optimise_lc_s
             # Let's use the last 2 digits to avoid warnings, because not all of CCD3 are > 100 (but all of CCD2).
             ((order_name[4] == '2') & (int(order_name[-2:]) >= 3) & (int(order_name[-2:]) <= 34))
         ):
-            wavelength_solution_vacuum_coefficients = optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values = file[order].data['LC'])
+            wavelength_solution_vacuum_coefficients = optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values = file[order].data['LC'], debug=debug)
 
     # Calculate vacuum wavelengths and convert them to air wavelengths
     wavelength_solution_vacuum = polynomial_function(
@@ -593,7 +597,7 @@ def plot_wavelength_calibrated_order_data(order, science_object, file, overview_
     overview_pdf.savefig()
     plt.close()
 
-def calibrate_wavelength(science_object, optimise_lc_solution=True, correct_barycentric_velocity=True, fit_voigt_for_rv=True, create_overview_pdf=False):
+def calibrate_wavelength(science_object, optimise_lc_solution=True, correct_barycentric_velocity=True, fit_voigt_for_rv=True, create_overview_pdf=False, debug=False):
     """
     Calibrates the wavelength data for a given science object by applying a series of corrections and enhancements.
     This includes barycentric velocity correction, radial velocity estimation via Voigt profile fitting, and
@@ -609,6 +613,7 @@ def calibrate_wavelength(science_object, optimise_lc_solution=True, correct_bary
                                                     to estimate the radial velocity of the object.
         create_overview_pdf (bool):                 If True, generates a PDF file containing plots of the calibrated spectral data
                                                     for each order in the FITS file.
+        debug (bool):                               If True, generates additional diagnostic plots and information during the calibration.
 
     Returns:
         None: This function modifies the FITS files in-place and may generate output files (PDFs), but does not
@@ -642,25 +647,25 @@ def calibrate_wavelength(science_object, optimise_lc_solution=True, correct_bary
         if correct_barycentric_velocity:
             # ToDo: Check why the barycentric velocity correction seems to be exactly off in the wrong direction?! For now, we will just flip the sign.
             barycentric_velocity = -calculate_barycentric_velocity_correction(fits_header=file[0].header)
-            print('  -> Correcting for barycentric velocity: '+"{:.2f}".format(np.round(barycentric_velocity,2))+' km/s')
+            print('  --> Correcting for barycentric velocity: '+"{:.2f}".format(np.round(barycentric_velocity,2))+' km/s')
             file[0].header['BARYVEL'] = barycentric_velocity
         else:
-            print('  -> Not correcting for barycentric velocity.')
+            print('  --> Not correcting for barycentric velocity.')
             barycentric_velocity = None
             file[0].header['BARYVEL'] = 0.0
 
         if optimise_lc_solution:
-            print('  -> Optimising wavelength solution based on Laser Comb data where available (and using previous ThXe otherwise)')
+            print('  --> Optimising wavelength solution based on Laser Comb data where available (and using previous ThXe otherwise)')
         else:
-            print('  -> Using previous LC and ThXe calibrations as wavelength solution')
+            print('  --> Using previous LC and ThXe calibrations as wavelength solution')
 
         # Now loop through the FITS file extensions aka Veloce orders to apply the wavelength calibration
         for order in range(1,len(file)):
-            calibrate_single_order(file, order, barycentric_velocity=barycentric_velocity, optimise_lc_solution=optimise_lc_solution)
+            calibrate_single_order(file, order, barycentric_velocity=barycentric_velocity, optimise_lc_solution=optimise_lc_solution, debug=debug)
 
         # If requested, fit a Voigt profile to the Halpha and CaII triplet lines to estimate the radial velocity
         if fit_voigt_for_rv:
-            print('  -> Estimating rough RV from Halpha and CaT; starting with CaII 8662 using its RV as initial guess for others.')
+            print('\n  --> Estimating rough RV from Halpha and CaT; starting with CaII 8662 using its RV as initial guess for others.')
 
             # Define the lines and orders to fit a Voigt profile to.
             # Only fit a few at the moment, as they deliver the most reliable results of ~3 km/s of literature values for the tests done for 240219.
@@ -695,7 +700,7 @@ def calibrate_wavelength(science_object, optimise_lc_solution=True, correct_bary
                 ax.set_xlabel(r'Wavelength $\lambda_\mathrm{air}~/~\mathrm{\AA}$')
 
                 if file[order].header['EXTNAME'] != order_name:
-                    print('  -> Warning: '+file[order].header['EXTNAME']+' != '+order_name)
+                    print('  --> Warning: '+file[order].header['EXTNAME']+' != '+order_name)
 
                 # Restrice fitting region to +- 600 km/s around line centre
                 close_to_line_centre = (
@@ -757,9 +762,9 @@ def calibrate_wavelength(science_object, optimise_lc_solution=True, correct_bary
                 )
 
                 if voigt_profile_parameters[-2] == sigma_gamma_max:
-                    print('  -> Warning: Voigt profile fit hit upper boundary ('+str(sigma_gamma_max)+') for sigma')
+                    print('  --> Warning: Voigt profile fit hit upper boundary ('+str(sigma_gamma_max)+') for sigma')
                 if voigt_profile_parameters[-1] == sigma_gamma_max:
-                    print('  -> Warning: Voigt profile fit hit upper boundary ('+str(sigma_gamma_max)+') for gamma')
+                    print('  --> Warning: Voigt profile fit hit upper boundary ('+str(sigma_gamma_max)+') for gamma')
 
                 rv_voigt = radial_velocity_from_line_shift(voigt_profile_parameters[0], line_centre)
                 e_line_centre = np.sqrt(np.diag(voigt_profile_covariances))[0]
@@ -781,9 +786,9 @@ def calibrate_wavelength(science_object, optimise_lc_solution=True, correct_bary
                         rv_estimates_upper.append(rv_upper_voigt)
                         rv_estimates_lower.append(rv_lower_voigt)
                     else:
-                        print('  -> Neglecting RV estimate for '+line_name+' due to weak line (EW '+str(int(np.round(100*line_equivalent_width)))+' < 100 mÅ).')
+                        print('  --> Neglecting RV estimate for '+line_name+' due to weak line (EW '+str(int(np.round(100*line_equivalent_width)))+' < 100 mÅ).')
                 elif order == 79:
-                    print('  -> Fitting Halpha, but neglecting for RV estimate.')
+                    print('  --> Fitting Halpha, but neglecting for RV estimate.')
 
                 ax.plot(
                     wavelength_to_fit,
@@ -816,16 +821,16 @@ def calibrate_wavelength(science_object, optimise_lc_solution=True, correct_bary
             outliers = mad_based_outlier(rv_estimates)
             outliers[abs(rv_estimates - rv_from_8662) > 50] = True
             if (len(np.where(outliers)[0]) > 0) & (len(rv_estimates) - len(np.where(outliers)[0]) >= 3):
-                print('  -> Neglecting '+str(np.sum(outliers))+' RV outlier(s): ',np.round(rv_estimates[outliers],2))
+                print('  --> Neglecting '+str(np.sum(outliers))+' RV outlier(s): ',np.round(rv_estimates[outliers],2))
                 filtered_rv = rv_estimates[~outliers]
             else:
-                print('  -> No RV outlier(s) identified.')
+                print('  --> No RV outlier(s) identified.')
                 filtered_rv = rv_estimates
 
             rv_mean = np.round(np.mean(filtered_rv),2)
             rv_std  = np.round(np.std(filtered_rv),2)
             rv_unc  = np.round(np.median(np.array(rv_estimates_upper)-np.array(rv_estimates_lower)),2)
-            print(r'  -> $v_\mathrm{rad}  = '+str(rv_mean)+r' \pm '+str(rv_std)+r' \pm '+str(rv_unc)+r'\,\mathrm{km\,s^{-1}}$ (mean, scatter, unc.) based on '+str(len(filtered_rv))+' lines.')
+            print(r'  --> $v_\mathrm{rad}  = '+str(rv_mean)+r' \pm '+str(rv_std)+r' \pm '+str(rv_unc)+r'\,\mathrm{km\,s^{-1}}$ (mean, scatter, unc.) based on '+str(len(filtered_rv))+' lines.')
             
             file[0].header['VRAD'] = rv_mean
             file[0].header['E_VRAD'] = rv_std
@@ -840,11 +845,11 @@ def calibrate_wavelength(science_object, optimise_lc_solution=True, correct_bary
     if create_overview_pdf:
         with PdfPages(input_output_directory+'/veloce_spectra_'+science_object+'_'+config.date+'_overview.pdf') as overview_pdf:
             with fits.open(input_output_directory+'/veloce_spectra_'+science_object+'_'+config.date+'.fits') as file:
-                print('  -> Creating overview PDF. This may take some time for the '+str(len(file))+' orders.\n')
+                print('  --> Creating overview PDF. This may take some time for the '+str(len(file))+' orders.\n')
                 for order in range(1,len(file)):
                     plot_wavelength_calibrated_order_data(order, science_object, file, overview_pdf)
     else:
-        print('  -> Not creating overview PDF.\n')
+        print('  --> Not creating overview PDF.\n')
 
 def fit_thxe_polynomial_coefficients(debug=False):
     """
