@@ -139,7 +139,7 @@ def test_polynomial_function():
     y = VR.utils.polynomial_function(x, *coeffs)
 
     # Print the polynomial function
-    print(f"Polynomial Function: {coeffs[0]} + {coeffs[1]}*x + {coeffs[2]}*x^2 + {coeffs[3]}*x^3 + {coeffs[4]}*x^4")
+    print(f"  --> Polynomial Function: {coeffs[0]} + {coeffs[1]}*x + {coeffs[2]}*x^2 + {coeffs[3]}*x^3 + {coeffs[4]}*x^4")
 
     print('\n  --> DONE Testing: polynomial_function()')
 
@@ -189,7 +189,7 @@ def test_lasercomb_wavelength_from_numbers():
     repeat_frequency_ghz = 25.00000000
     offset_frequency_ghz = 9.56000000000
     wavelength = VR.utils.lasercomb_wavelength_from_numbers(n, repeat_frequency_ghz, offset_frequency_ghz)
-    print(f"n = {n}, repeat_frequency_ghz = {repeat_frequency_ghz}, offset_frequency_ghz = {offset_frequency_ghz} --> wavelength = {wavelength}")
+    print(f"  --> n = {n}, repeat_frequency_ghz = {repeat_frequency_ghz}, offset_frequency_ghz = {offset_frequency_ghz} --> wavelength = {wavelength}")
 
     print('\n  --> DONE Testing: lasercomb_wavelength_from_numbers()')
 
@@ -210,9 +210,9 @@ def test_read_in_wavelength_solution_coefficients_tinney():
     # Call the function with the provided wavelength solution coefficients
     coefficients = VR.utils.read_in_wavelength_solution_coefficients_tinney()
     # Print the coefficients
-    print(f"Found Tinney Wavelength Solution Coefficients for {len(coefficients)} orders.")
+    print(f"  --> Found Tinney Wavelength Solution Coefficients for {len(coefficients)} orders.")
     expected_order = 'ccd_3_order_70'
-    print(f"First entry ({expected_order}): f{coefficients[expected_order]}")
+    print(f"  --> First entry ({expected_order}): f{coefficients[expected_order]}")
 
     print('\n  --> DONE Testing: read_in_wavelength_solution_coefficients_tinney()')
 
@@ -223,7 +223,7 @@ def test_wavelength_vac_to_air():
     for wavelength_vac in [6562.7970, np.arange(5000, 6000, 250)]:
         wavelength_air = VR.utils.wavelength_vac_to_air(wavelength_vac)
         # Print the coefficients
-        print(f"Vacuum Wavelength: {wavelength_vac} Angstroms --> Air Wavelength: {wavelength_air} Angstroms")
+        print(f"  --> Vacuum Wavelength: {wavelength_vac} Angstroms --> Air Wavelength: {wavelength_air} Angstroms")
 
     print('\n  --> DONE Testing: wavelength_vac_to_air()')
 
@@ -234,7 +234,7 @@ def test_wavelength_air_to_vac():
     for wavelength_air in [6563.2410, np.arange(5000, 6000, 250)]:
         wavelength_vac = VR.utils.wavelength_air_to_vac(wavelength_air)
         # Print the coefficients
-        print(f"Air Wavelength: {wavelength_air} Angstroms --> Vacuum Wavelength: {wavelength_vac} Angstroms")
+        print(f"  --> Air Wavelength: {wavelength_air} Angstroms --> Vacuum Wavelength: {wavelength_vac} Angstroms")
 
     print('\n  --> DONE Testing: wavelength_air_to_vac()')
 
@@ -253,7 +253,7 @@ def test_check_repeated_observations():
     # Run function with and without repeat observations
     for science_runs in [science_runs_with_repeated_observations,science_runs_witout_repeated_observations]:
         repeated_observations = VR.utils.check_repeated_observations(science_runs)
-        print(f"Repeated Observations: {repeated_observations}")
+        print(f"  --> Repeated Observations: {repeated_observations}")
 
     print('\n  --> DONE Testing: check_repeated_observations()')
 
@@ -263,6 +263,8 @@ def test_monitor_vrad_for_repeat_observations():
     date = '001122'
     repeated_observations = {'HIP69673': ['0150', '0151']}
 
+    VR.config.working_directory = str(Path(__file__).resolve().parent)+'/../'
+
     VR.utils.monitor_vrad_for_repeat_observations(date, repeated_observations)
 
     print('\n  --> DONE Testing: monitor_vrad_for_repeat_observations()')
@@ -271,7 +273,7 @@ def test_get_memory_usage():
     print('\n  --> Testing: get_memory_usage()')
 
     memory_usage = VR.utils.get_memory_usage()
-    print(f"Memory Usage: {memory_usage}")
+    print(f"  --> Memory Usage: {memory_usage}")
 
     print('\n  --> DONE Testing: get_memory_usage()')
 
@@ -289,9 +291,9 @@ def test_degrade_spectral_resolution():
     # Print the coefficients
     high_res_not_one = np.where(flux != 1.0)[0]
     low_res_not_one = np.where(degraded_flux != 1.0)[0]
-    print(f"Original Resolution: {original_resolution} --> Target Resolution: {target_resolution}")
-    print(f"Flux != 1.0 at {len(high_res_not_one)} indices in high resolution spectrum.")
-    print(f"Flux != 1.0 at {len(low_res_not_one)} indices in low resolution spectrum.")
+    print(f"  --> Original Resolution: {original_resolution} --> Target Resolution: {target_resolution}")
+    print(f"  --> Flux != 1.0 at {len(high_res_not_one)} indices in high resolution spectrum.")
+    print(f"  --> Flux != 1.0 at {len(low_res_not_one)} indices in low resolution spectrum.")
 
     print('\n  --> DONE Testing: degrade_spectral_resolution()')
 

@@ -30,6 +30,8 @@ SSO = EarthLocation.of_site('Siding Spring Observatory')
 # Astroquery package
 import astroquery
 from astroquery.simbad import Simbad
+Simbad.TIMEOUT = 10 # This is to prevent the query from hanging for too long
+Simbad.ROW_LIMIT = 3 # This is to speed up the query
 Simbad.add_votable_fields('ids')
 Simbad.add_votable_fields('velocity')
 Simbad.add_votable_fields('parallax')
@@ -658,8 +660,8 @@ def monitor_vrad_for_repeat_observations(date, repeated_observations):
                         vrad.append(file[0].header['VRAD'])
                         e_vrad.append(file[0].header['E_VRAD'])
                 except:
-                    print('\nCould not read '+repeated_observation+'_'+run)
-                    print('Expected path was: '+expected_path)
+                    print('\n  --> Could not read '+repeated_observation+'_'+run)
+                    print('  --> Expected path was: '+expected_path)
 
             utmjd = np.array(utmjd)
             vrad = np.array(vrad)
@@ -775,28 +777,68 @@ def update_fits_header_via_crossmatch_with_simbad(fits_header):
     # We test for HIP and Gaia DR3, otherwise we crossmatch via RA/Dec.
     if object_id[:3] == 'HIP':
         print('\n  --> Identified '+object_id+' as a HIP catalogue entry. Crossmatching accordingly.')
-        simbad_match = Simbad.query_object(object_id)
-        simbad_match_fe_h = simbad_fe_h_query.query_object(object_id)
+        try:
+            simbad_match = Simbad.query_object(object_id)
+        except ConnectionError as e:
+            simbad_match = []
+            print('  --> ConnectionError for Simbad: '+str(e))
+        try:
+            simbad_match_fe_h = simbad_fe_h_query.query_object(object_id)
+        except ConnectionError as e:
+            simbad_match_fe_h = []
+            print('  --> ConnectionError for Simbad: '+str(e))
     elif object_id.isdigit() and len(object_id) > 10:
         print('\n  --> Identified '+object_id+' as a likely Gaia DR3 source_id. Crossmatching accordingly.')
-        simbad_match = Simbad.query_object('Gaia DR3 '+object_id)
-        simbad_match_fe_h = simbad_fe_h_query.query_object('Gaia DR3 '+object_id)
+        try:
+            simbad_match = Simbad.query_object('Gaia DR3 '+object_id)
+        except ConnectionError as e:
+            simbad_match = []
+            print('  --> ConnectionError for Simbad: '+str(e))
+        try:
+            simbad_match_fe_h = simbad_fe_h_query.query_object('Gaia DR3 '+object_id)
+        except ConnectionError as e:
+            simbad_match_fe_h = []
+            print('  --> ConnectionError for Simbad: '+str(e))
     elif '_' in object_id:
         print('\n  --> '+object_id+' looks like a non-catalogue entry. Crossmatching via Ra/Dec within 2 arcsec.')
         object_coordinate = SkyCoord(ra = float(ra), dec = float(dec), frame='icrs', unit='deg')
-        simbad_match = Simbad.query_region(object_coordinate, radius=2*u.arcsec)
-        simbad_match_fe_h = simbad_fe_h_query.query_region(object_coordinate, radius=2*u.arcsec)
+        try:
+            simbad_match = Simbad.query_region(object_coordinate, radius=2*u.arcsec)
+        except ConnectionError as e:
+            simbad_match = []
+            print('  --> ConnectionError for Simbad: '+str(e))
+        try:
+            simbad_match_fe_h = simbad_fe_h_query.query_region(object_coordinate, radius=2*u.arcsec)
+        except ConnectionError as e:
+            simbad_match_fe_h = []
+            print('  --> ConnectionError for Simbad: '+str(e))
     else:
         print('\n  --> '+object_id+' does not look like either Gaia DR3 or HIP entry. Crossmatching with Simbad first and otherwise via Ra/Dec.')
-        simbad_match = Simbad.query_object(object_id)
+        try:
+            simbad_match = Simbad.query_object(object_id)
+        except ConnectionError as e:
+            simbad_match = []
+            print('  --> ConnectionError for Simbad: '+str(e))
         if len(simbad_match) > 0:
             print('  --> Found entry in Simbad.')
-            simbad_match_fe_h = simbad_fe_h_query.query_object(object_id)
+            try:
+                simbad_match_fe_h = simbad_fe_h_query.query_object(object_id)
+            except ConnectionError as e:
+                simbad_match_fe_h = []
+                print('  --> ConnectionError for Simbad: '+str(e))
         else:
             print('  --> '+object_id+' not a valid Simbad entry. Crossmatching via Ra/Dec within 2 arcsec.')
             object_coordinate = SkyCoord(ra = float(ra), dec = float(dec), frame='icrs', unit='deg')
-            simbad_match = Simbad.query_region(object_coordinate, radius=2*u.arcsec)
-            simbad_match_fe_h = simbad_fe_h_query.query_region(object_coordinate, radius=2*u.arcsec)
+            try:
+                simbad_match = Simbad.query_region(object_coordinate, radius=2*u.arcsec)
+            except ConnectionError as e:
+                simbad_match = []
+                print('  --> ConnectionError for Simbad: '+str(e))
+            try:
+                simbad_match_fe_h = simbad_fe_h_query.query_region(object_coordinate, radius=2*u.arcsec)
+            except ConnectionError as e:
+                simbad_match_fe_h = []
+                print('  --> ConnectionError for Simbad: '+str(e))
 
     # Let's check how many matches we got and return if there are none:
     if len(simbad_match) == 0:
