@@ -363,9 +363,6 @@ def fit_wavelength_solution_with_korg_spectrum(order, veloce_fits_file, radial_v
 
     """
 
-    if debug:
-        print(f'  --> Fitting wavelength solution for order {order}.')
-
     # We will use the science spectrum and barycentric velocity from the veloce_fits_file:
     veloce_science_flux  = veloce_fits_file[order].data['science']
     barycentric_velocity = veloce_fits_file[0].header['BARYVEL']
@@ -479,4 +476,5 @@ def calculate_wavelength_coefficients_with_korg_synthesis(veloce_fits_file, korg
 
     # Loop over all orders and fit the wavelength solution to the Korg synthetic spectrum.
     for order in orders:
+        print(f'  --> Fitting wavelength solution for order {order}.')
         fit_wavelength_solution_with_korg_spectrum(order, veloce_fits_file, vrad_for_calibration, korg_wavelength_vac, korg_flux, normalisation_buffers[order], telluric_line_wavelengths, telluric_line_fluxes, debug=debug)

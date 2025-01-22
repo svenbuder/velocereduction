@@ -349,8 +349,8 @@ def identify_calibration_and_science_runs(date, raw_data_dir, each_science_run_s
 
     """
     
-    print('\n=============================================')
-    print('\nIdentifying calibration and science runs now\n')
+    print('\n  =================================================')
+    print('  ||\n  ||  --> Identifying calibration and science runs now  ||\n')
 
     raw_file_path = raw_data_dir+'/'+date+'/'
 
@@ -362,9 +362,9 @@ def identify_calibration_and_science_runs(date, raw_data_dir, each_science_run_s
     if not log_file_path:
         raise ValueError('No Log file present in '+f"{raw_file_path}*.log")
     elif len(log_file_path) > 1:
-        print(f'More than 1 Log file present, continuing with {log_file_path[0]}\n')
+        print('  ||'+f'  --> More than 1 Log file present, continuing with {log_file_path[0]}')
     else:
-        print(f'Found Log file {log_file_path[0]}\n')
+        print('  ||'+f'  --> Found Log file {log_file_path[0]}')
     log_file_path = log_file_path[0]
 
     with open(log_file_path, "r") as log_file:
@@ -407,7 +407,7 @@ def identify_calibration_and_science_runs(date, raw_data_dir, each_science_run_s
             comments = line[98+len(overscan):]
             if len(comments) != 0:
                 if run_object != 'FlatField-Quartz':
-                    print('Warning for '+run_object+' (run '+run+'): '+comments)
+                    print('  ||\n  ||  --> Warning for '+run_object+' (run '+run+'): '+comments)
 
             # Read in type of observation from CCD3 info (since Rosso should always be available)
             if ccd == '3':
@@ -449,21 +449,22 @@ def identify_calibration_and_science_runs(date, raw_data_dir, each_science_run_s
     # Print all DarkFrame exposures, if any
     dark_frames = [key for key in calibration_runs['Darks'].keys()]
     if len(dark_frames) > 0:
-        print('\nDarkFrame observations: '+', '.join(dark_frames))
+        print('  ||\n  || DarkFrame observations: '+', '.join(dark_frames))
     else:
-        print('\nNo DarkFrame observations identified.')
+        print('  ||\n  || No DarkFrame observations identified.')
                         
     if len(calibration_runs['Bstar']) > 0:
-        print('\nBstar observations happened at: '+', '.join(calibration_runs['Bstar'].keys()))
+        print('  ||\n  || Bstar observations happened at: '+', '.join(calibration_runs['Bstar'].keys()))
     else:
-        print('\nNo Bstar observations identified.')
+        print('  ||\n  || No Bstar observations identified.')
 
-    print('\nThe following science observations were identified: '+', '.join(list(science_runs.keys())))
+    print('  ||\n  || The following science observations were identified: '+', '.join(list(science_runs.keys())))
 
     if len(science_runs) > 0:
         directory_path = Path(config.working_directory+'reduced_data/'+config.date)
         directory_path.mkdir(parents=True, exist_ok=True)
-        print('\nWill save reduced data into directory '+str(directory_path))
+        print('  ||\n  || Will save reduced data into directory '+str(directory_path))
+        print('  ||\n  =================================================\n')
 
     return(calibration_runs, science_runs)
 
@@ -639,13 +640,13 @@ def monitor_vrad_for_repeat_observations(date, repeated_observations):
     """
 
     if len(repeated_observations) == 0:
-        print('No repeated observations found.')
+        print('  --> No repeated observations found.')
     else:
-        print('Repeat observations found for:\n'+','.join(list(repeated_observations.keys())))
+        print('  --> Repeat observations found for: '+','.join(list(repeated_observations.keys())))
 
         # Loop through each repeated observation
         for repeated_observation in repeated_observations.keys():
-            print('\nMonitoring RV for '+repeated_observation)
+            print('\n  --> Monitoring RV for '+repeated_observation)
             
             # We will read out UTMJD, VRAD, and E_VRAD
             utmjd = []
@@ -780,65 +781,27 @@ def update_fits_header_via_crossmatch_with_simbad(fits_header):
         try:
             simbad_match = Simbad.query_object(object_id)
         except ConnectionError as e:
-            simbad_match = []
-            print('  --> ConnectionError for Simbad: '+str(e))
-        try:
-            simbad_match_fe_h = simbad_fe_h_query.query_object(object_id)
-        except ConnectionError as e:
-            simbad_match_fe_h = []
-            print('  --> ConnectionError for Simbad: '+str(e))
+            raise ConnectionError('  --> ConnectionError for Simbad. Try again later! Error Message: '+str(e))
+        simbad_match_fe_h = simbad_fe_h_query.query_object(object_id)
     elif object_id.isdigit() and len(object_id) > 10:
-        print('\n  --> Identified '+object_id+' as a likely Gaia DR3 source_id. Crossmatching accordingly.')
-        try:
-            simbad_match = Simbad.query_object('Gaia DR3 '+object_id)
-        except ConnectionError as e:
-            simbad_match = []
-            print('  --> ConnectionError for Simbad: '+str(e))
-        try:
-            simbad_match_fe_h = simbad_fe_h_query.query_object('Gaia DR3 '+object_id)
-        except ConnectionError as e:
-            simbad_match_fe_h = []
-            print('  --> ConnectionError for Simbad: '+str(e))
+        simbad_match = Simbad.query_object('Gaia DR3 '+object_id)
+        simbad_match_fe_h = simbad_fe_h_query.query_object('Gaia DR3 '+object_id)
     elif '_' in object_id:
         print('\n  --> '+object_id+' looks like a non-catalogue entry. Crossmatching via Ra/Dec within 2 arcsec.')
         object_coordinate = SkyCoord(ra = float(ra), dec = float(dec), frame='icrs', unit='deg')
-        try:
-            simbad_match = Simbad.query_region(object_coordinate, radius=2*u.arcsec)
-        except ConnectionError as e:
-            simbad_match = []
-            print('  --> ConnectionError for Simbad: '+str(e))
-        try:
-            simbad_match_fe_h = simbad_fe_h_query.query_region(object_coordinate, radius=2*u.arcsec)
-        except ConnectionError as e:
-            simbad_match_fe_h = []
-            print('  --> ConnectionError for Simbad: '+str(e))
+        simbad_match = Simbad.query_region(object_coordinate, radius=2*u.arcsec)
+        simbad_match_fe_h = simbad_fe_h_query.query_region(object_coordinate, radius=2*u.arcsec)
     else:
         print('\n  --> '+object_id+' does not look like either Gaia DR3 or HIP entry. Crossmatching with Simbad first and otherwise via Ra/Dec.')
-        try:
-            simbad_match = Simbad.query_object(object_id)
-        except ConnectionError as e:
-            simbad_match = []
-            print('  --> ConnectionError for Simbad: '+str(e))
+        simbad_match = Simbad.query_object(object_id)
         if len(simbad_match) > 0:
             print('  --> Found entry in Simbad.')
-            try:
-                simbad_match_fe_h = simbad_fe_h_query.query_object(object_id)
-            except ConnectionError as e:
-                simbad_match_fe_h = []
-                print('  --> ConnectionError for Simbad: '+str(e))
+            simbad_match_fe_h = simbad_fe_h_query.query_object(object_id)
         else:
             print('  --> '+object_id+' not a valid Simbad entry. Crossmatching via Ra/Dec within 2 arcsec.')
             object_coordinate = SkyCoord(ra = float(ra), dec = float(dec), frame='icrs', unit='deg')
-            try:
-                simbad_match = Simbad.query_region(object_coordinate, radius=2*u.arcsec)
-            except ConnectionError as e:
-                simbad_match = []
-                print('  --> ConnectionError for Simbad: '+str(e))
-            try:
-                simbad_match_fe_h = simbad_fe_h_query.query_region(object_coordinate, radius=2*u.arcsec)
-            except ConnectionError as e:
-                simbad_match_fe_h = []
-                print('  --> ConnectionError for Simbad: '+str(e))
+            simbad_match = Simbad.query_region(object_coordinate, radius=2*u.arcsec)
+            simbad_match_fe_h = simbad_fe_h_query.query_region(object_coordinate, radius=2*u.arcsec)
 
     # Let's check how many matches we got and return if there are none:
     if len(simbad_match) == 0:
@@ -880,41 +843,47 @@ def update_fits_header_via_crossmatch_with_simbad(fits_header):
         hip = unique_ids[[x[:4] == 'HIP ' for x in unique_ids]][0]
         match_with_hip_tmass_gaia.append(hip)
         fits_header['HIP_ID'] = (int(hip[4:]), 'Hipparcos Catalogue Identifier')
+    else:
+        pass
     if '2MASS ' in ids:
         tmass = unique_ids[[x[:6] == '2MASS ' for x in unique_ids]][0]
         match_with_hip_tmass_gaia.append(tmass)
         fits_header['TMASS_ID'] = (tmass[7:], '2MASS catalogue identifier (2MASS J removed)')
+    else:
+        pass
     if 'Gaia DR3 ' in ids:
         source_id = unique_ids[[x[:9] == 'Gaia DR3 ' for x in unique_ids]][0]
         match_with_hip_tmass_gaia.append(source_id)
         fits_header['SOURCE_ID'] = (int(source_id[9:]), 'Gaia DR3 source_id (Gaia DR3 removed)')
+    else:
+        pass
     print('  --> Matches in HIP/2MASS/Gaia DR3: '+', '.join(match_with_hip_tmass_gaia))
 
     # Now let's add some literature information
     # Add literature information on radial velocity
     if 'rvz_radvel' in simbad_match.keys():
         fits_header['VRAD_LIT'] = (simbad_match['rvz_radvel'], 'Radial velocity from Simbad')
+    else:
+        pass
     if rvz_error in simbad_match.keys():
         fits_header['HIERARCH E_VRAD_LIT'] = (simbad_match[rvz_error], 'Radial velocity error from Simbad')
-    if 'rvz_bibcode' in simbad_match.keys():
-        fits_header['VRAD_BIB'] = (simbad_match['rvz_bibcode'], 'Bibcode of Simbad VRAD')
+    else:
+        pass
+    if 'rvz_bibcode' in simbad_match.keys(): fits_header['VRAD_BIB'] = (simbad_match['rvz_bibcode'], 'Bibcode of Simbad VRAD')
 
     if np.all(['VRAD_LIT' in fits_header.keys(),'E_VRAD_LIT' in fits_header.keys()]):
         print('  --> Found literature VRAD/E_VRAD in Simbad: '+str(fits_header['VRAD_LIT'])+' +/- '+str(fits_header['E_VRAD_LIT'])+' km/s by '+str(fits_header['VRAD_BIB']))
     elif 'VRAD_LIT' in fits_header.keys():
         print('  --> Found literature VRAD in Simbad: '+str(fits_header['VRAD_LIT'])+' km/s by '+str(fits_header['VRAD_BIB']))
+    else:
+        pass
 
     if len(simbad_match_fe_h) > 0:
         # Add literature information on stellar parameters Teff/logg/[Fe/H]
-        if simbad_teff in simbad_match_fe_h.keys():
-            fits_header['TEFF_LIT'] = (simbad_match_fe_h[simbad_teff], 'Effective temperature from Simbad')
-        if simbad_logg in simbad_match_fe_h.keys():
-            fits_header['LOGG_LIT'] = (simbad_match_fe_h[simbad_logg], 'Surface gravity from Simbad')
-        if simbad_fe_h in simbad_match_fe_h.keys():
-            fits_header['FE_H_LIT'] = (simbad_match_fe_h[simbad_fe_h], 'Iron abundance from Simbad')
-        if simbad_fe_h_ref in simbad_match_fe_h.keys():
-            fits_header['TLF_BIB'] = (simbad_match_fe_h[simbad_fe_h_ref], 'Bibcode of Simbad TEFF/LOGG/FE_H')
-
+        if simbad_teff in simbad_match_fe_h.keys(): fits_header['TEFF_LIT'] = (simbad_match_fe_h[simbad_teff], 'Effective temperature from Simbad')
+        if simbad_logg in simbad_match_fe_h.keys(): fits_header['LOGG_LIT'] = (simbad_match_fe_h[simbad_logg], 'Surface gravity from Simbad')
+        if simbad_fe_h in simbad_match_fe_h.keys(): fits_header['FE_H_LIT'] = (simbad_match_fe_h[simbad_fe_h], 'Iron abundance from Simbad')
+        if simbad_fe_h_ref in simbad_match_fe_h.keys(): fits_header['TLF_BIB'] = (simbad_match_fe_h[simbad_fe_h_ref], 'Bibcode of Simbad TEFF/LOGG/FE_H')
     else:
         fits_header['TEFF_LIT'] = ('None', 'Effective temperature from Simbad')
         fits_header['LOGG_LIT'] = ('None', 'Surface gravity from Simbad')
@@ -925,6 +894,8 @@ def update_fits_header_via_crossmatch_with_simbad(fits_header):
         print('  --> Found literature TEFF/LOGG/FE_H in Simbad: '+str(fits_header['TEFF_LIT'])+'/'+str(fits_header['LOGG_LIT'])+'/'+str(fits_header['FE_H_LIT'])+' by '+str(fits_header['TLF_BIB']))
     elif 'FE_H_LIT' in fits_header.keys():
         print('  --> Found literature FE_H in Simbad: '+str(fits_header['FE_H_LIT'])+' by '+str(fits_header['TLF_BIB']))
+    else:
+        pass
 
     # Add information on B/V/G/R filters (where available) and parallax
     for bvgr_filter in [simbad_b,simbad_v,simbad_g,simbad_r]:
@@ -933,6 +904,8 @@ def update_fits_header_via_crossmatch_with_simbad(fits_header):
                 fits_header[bvgr_filter+'MAG'] = (simbad_match[bvgr_filter], 'Mag in '+bvgr_filter+' ('+simbad_match['FLUX_BIBCODE_'+bvgr_filter]+')')
             except:
                 fits_header[bvgr_filter+'MAG'] = (simbad_match[bvgr_filter], 'Mag in '+bvgr_filter)
+        else:
+            pass
 
     fits_header['PLX'] = (simbad_match['plx_value'], 'Parallax in mas ('+simbad_match['plx_bibcode']+')')
     fits_header['E_PLX'] = (simbad_match[plx_error], 'Parallax error in mas ('+simbad_match['plx_bibcode']+')')
