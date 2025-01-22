@@ -312,11 +312,11 @@ def read_veloce_fits_image_and_metadata(file_path):
         full_image = np.array(fits_file[0].data, dtype=float) # We are reading in the images in as float to allow more image corrections.
         for key in ['OBJECT','UTMJD','MEANRA','MEANDEC','EXPTIME']:
             metadata[key] = fits_file[0].header[key]
+
+        # Set the readout mode to 4Amp or 2Amp based on the presence of the 'DETA3X' keyword in the header (more than 2 Detector Amplifiers)
         if 'DETA3X' in fits_file[0].header:
-            readout_mode = '4Amp'
             metadata['READOUT'] = '4Amp'
         else:
-            readout_mode = '2Amp'
             metadata['READOUT'] = '2Amp'
 
     return(full_image, metadata)
@@ -350,7 +350,7 @@ def identify_calibration_and_science_runs(date, raw_data_dir, each_science_run_s
     """
     
     print('\n  =================================================')
-    print('  ||\n  ||  --> Identifying calibration and science runs now  ||\n')
+    print('  ||\n  ||  --> Identifying calibration and science runs now\n  ||')
 
     raw_file_path = raw_data_dir+'/'+date+'/'
 
@@ -639,8 +639,7 @@ def monitor_vrad_for_repeat_observations(date, repeated_observations):
                                   and the value is a list of run identifiers for that target.
     """
 
-    if len(repeated_observations) == 0:
-        print('  --> No repeated observations found.')
+    if len(repeated_observations) == 0: print('  --> No repeated observations found.')
     else:
         print('  --> Repeat observations found for: '+','.join(list(repeated_observations.keys())))
 
@@ -684,8 +683,7 @@ def monitor_vrad_for_repeat_observations(date, repeated_observations):
                 ax.axhline(np.mean(vrad)+np.std(vrad),c = 'C1',lw=1,ls='dashed')
                 ax.legend()
                 plt.savefig(config.working_directory+'/reduced_data/'+date+'/'+repeated_observation+'_vrad_monitoring.pdf')
-                if 'ipykernel' in sys.modules:
-                    plt.show()
+                if 'ipykernel' in sys.modules: plt.show()
                 plt.close()
             else:
                 print('Less than two observations could be read in for '+repeated_observation)
@@ -812,10 +810,9 @@ def update_fits_header_via_crossmatch_with_simbad(fits_header):
     else:
         print('  --> Found more than one entry in Simbad. Using the first match.')
         simbad_match = simbad_match[0]
-    if len(simbad_match_fe_h) == 0:
-        print('  --> Did not find a match in Simbad for Fe/H.')
-    elif len(simbad_match_fe_h) == 1:
-        simbad_match_fe_h = simbad_match_fe_h[0]
+            
+    if len(simbad_match_fe_h) == 0: print('  --> Did not find a match in Simbad for Fe/H.')
+    elif len(simbad_match_fe_h) == 1: simbad_match_fe_h = simbad_match_fe_h[0]
     else:
         print('  --> Found more than one entry in Simbad for Fe/H. Using the first match.')
         simbad_match_fe_h = simbad_match_fe_h[0]
@@ -824,14 +821,11 @@ def update_fits_header_via_crossmatch_with_simbad(fits_header):
     # Let's test if the object is bright enough for Veloce (G < 12 mag or V < 12 mag) and print a warning if not.
     if simbad_g in simbad_match.keys():
         if abs(simbad_match[simbad_g])>=0.0:
-            if simbad_match[simbad_g] > 12:
-                print('  --> Warning: Match fainter than G > 12 mag. Right match for a Veloce observations?')
+            if simbad_match[simbad_g] > 12: print('  --> Warning: Match fainter than G > 12 mag. Right match for a Veloce observations?')
         elif simbad_v in simbad_match.keys():
-            if simbad_match[simbad_v] > 12:
-                print('  --> Warning: Match fainter than V > 12 mag. Right match for a Veloce observations?')
+            if simbad_match[simbad_v] > 12: print('  --> Warning: Match fainter than V > 12 mag. Right match for a Veloce observations?')
     elif simbad_v in simbad_match.keys():
-        if simbad_match[simbad_v] > 12:
-            print('  --> Warning: Match fainter than V > 12 mag. Right match for a Veloce observations?')
+        if simbad_match[simbad_v] > 12: print('  --> Warning: Match fainter than V > 12 mag. Right match for a Veloce observations?')
 
     # Let's add some more information from the crossmatches with HIP/2MASS/Gaia DR3 and other literature where available
     ids = simbad_match['ids']
@@ -861,14 +855,8 @@ def update_fits_header_via_crossmatch_with_simbad(fits_header):
 
     # Now let's add some literature information
     # Add literature information on radial velocity
-    if 'rvz_radvel' in simbad_match.keys():
-        fits_header['VRAD_LIT'] = (simbad_match['rvz_radvel'], 'Radial velocity from Simbad')
-    else:
-        pass
-    if rvz_error in simbad_match.keys():
-        fits_header['HIERARCH E_VRAD_LIT'] = (simbad_match[rvz_error], 'Radial velocity error from Simbad')
-    else:
-        pass
+    if 'rvz_radvel' in simbad_match.keys(): fits_header['VRAD_LIT'] = (simbad_match['rvz_radvel'], 'Radial velocity from Simbad')
+    if rvz_error in simbad_match.keys(): fits_header['HIERARCH E_VRAD_LIT'] = (simbad_match[rvz_error], 'Radial velocity error from Simbad')
     if 'rvz_bibcode' in simbad_match.keys(): fits_header['VRAD_BIB'] = (simbad_match['rvz_bibcode'], 'Bibcode of Simbad VRAD')
 
     if np.all(['VRAD_LIT' in fits_header.keys(),'E_VRAD_LIT' in fits_header.keys()]):
@@ -944,14 +932,12 @@ def find_best_radial_velocity_from_fits_header(fits_header):
             vrad_for_calibration = vrad_lit_value
             print('  --> Using literature VRAD from Simbad because it has a smaller uncertainty.')
     elif e_vrad_lit_value is not None:
-        if vrad_lit_value is not None:
-            print('  --> Found literature VRAD in Simbad: '+str(vrad_lit_value)+' by '+str(vrad_bib)+' but without uncertainty.')           
+        if vrad_lit_value is not None: print('  --> Found literature VRAD in Simbad: '+str(vrad_lit_value)+' by '+str(vrad_bib)+' but without uncertainty.')           
         print('  --> Found VRAD from Veloce measurements: '+str(vrad_value)+' +/- '+str(e_vrad_value)+' km/s')
         vrad_for_calibration = vrad_value
         print('  --> Using VRAD from Veloce measurements because no literature VRAD with uncertainty is available.')
     elif vrad_lit_value is not None:
-        if e_vrad_lit_value is not None:
-            print('  --> Found literature VRAD in Simbad: '+str(vrad_lit_value)+' +/- '+str(e_vrad_lit_value)+' km/s by '+str(vrad_bib))
+        if e_vrad_lit_value is not None: print('  --> Found literature VRAD in Simbad: '+str(vrad_lit_value)+' +/- '+str(e_vrad_lit_value)+' km/s by '+str(vrad_bib))
         else:
             print('  --> Found literature VRAD in Simbad: '+str(vrad_lit_value)+' by '+str(vrad_bib)+' but without uncertainty.')
         vrad_for_calibration = vrad_lit_value
@@ -960,8 +946,7 @@ def find_best_radial_velocity_from_fits_header(fits_header):
         print('  --> Found VRAD from Veloce measurements: '+str(vrad_value)+' +/- '+str(e_vrad_value)+' km/s')
         vrad_for_calibration = vrad_value
         print('  --> Using VRAD from Veloce measurements because no literature VRAD is available.')
-    else:
-        raise ValueError('No valid option for VRAD avaialble. Aborting calibration via synthesis.')
+    else: raise ValueError('No valid option for VRAD avaialble. Aborting calibration via synthesis.')
 
     return(vrad_for_calibration)
 
@@ -1023,10 +1008,8 @@ def find_closest_korg_spectrum(available_korg_spectra,fits_header):
                 return(closest_korg_spectrum)
 
             # Let's try to estimate a color. Assume color = 0.5 if none available
-            if 'B' in fits_header.keys() and 'R' in fits_header.keys():
-                color = fits_header['B'] - fits_header['R']
-            elif 'V' in fits_header.keys() and 'R' in fits_header.keys():
-                color = fits_header['V'] - fits_header['R']
+            if 'B' in fits_header.keys() and 'R' in fits_header.keys(): color = fits_header['B'] - fits_header['R']
+            elif 'V' in fits_header.keys() and 'R' in fits_header.keys(): color = fits_header['V'] - fits_header['R']
             else:
                 color = 0.5
             
