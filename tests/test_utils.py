@@ -227,7 +227,7 @@ def test_read_in_wavelength_solution_coefficients_tinney():
     # Print the coefficients
     print(f"  --> Found Tinney Wavelength Solution Coefficients for {len(coefficients)} orders.")
     expected_order = 'ccd_3_order_70'
-    print(f"  --> First entry ({expected_order}): f{coefficients[expected_order]}")
+    print(f"  --> First entry ({expected_order}): f{[format(value, '.3e') for value in coefficients[expected_order]]}")
 
     print('\n  --> DONE Testing: read_in_wavelength_solution_coefficients_tinney()')
 

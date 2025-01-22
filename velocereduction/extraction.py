@@ -40,15 +40,13 @@ def substract_overscan(full_image, metadata, debug_overscan = False):
     if debug_overscan:
         plt.figure()
         plt.hist(full_image.flatten(),bins=np.linspace(975,1025,100))
-        if 'ipykernel' in sys.modules:
-            plt.show()
+        if 'ipykernel' in sys.modules: plt.show()
         plt.close()
 
         plt.figure(figsize=(10,10))
         s = plt.imshow(full_image, vmin=975, vmax = 1025)
         plt.colorbar(s)
-        if 'ipykernel' in sys.modules:
-            plt.show()
+        if 'ipykernel' in sys.modules: plt.show()
         plt.close()
 
     if metadata['READOUT'] == '4Amp':
@@ -142,12 +140,10 @@ def substract_overscan(full_image, metadata, debug_overscan = False):
         plt.figure(figsize=(10,10))
         s = plt.imshow(trimmed_image, vmin = -5, vmax = 100)
         plt.colorbar(s)
-        if 'ipykernel' in sys.modules:
-            plt.show()
+        if 'ipykernel' in sys.modules: plt.show()
         plt.close()
         
-    if debug_overscan:
-        print('      -->',overscan_median, overscan_rms, metadata['READOUT'])
+    if debug_overscan: print('      -->',overscan_median, overscan_rms, metadata['READOUT'])
         
     return(trimmed_image, overscan_median, overscan_rms, metadata['READOUT'])
 
@@ -216,10 +212,6 @@ def read_in_order_tramlines_tinney():
             if cnt % 4 == 0:
                 split_lines = line[:-1].split(' ')
                 order = int(split_lines[0])
-                if order < 100:
-                    order_str = '0'+str(order)
-                else:
-                    order_str = str(order)
                 order_ranges['ccd_3_order_'+ str(order)] = np.arange(int(split_lines[1]), int(split_lines[2]))
             if cnt % 4 == 1:
                 order_beginning_coefficients['ccd_3_order_'+ str(order)] = [float(coeff) for coeff in line[10:-1].split(' ')]
@@ -326,8 +318,7 @@ def get_master_dark(runs, archival=False):
         images['ccd_'+str(ccd)] = []
 
         # If we use acrhival dark frames, we use frames 0224-0226 from date 001122.
-        if not archival:
-            date = config.date
+        if not archival: date = config.date
         else:
             runs = ['0224']
             date = '001122'
@@ -373,20 +364,15 @@ def convert_bstar_to_telluric(bstar_flux_in_orders, filter_kernel_size=51, debug
         telluric_flux_in_order[-100:] = 1.0
 
         # We do not expect any telluric lines in a lot of orders.
-        if (order < 47) | (order in [51,52,53,54,55,56,60,61]):
-            telluric_flux_in_order = 1.0 * np.ones(len(telluric_flux_in_order))
+        if (order < 47) | (order in [51,52,53,54,55,56,60,61]): telluric_flux_in_order = 1.0 * np.ones(len(telluric_flux_in_order))
         
         # Specific cuts left and right
-        if order in [47,48,49,50]:
-            telluric_flux_in_order[:200] = 1.0
-        if order in [65,66,67]:
-            telluric_flux_in_order[-200:] = 1.0
-        if order == 107:
-            telluric_flux_in_order[2250:] = 1.0
+        if order in [47,48,49,50]: telluric_flux_in_order[:200] = 1.0
+        if order in [65,66,67]: telluric_flux_in_order[-200:] = 1.0
+        if order == 107: telluric_flux_in_order[2250:] = 1.0
 
         # Specific cuts for too strong absorption (50%) where we do not expect it
-        if order <= 82:
-            telluric_flux_in_order[telluric_flux_in_order < 0.5] = 1.0
+        if order <= 82: telluric_flux_in_order[telluric_flux_in_order < 0.5] = 1.0
 
         telluric_flux_in_orders.append(telluric_flux_in_order)
 
@@ -398,8 +384,7 @@ def convert_bstar_to_telluric(bstar_flux_in_orders, filter_kernel_size=51, debug
             plt.plot(telluric_flux_in_order, label = 'Final telluric flux', lw = 1, c='C0')
             plt.legend(ncol=4)
             plt.ylim(-0.1, 1.5)
-            if 'ipykernel' in sys.modules:
-                plt.show()
+            if 'ipykernel' in sys.modules: plt.show()
             plt.close()
 
     return(np.array(telluric_flux_in_orders))
@@ -472,26 +457,21 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
     """
 
     # Check if Flat, LC, Bstar, Science, ThXe are all False
-    if not any([Flat, LC, Bstar, Science, ThXe]):
-        raise ValueError('To extract orders appropriately, at least one of the following flags must be set to True: Flat, LC, Bstar, Science, ThXe.')
+    if not any([Flat, LC, Bstar, Science, ThXe]): raise ValueError('To extract orders appropriately, at least one of the following flags must be set to True: Flat, LC, Bstar, Science, ThXe.')
 
     # Raise ValueError if we try to update tramlines based on flat field images without Flat being True
-    if (not Flat) & (update_tramlines_based_on_flat):
-        raise ValueError('Can only update tramlines based on flat field images (not possible if Flat is False).')
+    if (not Flat) & (update_tramlines_based_on_flat): raise ValueError('Can only update tramlines based on flat field images (not possible if Flat is False).')
     
     # Check if exposure_time_threshold_darks is a float or int
-    if not isinstance(exposure_time_threshold_darks, (int, float)):
-        raise ValueError('Exposure_time_threshold_darks must be a float.')
+    if not isinstance(exposure_time_threshold_darks, (int, float)): raise ValueError('Exposure_time_threshold_darks must be a float.')
 
     # Raise warning if we use Science exposures but do not provide master darks.
-    if (Science) & (master_darks is None):
-        print('     --> Warning: Note using any dark subtraction.')
+    if (Science) & (master_darks is None): print('     --> Warning: Note using any dark subtraction.')
 
     order_ranges, order_beginning_coefficients, order_ending_coefficients = read_in_order_tramlines()
 
-    if use_tinney_ranges:
-        # Extract initial order ranges and coefficients
-        order_ranges, order_beginning_coefficients, order_ending_coefficients = read_in_order_tramlines_tinney()    
+    # Extract initial order ranges and coefficients
+    if use_tinney_ranges: order_ranges, order_beginning_coefficients, order_ending_coefficients = read_in_order_tramlines_tinney()    
 
     # Extract Images from CCDs 1-3
     images = dict()
@@ -535,24 +515,20 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
                     # Calculate an exposure time adjusted dark frame, which has no negative entries.
                     adjusted_dark = (np.array(master_darks[str(best_matching_dark)]['ccd_'+str(ccd)], dtype=float) * exp_times_ratio_science_to_dark).clip(min=0.0)
 
-                    if (ccd == 1):
-                        print('  --> Subtracting '+str(best_matching_dark)+'s dark frame from Science exposure '+str(run)+' (D='+str(best_matching_dark)+'s vs. S='+str(exp_time_science)+'s, S/D = '+"{:.2f}".format(exp_times_ratio_science_to_dark)+' ~ '+str(int(np.median(adjusted_dark.flatten())))+' counts).')
+                    if (ccd == 1): print('  --> Subtracting '+str(best_matching_dark)+'s dark frame from Science exposure '+str(run)+' (D='+str(best_matching_dark)+'s vs. S='+str(exp_time_science)+'s, S/D = '+"{:.2f}".format(exp_times_ratio_science_to_dark)+' ~ '+str(int(np.median(adjusted_dark.flatten())))+' counts).')
 
                     # Let's check that the dark and science frames have the same dimenions.
                     # This may fail if the archival 2Amp dark is used for a 4Amp science frame.
-                    if np.shape(adjusted_dark) != np.shape(trimmed_image):
-                        raise ValueError('Dark frame ('+str(np.shape(adjusted_dark)[0])+','+str(np.shape(adjusted_dark)[1])+') and science frame ('+str(np.shape(trimmed_image)[0])+','+str(np.shape(trimmed_image)[1])+') have different shapes (this is likely because of a 4Amp science vs. 2Amp archivel dark)!')
+                    if np.shape(adjusted_dark) != np.shape(trimmed_image): raise ValueError('Dark frame ('+str(np.shape(adjusted_dark)[0])+','+str(np.shape(adjusted_dark)[1])+') and science frame ('+str(np.shape(trimmed_image)[0])+','+str(np.shape(trimmed_image)[1])+') have different shapes (this is likely because of a 4Amp science vs. 2Amp archivel dark)!')
 
                     trimmed_image -= adjusted_dark
 
             images['ccd_'+str(ccd)].append(trimmed_image)
         
         # For science: sum counts
-        if Science:
-            images['ccd_'+str(ccd)] = np.array(np.median(images['ccd_'+str(ccd)],axis=0),dtype=float)
+        if Science: images['ccd_'+str(ccd)] = np.array(np.median(images['ccd_'+str(ccd)],axis=0),dtype=float)
         # For calibration: calculate median
-        else:
-            images['ccd_'+str(ccd)] = np.array(np.median(images['ccd_'+str(ccd)],axis=0),dtype=float)
+        else: images['ccd_'+str(ccd)] = np.array(np.median(images['ccd_'+str(ccd)],axis=0),dtype=float)
 
         if Flat:
             # Normalise so that maximum response = 1
@@ -605,10 +581,8 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
                 elif LC: vmin = 1; vmax = 10
                 else: vmin = 1; vmax = 50
                 s = gs[panel_index].imshow(images['ccd_'+str(panel_index+1)], vmin=vmin, vmax=vmax, cmap='Greys')
-                if Flat:
-                    cbar_label = r'Normalised Counts'
-                else:
-                    cbar_label = r'Counts'
+                if Flat: cbar_label = r'Normalised Counts'
+                else: cbar_label = r'Counts'
 
             gs[panel_index].set_title('CCD '+str(panel_index+1))
             cbar = plt.colorbar(s, ax=gs[panel_index-1],extend='both')
@@ -644,12 +618,9 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
             gs[int(ccd)-1].plot(order_xrange_end,np.arange(len(order_xrange_begin)),c='C1',lw=0.1,label=label_right)
         
         # Because of the extended overscan region in 4Amplifier readout mode, we have to adjust which region we are using the extract the orders from.
-        if readout_mode == '2Amp':
-            order_ranges_adjusted_for_readout_mode = order_ranges[order]
-        elif readout_mode == '4Amp':
-            order_ranges_adjusted_for_readout_mode = order_ranges[order][16:-16]
-        else:
-            raise ValueError('Cannot handle readout_mode other than 2Amp or 4Amp')
+        if readout_mode == '2Amp': order_ranges_adjusted_for_readout_mode = order_ranges[order]
+        elif readout_mode == '4Amp': order_ranges_adjusted_for_readout_mode = order_ranges[order][16:-16]
+        else: raise ValueError('Cannot handle readout_mode other than 2Amp or 4Amp')
 
         for x_index, x in enumerate(order_ranges_adjusted_for_readout_mode):
             
@@ -662,22 +633,8 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
 
             # For science: multiply read noise with nr of runs,
             # since we are coadding frames, rather than using median
-            if Science:
-                total_read_noise *= np.sqrt(len(runs))
+            if Science: total_read_noise *= np.sqrt(len(runs))
 
-            # if debug_tramlines & Science & (x_index == 2000):
-            #     print(order)
-            #     print('x_index:      ',2000)
-            #     print('sum(counts):  ',np.sum(counts_in_pixels_to_be_summed,axis=0))
-            #     print('sqrt(counts): ',np.sqrt(np.sum(counts_in_pixels_to_be_summed,axis=0)))
-            #     print('read noise:   ',total_read_noise)
-            #     print('counts:       ',counts_in_pixels_to_be_summed)
-            #     plt.figure()
-            #     plt.title(order)
-            #     plt.plot(counts_in_pixels_to_be_summed)
-            #     plt.show()
-            #     plt.close()
-                
             # noise = sqrt(flux + pixel_read_noise**2 * nr of pixels * nr of exposures)
             order_noise[order_ranges[order][0] + x_index] = np.sqrt(np.sum(counts_in_pixels_to_be_summed,axis=0) + total_read_noise**2)
 
@@ -685,29 +642,21 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
         noise_in_orders.append(order_noise)
 
     if debug_tramlines | (update_tramlines_based_on_flat & Flat):
-        if Flat:
-            type='_flat'
-        elif Science:
-            type='_'+metadata['OBJECT']
-        elif LC:
-            type='_lc'
-        elif ThXe:
-            type='_thxe'
-        else:
-            raise ValueError('Unknown type of observation.')
+        if Flat: type='_flat'
+        elif Science: type='_'+metadata['OBJECT']
+        elif LC: type='_lc'
+        elif ThXe: type='_thxe'
+        else: raise ValueError('Unknown type of observation.')
         
         plt.tight_layout()
 
         Path(config.working_directory+'reduced_data/'+config.date+'/_debug').mkdir(parents=True, exist_ok=True)
         plt.savefig(config.working_directory+'reduced_data/'+config.date+f'/_debug/debug_tramlines{type}.pdf',dpi=200,bbox_inches='tight')
-        if 'ipykernel' in sys.modules:
-            plt.show()
+        if 'ipykernel' in sys.modules: plt.show()
         plt.close()
         
-    if Science | Bstar:
-        return(np.array(counts_in_orders),np.array(noise_in_orders),metadata)
-    else:
-        return(np.array(counts_in_orders),np.array(noise_in_orders))
+    if Science | Bstar: return(np.array(counts_in_orders),np.array(noise_in_orders),metadata)
+    else: return(np.array(counts_in_orders),np.array(noise_in_orders))
 
 
 def find_tramline_beginning_and_ending(order, x_index, x_pixels, previous_beginning, previous_ending, expected_tramline_width = 38, tolerance=2, tolerance_to_previous=3, debug=False):
@@ -742,35 +691,30 @@ def find_tramline_beginning_and_ending(order, x_index, x_pixels, previous_beginn
 
     # Initialise tramline_beginning and tramline_ending as nans    
     tramline_beginning = np.nan
-    if len(x_pixels) < 1:
-        return(np.nan, np.nan)
-    elif x_pixels[-1] < 1:
-        return(np.nan, np.nan)
+    if len(x_pixels) < 1: return(np.nan, np.nan)
+    elif x_pixels[-1] < 1: return(np.nan, np.nan)
+
     tramline_ending = np.nan
     
     # Identify segments above the tolerance, while allowing for gaps.
     current_gap = 0
     for i, diff in enumerate(differences):
-        if diff == 1:
-            # No gap, continue the sequence
-            current_gap = 0
+        # if no gap, continue the sequence
+        if diff == 1: current_gap = 0
         elif diff > 1:
             current_gap += diff  # Increment the gap count by the missing numbers
             # Check if the gap exceeds tolerance
             if current_gap > tolerance:
-                if np.isnan(tramline_beginning):
-                    tramline_beginning = x_pixels[i+1]
+                if np.isnan(tramline_beginning): tramline_beginning = x_pixels[i+1]
                 # Add tramline_ending, if it is ~expected_tramline_width, so < expected_tramline_width +- 4 from the tramline_beginning
                 elif np.abs((x_pixels[i]+1 - tramline_beginning) - expected_tramline_width) <= 4:
                     tramline_ending = x_pixels[i]+1
                     current_gap = 0
                 else:
-                    if debug:
-                        print('  --> Not using: '+str(x_pixels[i]+1)+' with width '+str(x_pixels[i]+1 - tramline_beginning)+' because the following width was expected: '+str(expected_tramline_width-3)+'-'+str(expected_tramline_width+3))
+                    if debug: print('  --> Not using: '+str(x_pixels[i]+1)+' with width '+str(x_pixels[i]+1 - tramline_beginning)+' because the following width was expected: '+str(expected_tramline_width-3)+'-'+str(expected_tramline_width+3))
                     current_gap = 0
                     
-    if debug:
-        print('  --> x_index Initial Beginning/End: ',x_index, tramline_beginning, tramline_ending)
+    if debug: print('  --> x_index Initial Beginning/End: ',x_index, tramline_beginning, tramline_ending)
                     
     # Force new beginning to be close to beginning of previous pixel within tolerance_to_previous
     if (np.abs(previous_beginning - tramline_beginning) > tolerance_to_previous):
@@ -779,61 +723,50 @@ def find_tramline_beginning_and_ending(order, x_index, x_pixels, previous_beginn
     # but only if the previous tramline_beginning is not too close to the left edge
     elif np.isnan(tramline_beginning):
         if previous_beginning > 2:
-            if debug:
-                print('  --> Correction 1: Setting tramline_beginning = previous_beginning')
+            if debug: print('  --> Correction 1: Setting tramline_beginning = previous_beginning')
             # For CCD1, we know that positions tend to decrease downwards -- but let's make sure it's not left of the search range!
-            if order[4] == '1':
-                tramline_beginning = np.max([x_pixels[0]+5,previous_beginning - 1])
+            if order[4] == '1': tramline_beginning = np.max([x_pixels[0]+5,previous_beginning - 1])
             # For CCD2, the higher orders turn around pixel 600
             elif (order[4] == '2'):
                 if (int(order[-3:]) > 115):
-                    if x_index < 600:
-                        # We know that positions tend to increase downwards -- but let's make sure it's not right of the search range!
-                        tramline_beginning = np.min([x_pixels[-1]-5,previous_beginning + 1])
-                    else:
-                        # We know that positions tend to decrease downwards -- but let's make sure it's not left of the search range!
-                        tramline_beginning = np.max([x_pixels[0]+5,previous_beginning - 1])
+                    # We know that positions tend to increase downwards -- but let's make sure it's not right of the search range!
+                    if x_index < 600: tramline_beginning = np.min([x_pixels[-1]-5,previous_beginning + 1])
+                    # We know that positions tend to decrease downwards -- but let's make sure it's not left of the search range!
+                    else: tramline_beginning = np.max([x_pixels[0]+5,previous_beginning - 1])
                 else:
                     tramline_beginning = previous_beginning.clip(min = x_pixels[0]+5, max = x_pixels[-1]-5)
             # For most other orders, using the same pixel as the previous row is fine.
             else:
                 tramline_beginning = previous_beginning.clip(min = x_pixels[0]+5, max = x_pixels[-1]-5)
         else:
-            if debug:
-                print('  --> Exception 1: Beginning too far left; returning (np.nan,np.nan)')
+            if debug: print('  --> Exception 1: Beginning too far left; returning (np.nan,np.nan)')
             return(np.nan, np.nan)
 
     # Force new ending to be close to ending of previous pixel within tolerance_to_previous
     if (np.abs(previous_ending - tramline_ending) > tolerance_to_previous) & (previous_ending - tramline_beginning < expected_tramline_width+3):
-        if debug:
-            print('  --> Correction 2: Setting tramline_ending = previous_ending, because difference previous_ending - tramline_ending above tolerance of '+str(tolerance_to_previous)+' and previous ending within expected_tramline_width')
+        if debug: print('  --> Correction 2: Setting tramline_ending = previous_ending, because difference previous_ending - tramline_ending above tolerance of '+str(tolerance_to_previous)+' and previous ending within expected_tramline_width')
         tramline_ending = previous_ending
     # Replace with previous, if we could not find a tramline_ending
     # but only if the previous tramline_ending is not too close to the left edge
     elif np.isnan(tramline_ending):
         if previous_ending > 2:
-            if debug:
-                print('  --> Correction 3: Too far off from previous ending. Setting tramline_ending = previous_ending.clip(min = x_pixels[0]+5, max = x_pixels[-1]-5)')
+            if debug: print('  --> Correction 3: Too far off from previous ending. Setting tramline_ending = previous_ending.clip(min = x_pixels[0]+5, max = x_pixels[-1]-5)')
             tramline_ending = previous_ending.clip(min = x_pixels[0]+5, max = x_pixels[-1]-5)
         else:
-            if debug:
-                print('  --> Exception 2: Ending too far left 1, returning (np.nan,np.nan)')
+            if debug: print('  --> Exception 2: Ending too far left 1, returning (np.nan,np.nan)')
             return(np.nan, np.nan)
     # If the tramline ending is too close to left edge, we return nans
     elif tramline_ending <= expected_tramline_width+3:
-        if debug:
-            print('  --> Exception 3: Ending too far left 2, returning (np.nan,np.nan)')
+        if debug: print('  --> Exception 3: Ending too far left 2, returning (np.nan,np.nan)')
         return(np.nan, np.nan)
     
     # Make sure that the tramlines are reasonably wide.
     # We expect a tramline with width expected_tramline_width within tolerance.
     if tramline_ending - tramline_beginning < expected_tramline_width-4:
-        if debug:
-            print('  --> Exception 4: Tramline not wide enough: ', tramline_ending - tramline_beginning, ' (expexting ',expected_tramline_width,'). Returning (np.nan,np.nan)')
+        if debug: print('  --> Exception 4: Tramline not wide enough: ', tramline_ending - tramline_beginning, ' (expexting ',expected_tramline_width,'). Returning (np.nan,np.nan)')
         return(np.nan, np.nan)
 
-    if debug:
-        print('  --> No Exception. Using: ',tramline_beginning, tramline_ending)
+    if debug: print('  --> No Exception. Using: ',tramline_beginning, tramline_ending)
     
     return(tramline_beginning, tramline_ending)
 
@@ -861,8 +794,7 @@ def optimise_tramline_polynomial(overscan_subtracted_images, order, order_ranges
             - The second array contains the polynomial coefficients for the tramline ending.
     """
 
-    if readout_mode != '2Amp':
-        raise ValueError('Can only handle 2Amp readout mode')
+    if readout_mode != '2Amp': raise ValueError('Can only handle 2Amp readout mode')
 
     ccd = order[4]
     
@@ -881,8 +813,7 @@ def optimise_tramline_polynomial(overscan_subtracted_images, order, order_ranges
         tramline_buffer_left = -10
         tramline_buffer_right = 10
     # Orders at the detector edges tend to need special treatment
-    if order == 'ccd_3_order_104':
-        tramline_buffer_left = -8
+    if order == 'ccd_3_order_104': tramline_buffer_left = -8
 
     order_xrange_begin = np.array(polynomial_function(np.arange(np.shape(overscan_subtracted_images)[0]),*order_beginning_coeffs[order])+tramline_buffer_left,dtype=int)
     order_xrange_end   = np.array(polynomial_function(np.arange(np.shape(overscan_subtracted_images)[0]),*order_ending_coeffs[order])+tramline_buffer_right,dtype=int)
@@ -999,12 +930,9 @@ def optimise_tramline_polynomial(overscan_subtracted_images, order, order_ranges
     buffer['ccd_3_order_104'] = [1600,150]
 
     # Because of the extended overscan region in 4Amplifier readout mode, we have to adjust which region we are using the extract the orders from.
-    if readout_mode == '2Amp':
-        order_ranges_adjusted_for_readout_mode = order_ranges[order]
-    elif readout_mode == '4Amp':
-        order_ranges_adjusted_for_readout_mode = order_ranges[order][16:-16]
-    else:
-        raise ValueError('Cannot handle readout_mode other than 2Amp or 4Amp')
+    if readout_mode == '2Amp': order_ranges_adjusted_for_readout_mode = order_ranges[order]
+    elif readout_mode == '4Amp': order_ranges_adjusted_for_readout_mode = order_ranges[order][16:-16]
+    else: raise ValueError('Cannot handle readout_mode other than 2Amp or 4Amp')
 
     order_ranges_adjusted_for_readout_mode = np.arange(image_dimensions[0])
 
@@ -1033,10 +961,8 @@ def optimise_tramline_polynomial(overscan_subtracted_images, order, order_ranges
                     )
                 above_threshold = np.where(x_pixel_values_to_be_tested_for_tramline > threshold)[0]
                 
-                if debug & (x_index % 500 == 0):
-                    debug_find_tramline_row = True
-                else:
-                    debug_find_tramline_row = False
+                if debug & (x_index % 500 == 0): debug_find_tramline_row = True
+                else: debug_find_tramline_row = False
 
                 if debug_find_tramline_row:
                     f2, ax2 = plt.subplots()
@@ -1055,17 +981,13 @@ def optimise_tramline_polynomial(overscan_subtracted_images, order, order_ranges
                     ax2.set_ylabel('Counts')
                     ax2.set_ylim(0,1.1*np.max(x_pixel_values_to_be_tested_for_tramline))
                     plt.tight_layout()
-                    if 'ipykernel' in sys.modules:
-                        plt.show()
+                    if 'ipykernel' in sys.modules: plt.show()
                     plt.close(f2)
                 
                 # We expect slightly different widths for each tramlines in the different CCDs
-                if ccd == '3':
-                    expected_tramline_width = 38
-                elif ccd == '2':
-                    expected_tramline_width = 44
-                elif ccd == '1':
-                    expected_tramline_width = 45
+                if ccd == '3': expected_tramline_width = 38
+                elif ccd == '2': expected_tramline_width = 44
+                elif ccd == '1': expected_tramline_width = 45
         
                 if x_index == buffer[order][0]:
                     tramline_beginning = np.nan
@@ -1081,8 +1003,7 @@ def optimise_tramline_polynomial(overscan_subtracted_images, order, order_ranges
                     debug = debug_find_tramline_row
                 )
                 
-                if debug_find_tramline_row:
-                    print('  --> x_index, beginning, ending, width: ',x_index, tramline_beginning, tramline_ending, tramline_ending-tramline_beginning)
+                if debug_find_tramline_row: print('  --> x_index, beginning, ending, width: ',x_index, tramline_beginning, tramline_ending, tramline_ending-tramline_beginning)
 
                 x_pixels_tramline = []
                 if np.isfinite(tramline_beginning) & np.isfinite(tramline_ending):
@@ -1113,8 +1034,7 @@ def optimise_tramline_polynomial(overscan_subtracted_images, order, order_ranges
                     )
             )[0]
         except:
-            if debug:
-                print('Could not fit beginning of '+order+'. Using old beginning.')
+            if debug: print('Could not fit beginning of '+order+'. Using old beginning.')
             order_beginning_fit = old_order_beginning
 
         try:
@@ -1129,12 +1049,10 @@ def optimise_tramline_polynomial(overscan_subtracted_images, order, order_ranges
                 )
             )[0]
         except:
-            if debug:
-                print('  --> Could not fit end of order '+order+'. Using old ending.')
+            if debug: print('  --> Could not fit end of order '+order+'. Using old ending.')
             order_ending_fit = old_order_ending
     else:
-        if debug:
-            print('  --> Skipping fitting for '+order+'. Using old values.')
+        if debug: print('  --> Skipping fitting for '+order+'. Using old values.')
         order_beginning_fit = old_order_beginning
         order_ending_fit = old_order_ending
 
@@ -1207,10 +1125,8 @@ def optimise_tramline_polynomial(overscan_subtracted_images, order, order_ranges
         ax.set_xlabel('X Pixels (Zoom)',fontsize=15)
         ax.set_ylabel('Y Pixels',fontsize=15)
         ax.legend(loc = 'upper left',fontsize=15)
-        if (order == 'ccd_1_order_141') & overwrite:
-            plt.savefig(Path(__file__).resolve().parent / 'joss_paper' / f'tramline_extraction_example_{order}.png',dpi=100,bbox_inches='tight')
-        if 'ipykernel' in sys.modules:
-            plt.show()
+        if (order == 'ccd_1_order_141') & overwrite: plt.savefig(Path(__file__).resolve().parent / 'joss_paper' / f'tramline_extraction_example_{order}.png',dpi=100,bbox_inches='tight')
+        if 'ipykernel' in sys.modules: plt.show()
         plt.close(f)
         
     return(order_beginning_fit, order_ending_fit)

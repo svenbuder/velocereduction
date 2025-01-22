@@ -150,8 +150,7 @@ def normalise_veloce_flux_via_smoothed_ratio_to_korg_flux(veloce_wavelength, vel
         ax.set_ylabel('Flux Ratio\n'+r'$f_\mathrm{Veloce}/f_\mathrm{Korg}$')
         ax.set_ylim(0.5,1.5)
         ax.legend(ncol=4, loc = 'upper center')
-        if 'ipykernel' in sys.modules:
-            plt.show()
+        if 'ipykernel' in sys.modules: plt.show()
         plt.close()
 
     return(veloce_flux_normalised_with_korg)
@@ -253,10 +252,8 @@ def make_veloce_and_korg_spectrum_compatible(wavelength_coefficients,veloce_scie
             f, ax = plt.subplots(figsize=(15,3))
                 
             # Show Korg Flux with Tellurics
-            if telluric_line_wavelengths is None:
-                label = 'Korg Flux'
-            else:
-                label = 'Korg Flux with Hinkle Tellurics'
+            if telluric_line_wavelengths is None: label = 'Korg Flux'
+            else: label = 'Korg Flux with Hinkle Tellurics'
             ax.plot(
                 veloce_wavelength_vac_rv_shifted,
                 korg_flux_interpolated,
@@ -271,10 +268,9 @@ def make_veloce_and_korg_spectrum_compatible(wavelength_coefficients,veloce_scie
                 )
 
             # Show Veloce Flux
-            if telluric_line_wavelengths is None:
-                label = 'Normalised Veloce Flux'
-            else:
-                label = 'Normalised Veloce Flux (Telluric Corrected)'
+            if telluric_line_wavelengths is None: label = 'Normalised Veloce Flux'
+            else: label = 'Normalised Veloce Flux (Telluric Corrected)'
+
             ax.plot(
                 veloce_wavelength_vac_rv_shifted,
                 veloce_flux_normalised_with_korg_flux,
@@ -293,8 +289,7 @@ def make_veloce_and_korg_spectrum_compatible(wavelength_coefficients,veloce_scie
             ax.legend(ncol=4, loc = 'upper center')
             ax.set_ylim(-0.1,1.25)
             plt.tight_layout()
-            if 'ipykernel' in sys.modules:
-                plt.show()
+            if 'ipykernel' in sys.modules: plt.show()
             plt.close()
 
     return(veloce_flux_normalised_with_korg_flux, korg_flux_interpolated)
@@ -339,8 +334,7 @@ def calculate_absolute_residual_sum_between_veloce_and_korg_spectrum(wavelength_
     # Now calculate the sum of the absolute residuals between the Veloce and Korg spectra within the bugger regions.
     sum_abs_residuals = np.sum(np.abs(normalised_veloce_science_flux - korg_flux_interpolated)[normalisation_buffers[0]:normalisation_buffers[1]])
 
-    if debug:
-        print('    --> Sum(Abs(Residuals)) for coefficients:',np.round(sum_abs_residuals,2), [f"{number:.4e}" for number in wavelength_coefficients])
+    if debug: print('    --> Sum(Abs(Residuals)) for coefficients:',np.round(sum_abs_residuals,2), [f"{number:.4e}" for number in wavelength_coefficients])
 
     return(sum_abs_residuals)
 
@@ -378,17 +372,14 @@ def fit_wavelength_solution_with_korg_spectrum(order, veloce_fits_file, radial_v
     # 3) Coefficients fitted with ThXe
     try:
         initial_wavelength_coefficients = np.loadtxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_{order}_korg.txt')
-        if debug:
-            print('    --> Using initial solution from Korg: ',[f"{number:.5e}" for number in initial_wavelength_coefficients])
+        if debug: print('    --> Using initial solution from Korg: ',[f"{number:.5e}" for number in initial_wavelength_coefficients])
     except:
         try:
             initial_wavelength_coefficients = np.loadtxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_{order}_lc.txt')
-            if debug:
-                print('    --> Using initial solution from LC:',[f"{number:.4e}" for number in initial_wavelength_coefficients])
+            if debug: print('    --> Using initial solution from LC:',[f"{number:.4e}" for number in initial_wavelength_coefficients])
         except:
             initial_wavelength_coefficients = np.loadtxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_{order}_thxe.txt')
-            if debug:
-                print('    --> Using initial solution from ThXe:',[f"{number:.4e}" for number in initial_wavelength_coefficients])
+            if debug: print('    --> Using initial solution from ThXe:',[f"{number:.4e}" for number in initial_wavelength_coefficients])
 
     wavelength_coefficients_minimum = minimize(
         calculate_absolute_residual_sum_between_veloce_and_korg_spectrum,
@@ -459,16 +450,26 @@ def calculate_wavelength_coefficients_with_korg_synthesis(veloce_fits_file, korg
         telluric_line_wavelengths = None
         telluric_line_fluxes = None
         
+    orders = []
+    for ccd in ['1','2','3']:
+        if ccd == '1': orders.append(['ccd_1_order_'+str(x) for x in np.arange(153, 138-1, -1)])
+        if ccd == '2': orders.append(['ccd_2_order_'+str(x) for x in np.arange(140, 103-1, -1)])
+        if ccd == '3': orders.append(['ccd_3_order_'+str(x) for x in np.arange(104,  65-1, -1)])
+    order_possible_but_tricky = ['ccd_1_order_154','ccd_1_order_155','ccd_1_order_156','ccd_1_order_157','ccd_1_order_158','ccd_1_order_159','ccd_1_order_160','ccd_1_order_161','ccd_1_order_162','ccd_1_order_163','ccd_1_order_164','ccd_1_order_165','ccd_1_order_166','ccd_1_order_167']
+
+    orders = np.concatenate((orders))
+
+    # Identify which orders we will calibrate.
     if order_selection is not None:
+        # Test if we are given a valid order_selection:
+        for order in order_selection:
+            if order in order_possible_but_tricky:
+                print('  --> Order '+order+' is possible but tricky to wavelength calibrate. We will try.')
+            elif order not in orders:
+                raise ValueError(f'  --> Order {order} is not a valid order. Please select from {orders}.')
         orders = order_selection
         print('  --> Calculating coefficients for the following orders '+','.join(orders))
     else:
-        orders = []
-        for ccd in ['1','2','3']:
-            if ccd == '1': orders.append(['ccd_1_order_'+str(x) for x in np.arange(153, 138-1, -1)])
-            if ccd == '2': orders.append(['ccd_2_order_'+str(x) for x in np.arange(140, 103-1, -1)])
-            if ccd == '3': orders.append(['ccd_3_order_'+str(x) for x in np.arange(104,  65-1, -1)])
-        orders = np.concatenate((orders))
         print('  --> Calculating coefficients for all orders, that is, 138-153 for CCD1 (neglecting 154-167), 103-140 for CCD2, and 65-104 for CCD3.')
 
     # Read the dictionary of left and right buffers that will be used when calculating the normalisation function between Veloce and Korg spectrum.

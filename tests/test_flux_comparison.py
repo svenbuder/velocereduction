@@ -53,16 +53,19 @@ def test_calculate_wavelength_coefficients_with_korg_synthesis():
             )
         print(f'  --> ValueError raised as expected: {excinfo.value}')
 
-        print('  --> Testing all valid orders with telluric form Hinkle and debug=False')
-        VR.flux_comparison.calculate_wavelength_coefficients_with_korg_synthesis(
-            veloce_fits_file,
-            korg_wavelength_vac = korg_spectra['wavelength_vac'],
-            korg_flux = korg_spectra['flux_'+closest_korg_spectrum],
-            vrad_for_calibration = vrad_for_calibration,
-            order_selection=None,
-            telluric_hinkle_or_bstar = 'hinkle', # You can choose between 'hinkle' and 'bstar'
-            debug=False
-        )
+        print('  --> Testing: ValueError raised if order is not within our expected Veloce orders.')
+        with pytest.raises(ValueError) as excinfo:
+            # Let's test this for all orders with hinkle
+            VR.flux_comparison.calculate_wavelength_coefficients_with_korg_synthesis(
+                veloce_fits_file,
+                korg_wavelength_vac = korg_spectra['wavelength_vac']/10.,
+                korg_flux = korg_spectra['flux_'+closest_korg_spectrum],
+                vrad_for_calibration = vrad_for_calibration,
+                order_selection=['ccd_1_order_168'],
+                telluric_hinkle_or_bstar = 'hinkle', # You can choose between 'hinkle' and 'bstar'
+                debug=False
+            )
+        print(f'  --> ValueError raised as expected: {excinfo.value}')
 
     print('\n  --> DONE Testing: calculate_wavelength_coefficients_with_korg_synthesis()')
     

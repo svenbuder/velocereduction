@@ -112,8 +112,7 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, ov
         raise ValueError('This function is only implemented for CCD3 (exepct order 65) and CCD2 orders 103-134, not your order '+order_name)
     else:
 
-        if debug:
-            print('  --> Optimising wavelength solution with LC peaks for '+order_name)
+        if debug: print('  --> Optimising wavelength solution with LC peaks for '+order_name)
 
         # Use wavelength coefficients according to the following preference:
         # 1) Coefficients fitted with 18Sco and Korg synthesis
@@ -193,8 +192,7 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, ov
 
         # Identify gaps (>1.5 median_peak_distance) that are not within the first 50 and last 600 pixels and fill these gaps
         max_right_buffer = 600
-        if order_name == 'ccd_2_order_111':
-            max_right_buffer = 50
+        if order_name == 'ccd_2_order_111': max_right_buffer = 50
         median_peak_distance = np.median(np.diff(peaks))
         
         position_of_too_large_gap_between_peaks = np.where((np.diff(peaks) > 1.5*median_peak_distance) & (peaks[:-1] > 20) & (peaks[:-1] < lc_ending - max_right_buffer))[0]
@@ -223,10 +221,8 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, ov
             peaks = new_peaks
 
             if debug:
-                if len(new_peaks_added) > 0:
-                    print('      --> Found '+str(len(new_peaks_added))+' gaps: ', new_peaks_added)
-                else:
-                    print('      --> Found 0 gaps')
+                if len(new_peaks_added) > 0: print('      --> Found '+str(len(new_peaks_added))+' gaps: ', new_peaks_added)
+                else: print('      --> Found 0 gaps')
 
         # Plot the laser rough comb peaks if we want to debug
         if debug:
@@ -242,8 +238,7 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, ov
             for peak in peaks:
                 ax.axvline(wavelength[in_panel][peak], c = 'C3', lw=0.5, ls='dashed')
             plt.tight_layout()
-            if 'ipykernel' in sys.modules:
-                plt.show()
+            if 'ipykernel' in sys.modules: plt.show()
             plt.close()
 
         # Now that we have the integer peak positions, let's fit more precise Gaussians.
@@ -274,8 +269,7 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, ov
                 else:
                     fine_peaks.append(popt[0])
             except:
-                if debug:
-                    print('      --> Failed fit for finer peak '+str(peak)+' at position '+str(peak+lc_beginning)+'. Using rough peak.')
+                if debug: print('      --> Failed fit for finer peak '+str(peak)+' at position '+str(peak+lc_beginning)+'. Using rough peak.')
                 fine_peaks.append(peak)
         fine_peaks = np.array(fine_peaks)
 
@@ -308,8 +302,7 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, ov
             print('    --> Modes found: ',len(lc_wavelengths))
         if len(peaks) != len(lc_wavelengths):
             use_peaks_and_modes = np.min([len(peaks),len(lc_wavelengths)])
-            if debug:
-                print('    --> Only using first '+str(use_peaks_and_modes)+' entries')
+            if debug: print('    --> Only using first '+str(use_peaks_and_modes)+' entries')
         else:
             use_peaks_and_modes = len(peaks)
 
@@ -357,8 +350,7 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, ov
             rms_wavelength = np.std(wavelength_residuals)
             rms_velocity = 299792.46 * np.std(wavelength_residuals/lc_wavelengths_to_fit)
 
-        if overwrite:
-            np.savetxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_{order_name}_lc.txt',coeffs_lc)
+        if overwrite: np.savetxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_{order_name}_lc.txt',coeffs_lc)
 
         # Plot the difference between the LC wavelength solution and
         #   a) the LC peaks (as scatter points) as dots,
@@ -383,8 +375,8 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, ov
             # Tinney Wavelength Solution
             coeffs_tinney = read_in_wavelength_solution_coefficients_tinney()
             wavelength_tinney = polynomial_function(np.arange(4128)-2450-3,*coeffs_tinney[order_name][:-1])*10
-            if order_name[4] == '2':
-                wavelength_tinney = wavelength_air_to_vac(wavelength_tinney)
+            if order_name[4] == '2': wavelength_tinney = wavelength_air_to_vac(wavelength_tinney)
+
             plt.plot(
                 np.arange(4128),
                 wavelength_tinney -
@@ -401,12 +393,10 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, ov
                 label = 'ThXe Wavelength Solution'
             )
 
-            if use_ylim:
-                plt.ylim(-0.5,0.5)
+            if use_ylim: plt.ylim(-0.5,0.5)
             plt.legend()
             plt.tight_layout()
-            if 'ipykernel' in sys.modules:
-                plt.show()
+            if 'ipykernel' in sys.modules: plt.show()
             plt.close()
 
         return(coeffs_lc)
@@ -487,8 +477,7 @@ def calibrate_single_order(file, order, barycentric_velocity=None, optimise_lc_s
     ) * 10  # Convert from nm to Å
     file[order].data['WAVE_VAC'] = wavelength_solution_vacuum
 
-    if barycentric_velocity is not None:
-        file[order].data['WAVE_VAC'] = apply_velocity_shift_to_wavelength_array(barycentric_velocity, file[order].data['WAVE_VAC'])
+    if barycentric_velocity is not None: file[order].data['WAVE_VAC'] = apply_velocity_shift_to_wavelength_array(barycentric_velocity, file[order].data['WAVE_VAC'])
 
     # Using conversion from Birch, K. P., & Downs, M. J. 1994, Metro, 31, 315
     # Consistent to the 2024 version of Korg (https://github.com/ajwheeler/Korg.jl)
@@ -651,10 +640,8 @@ def calibrate_wavelength(science_object, optimise_lc_solution=True, correct_bary
             barycentric_velocity = None
             file[0].header['BARYVEL'] = 0.0
 
-        if optimise_lc_solution:
-            print('  --> Optimising wavelength solution based on Laser Comb data where available (and using previous ThXe otherwise)')
-        else:
-            print('  --> Using previous LC and ThXe calibrations as wavelength solution')
+        if optimise_lc_solution: print('  --> Optimising wavelength solution based on Laser Comb data where available (and using previous ThXe otherwise)')
+        else: print('  --> Using previous LC and ThXe calibrations as wavelength solution')
 
         # Now loop through the FITS file extensions aka Veloce orders to apply the wavelength calibration
         for order in range(1,len(file)):
@@ -696,8 +683,7 @@ def calibrate_wavelength(science_object, optimise_lc_solution=True, correct_bary
                 ax.set_title(line_name+r'$\,\mathrm{\AA}$'+'\n'+order_name.replace('_',' '))
                 ax.set_xlabel(r'Wavelength $\lambda_\mathrm{air}~/~\mathrm{\AA}$')
 
-                if file[order].header['EXTNAME'] != order_name:
-                    print('  --> Warning: '+file[order].header['EXTNAME']+' != '+order_name)
+                if file[order].header['EXTNAME'] != order_name: print('  --> Warning: '+file[order].header['EXTNAME']+' != '+order_name)
 
                 # Restrice fitting region to +- 600 km/s around line centre
                 close_to_line_centre = (
@@ -769,8 +755,7 @@ def calibrate_wavelength(science_object, optimise_lc_solution=True, correct_bary
                 rv_lower_voigt = radial_velocity_from_line_shift(voigt_profile_parameters[0]-e_line_centre, line_centre)
 
                 # Let's remember the radial velocity estimate for the 8662.1410 line
-                if line_centre == 8662.1410:
-                    rv_from_8662 = rv_voigt
+                if line_centre == 8662.1410: rv_from_8662 = rv_voigt
 
                 if line_centre != 6562.7970:
                     # Estimate equivalent width of the line
@@ -802,8 +787,7 @@ def calibrate_wavelength(science_object, optimise_lc_solution=True, correct_bary
             rv_mean = np.round(np.mean(rv_estimates),2)
 
             def mad_based_outlier(points, thresh=3.5):
-                if len(points.shape) == 1:
-                    points = points[:,None]
+                if len(points.shape) == 1: points = points[:,None]
                 median = np.median(points, axis=0)
                 diff = np.sum((points - median)**2, axis=-1)
                 diff = np.sqrt(diff)
@@ -834,8 +818,7 @@ def calibrate_wavelength(science_object, optimise_lc_solution=True, correct_bary
 
             plt.tight_layout()
             plt.savefig(input_output_directory+'/veloce_spectra_'+science_object+'_'+config.date+'_rough_rv_estimate.pdf',bbox_inches='tight')
-            if 'ipykernel' in sys.modules:
-                plt.show()
+            if 'ipykernel' in sys.modules: plt.show()
             plt.close()
 
     # Let's create an overview PDF if requested
@@ -869,8 +852,7 @@ def fit_thxe_polynomial_coefficients(debug=False):
 
     for order in orders:
 
-        if debug:
-            print('\n  --> Fitting ThXe coefficients for order '+order)
+        if debug: print('\n  --> Fitting ThXe coefficients for order '+order)
 
         # Read in ThXe pixel and wavelength data
         thxe_pixels_and_wavelengths = np.array(np.loadtxt(Path(__file__).resolve().parent / 'veloce_reference_data' / 'thxe_pixels_and_positions' / f'{order}_px_wl.txt'))
@@ -878,17 +860,14 @@ def fit_thxe_polynomial_coefficients(debug=False):
         # Read in a previous wavelength solution
         try:
             initial_wavelength_coefficients = np.loadtxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_{order}_korg.txt')
-            if debug:
-                print('      --> Initial solution from Korg:      ',[f"{number:.4e}" for number in initial_wavelength_coefficients])    
+            if debug: print('      --> Initial solution from Korg:      ',[f"{number:.4e}" for number in initial_wavelength_coefficients])    
         except:
             try:
                 initial_wavelength_coefficients = np.loadtxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_{order}_lc.txt')
-                if debug:
-                    print('      --> Initial solution from LC:        ',[f"{number:.4e}" for number in initial_wavelength_coefficients])
+                if debug: print('      --> Initial solution from LC:        ',[f"{number:.4e}" for number in initial_wavelength_coefficients])
             except:
                 initial_wavelength_coefficients = np.loadtxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_{order}_thxe.txt')
-                if debug:
-                    print('      --> Initial solution from ThXe:      ',[f"{number:.4e}" for number in initial_wavelength_coefficients])
+                if debug: print('      --> Initial solution from ThXe:      ',[f"{number:.4e}" for number in initial_wavelength_coefficients])
 
         bounds = (
             # lower bounds
@@ -920,8 +899,7 @@ def fit_thxe_polynomial_coefficients(debug=False):
             bounds = bounds
         )
 
-        if debug:
-            print('      --> Result with previous solution:   ',[f"{number:.4e}" for number in thxe_coefficients])
+        if debug: print('      --> Result with previous solution:   ',[f"{number:.4e}" for number in thxe_coefficients])
 
         # Save the fitted polynomial coefficients to a text file
         np.savetxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_{order}_thxe.txt', thxe_coefficients)
