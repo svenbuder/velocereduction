@@ -150,7 +150,9 @@ def normalise_veloce_flux_via_smoothed_ratio_to_korg_flux(veloce_wavelength, vel
         ax.set_ylabel('Flux Ratio\n'+r'$f_\mathrm{Veloce}/f_\mathrm{Korg}$')
         ax.set_ylim(0.5,1.5)
         ax.legend(ncol=4, loc = 'upper center')
-
+        if 'ipykernel' in sys.modules:
+            plt.show()
+        plt.close()
 
     return(veloce_flux_normalised_with_korg)
 
@@ -338,7 +340,7 @@ def calculate_absolute_residual_sum_between_veloce_and_korg_spectrum(wavelength_
     sum_abs_residuals = np.sum(np.abs(normalised_veloce_science_flux - korg_flux_interpolated)[normalisation_buffers[0]:normalisation_buffers[1]])
 
     if debug:
-        print(sum_abs_residuals, wavelength_coefficients)
+        print('    --> Sum(Abs(Residuals)) for coefficients:',np.round(sum_abs_residuals,2), [f"{number:.4e}" for number in wavelength_coefficients])
 
     return(sum_abs_residuals)
 
@@ -362,7 +364,7 @@ def fit_wavelength_solution_with_korg_spectrum(order, veloce_fits_file, radial_v
     """
 
     if debug:
-        print(f'  -> Fitting wavelength solution for order {order}.')
+        print(f'  --> Fitting wavelength solution for order {order}.')
 
     # We will use the science spectrum and barycentric velocity from the veloce_fits_file:
     veloce_science_flux  = veloce_fits_file[order].data['science']
@@ -380,18 +382,16 @@ def fit_wavelength_solution_with_korg_spectrum(order, veloce_fits_file, radial_v
     try:
         initial_wavelength_coefficients = np.loadtxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_{order}_korg.txt')
         if debug:
-            print('  -> Using initial solution from Korg: ')
+            print('    --> Using initial solution from Korg: ',[f"{number:.5e}" for number in initial_wavelength_coefficients])
     except:
         try:
             initial_wavelength_coefficients = np.loadtxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_{order}_lc.txt')
             if debug:
-                print('  -> Using initial solution from LC:')
+                print('    --> Using initial solution from LC:',[f"{number:.4e}" for number in initial_wavelength_coefficients])
         except:
             initial_wavelength_coefficients = np.loadtxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_{order}_thxe.txt')
             if debug:
-                print('  -> Using initial solution from ThXe:')
-    if debug:
-        print(initial_wavelength_coefficients)
+                print('    --> Using initial solution from ThXe:',[f"{number:.4e}" for number in initial_wavelength_coefficients])
 
     wavelength_coefficients_minimum = minimize(
         calculate_absolute_residual_sum_between_veloce_and_korg_spectrum,
@@ -407,6 +407,10 @@ def fit_wavelength_solution_with_korg_spectrum(order, veloce_fits_file, radial_v
         ],
         args=(veloce_science_flux, barycentric_velocity, radial_velocity, korg_wavelength_vac, korg_flux, normalisation_buffers, telluric_line_wavelengths, telluric_line_fluxes, debug)
     )
+
+    if debug:
+        print('\n    --> We started with these initial coefficients:   ',[f"{number:.5e}" for number in initial_wavelength_coefficients])
+        print('    --> Coefficients with minimum Sum(Abs(Residuals)):',[f"{number:.5e}" for number in wavelength_coefficients_minimum.x])
 
     # Once the fitting is finished, plot the Korg and Veloce spectra and how the latter was normalised
     normalised_veloce_science_flux, korg_flux_interpolated = make_veloce_and_korg_spectrum_compatible(
@@ -460,7 +464,7 @@ def calculate_wavelength_coefficients_with_korg_synthesis(veloce_fits_file, korg
         
     if order_selection is not None:
         orders = order_selection
-        print('  --> Calculating coefficients for orders '+','.join(orders))
+        print('  --> Calculating coefficients for the following orders '+','.join(orders))
     else:
         orders = []
         for ccd in ['1','2','3']:
