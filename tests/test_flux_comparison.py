@@ -39,12 +39,12 @@ def test_calculate_wavelength_coefficients_with_korg_synthesis():
                 debug=True
             )
     
-        print('  --> Testing: ValueError raised if order does not have valid Korg flux, e.g. for ccd_1_order_167.')
+        print('  --> Testing: ValueError raised if order does not have valid Korg flux, e.g. when the wavelength is not covered by the Korg spectra')
         with pytest.raises(ValueError) as excinfo:
             # Let's test this for all orders with hinkle
             VR.flux_comparison.calculate_wavelength_coefficients_with_korg_synthesis(
                 veloce_fits_file,
-                korg_wavelength_vac = korg_spectra['wavelength_vac'],
+                korg_wavelength_vac = korg_spectra['wavelength_vac']/10.,
                 korg_flux = korg_spectra['flux_'+closest_korg_spectrum],
                 vrad_for_calibration = vrad_for_calibration,
                 order_selection=['ccd_1_order_167'],
