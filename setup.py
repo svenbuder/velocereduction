@@ -2,16 +2,17 @@ from setuptools import setup, find_packages
 
 setup(
     name="velocereduction",
-    version="0.5.3",
+    version="0.5.4",
     install_requires=[
         "numpy",
         "astropy",
         "scipy",
         "matplotlib",
-        "astroquery>=0.4.7",
+        "astroquery>=0.4.8",
         "pytest",
         "pytest-cov",
     ],
+    python_requires='>=3.9',
     author="Sven Buder",
     author_email="sven.buder@anu.edu.au",
     description="A package for reducing CCD images from the Veloce echelle spectrograph",
