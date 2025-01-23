@@ -560,50 +560,50 @@ def test_find_closest_korg_spectrum():
 # Run the test function
 if __name__ == "__main__":
 
-    # test_apply_velocity_shift_to_wavelength_array()
+    test_apply_velocity_shift_to_wavelength_array()
     
-    # test_radial_velocity_from_line_shift()
+    test_radial_velocity_from_line_shift()
     
-    # test_voigt_absorption_profile()
+    test_voigt_absorption_profile()
     
-    # test_lc_peak_gauss()
+    test_lc_peak_gauss()
     
-    # test_gaussian_absorption_profile()
+    test_gaussian_absorption_profile()
 
-    # test_calculate_barycentric_velocity_correction()
+    test_calculate_barycentric_velocity_correction()
 
-    # test_match_month_to_date()
+    test_match_month_to_date()
 
-    # test_polynomial_function()
+    test_polynomial_function()
 
-    # test_read_veloce_fits_image_and_metadata()
+    test_read_veloce_fits_image_and_metadata()
 
-    # test_identify_calibration_and_science_runs()
+    test_identify_calibration_and_science_runs()
 
-    # test_interpolate_spectrum()
+    test_interpolate_spectrum()
 
-    # test_lasercomb_wavelength_from_numbers()
+    test_lasercomb_wavelength_from_numbers()
 
-    # test_lasercomb_numbers_from_wavelength()
+    test_lasercomb_numbers_from_wavelength()
 
-    # test_read_in_wavelength_solution_coefficients_tinney()
+    test_read_in_wavelength_solution_coefficients_tinney()
 
-    # test_wavelength_vac_to_air()
+    test_wavelength_vac_to_air()
 
-    # test_wavelength_air_to_vac()
+    test_wavelength_air_to_vac()
 
-    # test_check_repeated_observations()
+    test_check_repeated_observations()
 
-    # test_monitor_vrad_for_repeat_observations()
+    test_monitor_vrad_for_repeat_observations()
 
-    # test_get_memory_usage()
+    test_get_memory_usage()
 
-    # test_degrade_spectral_resolution()
+    test_degrade_spectral_resolution()
 
     test_update_fits_header_via_crossmatch_with_simbad()
 
-    # test_find_best_radial_velocity_from_fits_header()
+    test_find_best_radial_velocity_from_fits_header()
 
-    # test_find_closest_korg_spectrum()
+    test_find_closest_korg_spectrum()
 
     print('\n  DONE Testing: VR.utils.py')
