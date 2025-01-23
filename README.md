@@ -14,23 +14,24 @@ Below are two reduced spectra of the solar-like star alpha Centauri A (HIP71683,
 
 ## Installation
 
-> :warning: **Warning:** THIS PACKAGE IS STILL UNDER DEVELOPMENT AND DOES NOT YET INCLUDE ALL NECESSARY FEATURES.
+> :warning: **Warning:** THIS PACKAGE IS STILL UNDER DEVELOPMENT AND FEATURES MAY STILL CHANGE.
 
-To install this package, we recommend cloning the repository and installing it in development mode to facilitate updates and customization. Please follow the steps below:
+To install this package, the best way is to clone the repository and installing `velocereduction` in development mode (using `pip install -e`) to facilitate updates and customization.  
+If you only want to use the package and not adjust the code, you can simply use:
 
 ```shell
-pip install https://github.com/svenbuder/VeloceReduction.git
+pip install https://github.com/svenbuder/velocereduction.git
 ```
 
 As this package is still in heavy development, you may need to update the package every now and then. You can do so via
 ```shell
-pip install --upgrade https://github.com/svenbuder/VeloceReduction.git
+pip install --upgrade https://github.com/svenbuder/velocereduction.git
 ```
 
 These options may fail on computers where you do not have access to `/tmp`. In that case, you have to clone the repository first and then install:
 ```shell
-git clone https://github.com/svenbuder/VeloceReduction.git
-cd VeloceReduction
+git clone https://github.com/svenbuder/velocereduction.git
+cd velocereduction
 pip install .
 ```
 
@@ -40,14 +41,14 @@ pip install .
 
 The package comes with an interactive tutorial called VeloceReduction_tutorial.
 
-You can either use this tutorial in Jupyter notebook, that is, [VeloceReduction_tutorial.ipynb](./VeloceReduction_tutorial.ipynb).  
+You can either use this tutorial in Jupyter notebook, that is, [VeloceReduction_tutorial.ipynb](./scripts/VeloceReduction_tutorial.ipynb).  
 
 Or use its executable python version from the command line:
 ```bash
-./VeloceReduction_tutorial.py -d 001122 -wd ./
+./scripts/VeloceReduction_tutorial.py -d 001122 -wd ./
 ```
 
-The latter version comes with arguments of date `-d` (or `--date`) in the YYMMDD format and the working directory `-wd` (or `--working_directory`) as well as the `-h` (or `--help`) options.
+The latter version comes with optional arguments of date `-d` (or `--date`) in the YYMMDD format and the working directory `-wd` (or `--working_directory`) as well as the `-h` (or `--help`) options.
 
 By default, a hard-coded example with `-d 001122` and `-wd ./` is used to run an example reduction of Arcturs (HIP69673) with minimum files provided as part of the package.
 
@@ -131,22 +132,25 @@ $$N = \sqrt{S + N_{read,px}^2 * n_{px} * n_{exp}},$$
 
 ## Dependencies
 
-This package requires the following libraries:
+The is only tested for Python >= 3.9.
+
+It requires the following libraries:
 - NumPy
 - SciPy
 - matplotlib
 - Astropy
-- Astroquery
+- Astroquery >= 0.4.8
 
 ## Author
 
 Sven Buder (ANU, sven.buder@anu.edu.au)
 
-## Contributing
+## Contributing and Testing
 
 Contributions to enhance and expand this package are highly encouraged. Please feel free to fork the repository, make your improvements, and submit a pull request.
 
-Upon launching a pull request, a GitHub Action to run through an test reduction in python for the made-up night 001122 to reduce 2 actual observations of Arcturus (HIP 69673) is started. Succesfully passing this test is a requirement for merging your file changes into the main branch.
+The package has both GitHub Actions for testing and code coverage as well as the succseful run of the `scripts/VeloceReduction_tutorial.py`.  
+Succesfully passing these tests is a requirement for merging your file changes into the main branch.
 
 ## License
 

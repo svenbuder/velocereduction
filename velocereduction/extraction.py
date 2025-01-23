@@ -38,11 +38,6 @@ def substract_overscan(full_image, metadata, debug_overscan = False):
     overscan_rms = dict()
     
     if debug_overscan:
-        plt.figure()
-        plt.hist(full_image.flatten(),bins=np.linspace(975,1025,100))
-        if 'ipykernel' in sys.modules: plt.show()
-        plt.close()
-
         plt.figure(figsize=(10,10))
         s = plt.imshow(full_image, vmin=975, vmax = 1025)
         plt.colorbar(s)
@@ -51,73 +46,95 @@ def substract_overscan(full_image, metadata, debug_overscan = False):
 
     if metadata['READOUT'] == '4Amp':
 
-        # Quadrant 1: :2120 and :2112
-        quadrant1 = np.array(full_image[32:2120-32,32:2112-32],dtype=int)
-        overscan = np.zeros(np.shape(full_image),dtype=bool)
-        overscan[:32,:2112] = True
-        overscan[:2120,:32] = True
-        overscan[:32,2112:2112+32] = True
-        overscan[:2120,2112:2112+32] = True
-        overscan = full_image[overscan]
-
         # We report the median overscan
-        overscan_median['q1'] = int(np.median(overscan))
         # And we calculate a robust standard deviation, i.e.,
         # half the difference between 16th and 84th percentile
-        overscan_rms['q1'] = np.diff(np.percentile(overscan,q=[16,84]))/2
-        quadrant1 -= overscan_median['q1']
 
-        # Quadrant 2: 2120: and :2112
-        quadrant2 = np.array(full_image[2120+32:-32,32:2112-32],dtype=int)
+        overscan_size = 32
+
+        # Lower-left Quadrant 1: 2120: and :2112
+        quadrant1 = np.array(full_image[2120+32:-32,32:2112-32],dtype=int)
         overscan = np.zeros(np.shape(full_image),dtype=bool)
-        overscan[2120:2120+32,:2112] = True
-        overscan[2120:,:32] = True
-        overscan[-32:,:2112] = True
-        overscan[2120:,2112:2112+32] = True
+        overscan[2120:, :2112][:overscan_size, :] = True  # Top edge
+        overscan[2120:, :2112][:, :overscan_size] = True  # Left edge
+        overscan[2120:, :2112][-overscan_size:, :] = True  # Bottom edge
+        overscan[2120:, :2112][:, -overscan_size:] = True  # Right edge
         overscan = full_image[overscan]
 
+        if debug_overscan:
+            plt.figure()
+            plt.hist(overscan.flatten(),bins=np.arange(975,1050),label = 'q1', histtype='step', ls='dashed')
+
+        overscan_median['q1'] = int(np.median(overscan))
+        overscan_rms['q1'] = np.diff(np.percentile(overscan,q=[16,84]))/2
+        quadrant1 = (quadrant1 - overscan_median['q1'])
+
+        # Upper-left Quadrant 2: :2120 and :2112
+        quadrant2 = np.array(full_image[32:2120-32,32:2112-32],dtype=int)
+        overscan = np.zeros(np.shape(full_image),dtype=bool)
+        overscan[:2120, :2112][:overscan_size, :] = True  # Top edge
+        overscan[:2120, :2112][:, :overscan_size] = True  # Left edge
+        overscan[:2120, :2112][-overscan_size:, :] = True  # Bottom edge
+        overscan[:2120, :2112][:, -overscan_size:] = True  # Right edge
+        overscan = full_image[overscan]
+
+        if debug_overscan:
+            plt.hist(overscan.flatten(),bins=np.arange(975,1050),label = 'q2', histtype='step', ls='dashed')
+        
         overscan_median['q2'] = int(np.median(overscan))
         overscan_rms['q2'] = np.diff(np.percentile(overscan,q=[16,84]))/2
-        quadrant2 = (quadrant2 - overscan_median['q2'])
+        quadrant2 -= overscan_median['q2']
 
-        # Quadrant 3: 2120: and 2112:
-        quadrant3 = np.array(full_image[2120+32:-32,2112+32:-32],dtype=int)
+        # Upper-right Quadrant 3: :2120 and 2112:
+        quadrant3 = np.array(full_image[32:2120-32,2112+32:-32],dtype=int)
         overscan = np.zeros(np.shape(full_image),dtype=bool)
-        overscan[2120:2120+32,2112:] = True
-        overscan[2120:,2120:2120+32] = True
-        overscan[-32:,2112:] = True
-        overscan[2120:,-32:] = True
+        overscan[:2120, 2112:][:overscan_size, :] = True  # Top edge
+        overscan[:2120, 2112:][:, :overscan_size] = True  # Left edge
+        overscan[:2120, 2112:][-overscan_size:, :] = True  # Bottom edge
+        overscan[:2120, 2112:][:, -overscan_size:] = True  # Right edge
         overscan = full_image[overscan]
+
+        if debug_overscan:
+            plt.hist(overscan.flatten(),bins=np.arange(975,1050),label = 'q3', histtype='step', ls='dashed')
 
         overscan_median['q3'] = int(np.median(overscan))
         overscan_rms['q3'] = np.diff(np.percentile(overscan,q=[16,84]))/2
         quadrant3 -= overscan_median['q3']
 
-        # Quadrant 4: :2120 and 2112:
-        quadrant4 = np.array(full_image[32:2120-32,2112+32:-32],dtype=int)
+        # Lower-right Quadrant 4: 2120: and 2112:
+        quadrant4 = np.array(full_image[2120+32:-32,2112+32:-32],dtype=int)
         overscan = np.zeros(np.shape(full_image),dtype=bool)
-        overscan[:32,2112:] = True
-        overscan[2120-32:2120,2112:] = True
-        overscan[:2120,-32:] = True
-        overscan[:2120,2112:2112+32] = True
+        overscan[2120:, 2112:][:overscan_size, :] = True  # Top edge
+        overscan[2120:, 2112:][:, :overscan_size] = True  # Left edge
+        overscan[2120:, 2112:][-overscan_size:, :] = True  # Bottom edge
+        overscan[2120:, 2112:][:, -overscan_size:] = True  # Right edge
         overscan = full_image[overscan]
 
         overscan_median['q4'] = int(np.median(overscan))
         overscan_rms['q4'] = np.diff(np.percentile(overscan,q=[16,84]))/2
         quadrant4 -= overscan_median['q4']
 
-        trimmed_image = np.hstack([np.vstack([quadrant1,quadrant2]),np.vstack([quadrant4,quadrant3])]).clip(min=0.0)
+        if debug_overscan:
+            plt.hist(overscan.flatten(),bins=np.arange(975,1050),label = 'q4', histtype='step', ls='dashed')
+            plt.legend()
+            if 'ipykernel' in sys.modules: plt.show()
+            plt.close()
+
+        trimmed_image = np.hstack([np.vstack([quadrant2,quadrant1]),np.vstack([quadrant3,quadrant4])]).clip(min=0.0)
 
     if metadata['READOUT'] == '2Amp':
+
+        overscan_size = 32
 
         # Quadrant 1: :2088 and :
         quadrant1 = np.array(full_image[32:-32,32:2112-32],dtype=int)
         overscan = np.zeros(np.shape(full_image),dtype=bool)
-        overscan[:32,:2112] = True # top
-        overscan[-32:,:2112] = True # bottom
-        overscan[:,:32] = True # left
-        overscan[:,2112-32:2112] = True # right
+        overscan[:, :2112][:overscan_size, :] = True  # Top edge
+        overscan[:, :2112][-overscan_size:, :] = True  # Bottom edge
+        overscan[:, :2112][:, :overscan_size] = True  # Left edge
+        overscan[:, :2112][:, -overscan_size:] = True  # Inner edge near split
         overscan = full_image[overscan]
+
         overscan_median['q1'] = int(np.median(overscan))
         overscan_rms['q1'] = np.diff(np.percentile(overscan,q=[16,84]))/2
         quadrant1 -= overscan_median['q1']
@@ -125,11 +142,12 @@ def substract_overscan(full_image, metadata, debug_overscan = False):
         # Quadrant 2: 2088: and :2112
         quadrant2 = np.array(full_image[32:-32,2112+32:],dtype=int)
         overscan = np.zeros(np.shape(full_image),dtype=bool)
-        overscan[:32,2112:] = True # top
-        overscan[-32:,2112:] = True # bottom
-        overscan[:,2112:2112+32] = True # left
-        overscan[:,-32:] = True # left        
+        overscan[:, 2112:][:overscan_size, :] = True  # Top edge
+        overscan[:, 2112:][-overscan_size:, :] = True  # Bottom edge
+        overscan[:, 2112:][:, :overscan_size] = True  # Inner edge near split
+        overscan[:, 2112:][:, -overscan_size:] = True  # Right edge
         overscan = full_image[overscan]
+
         overscan_median['q2'] = int(np.median(overscan))
         overscan_rms['q2'] = np.diff(np.percentile(overscan,q=[16,84]))/2
         quadrant2 = (quadrant2 - overscan_median['q2'])
