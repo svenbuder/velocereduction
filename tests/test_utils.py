@@ -341,18 +341,49 @@ def test_update_fits_header_via_crossmatch_with_simbad():
         'UTMJD': 60359.7838614119 # Modified Julian Date at start of exposure
     }
 
+    # 2 soruces without [Fe/H], but not Soubiran et al. (2024)
+    fits_header_alfAra = {
+        'OBJECT': 'alf Ara',
+        'MEANRA': 262.96015033323,  # Right Ascension in decimal degrees
+        'MEANDEC': -49.87644249970, # Declination in decimal degrees
+        'UTMJD': 60359.7838614119 # Modified Julian Date at start of exposure
+    }
+
+    # 2 soruces with [Fe/H], but not Soubiran et al. (2024)
+    fits_header_lamAra = {
+        'OBJECT': 'lam Ara',
+        'MEANRA': 265.09927324399,  # Right Ascension in decimal degrees
+        'MEANDEC': -49.41558312680999, # Declination in decimal degrees
+        'UTMJD': 60359.7838614119 # Modified Julian Date at start of exposure
+    }
+
+    # Just 1 source of Teff/logg/[Fe/H]
+    fits_header_gamAra = {
+        'OBJECT': 'gam Ara',
+        'MEANRA': 261.34855755629,  # Right Ascension in decimal degrees
+        'MEANDEC': -56.37778454666, # Declination in decimal degrees
+        'UTMJD': 60359.7838614119 # Modified Julian Date at start of exposure
+    }
+
     fits_header_other = {
         'OBJECT': '23_LZ_Gmag8',
-        'MEANRA': 180.2385559,  # Right Ascension in decimal degrees
-        'MEANDEC': -08.369341, # Declination in decimal degrees
+        'MEANRA': 180.239807153083,  # Right Ascension in decimal degrees
+        'MEANDEC': -21.2528045309836, # Declination in decimal degrees
         'UTMJD': 60359.7838614119 # Modified Julian Date at start of exposure
     }
 
     fits_header_18sco_with_different_name= {
-        'OBJECT': 'Fake Star 18 Sco',
+        'OBJECT': '18 Sco with Wrong Name',
         'MEANRA': 243.905279,  # Right Ascension in decimal degrees
-        'MEANDEC': -08.369341, # Declination in decimal degrees
+        'MEANDEC': -8.369341, # Declination in decimal degrees
         'UTMJD': 60359.7838614119 # Modified Julian Date at start of exposure
+    }
+
+    fits_header_halo2 = {
+        'OBJECT': 'Halo2',
+        'MEANRA': 30.3104403745408,  # Right Ascension in decimal degrees
+        'MEANDEC': -30.0026469388989, # Declination in decimal degrees
+        'UTMJD': 60269.4987917752 # Modified Julian Date at start of exposure
     }
 
     fits_header_fake_star = {
@@ -362,7 +393,7 @@ def test_update_fits_header_via_crossmatch_with_simbad():
         'UTMJD': 60359.7838614119 # Modified Julian Date at start of exposure
     }
 
-    for fits_header in [fits_header_hip, fits_header_gaia, fits_header_18Sco, fits_header_other, fits_header_18sco_with_different_name, fits_header_fake_star]:
+    for fits_header in [fits_header_hip, fits_header_gaia, fits_header_18Sco, fits_header_alfAra, fits_header_gamAra, fits_header_lamAra, fits_header_other, fits_header_18sco_with_different_name, fits_header_halo2, fits_header_fake_star]:
         # Call the function with the mock FITS header
         updated_header = VR.utils.update_fits_header_via_crossmatch_with_simbad(fits_header)
         # Print the updated header to see the changes
@@ -529,50 +560,50 @@ def test_find_closest_korg_spectrum():
 # Run the test function
 if __name__ == "__main__":
 
-    test_apply_velocity_shift_to_wavelength_array()
+    # test_apply_velocity_shift_to_wavelength_array()
     
-    test_radial_velocity_from_line_shift()
+    # test_radial_velocity_from_line_shift()
     
-    test_voigt_absorption_profile()
+    # test_voigt_absorption_profile()
     
-    test_lc_peak_gauss()
+    # test_lc_peak_gauss()
     
-    test_gaussian_absorption_profile()
+    # test_gaussian_absorption_profile()
 
-    test_calculate_barycentric_velocity_correction()
+    # test_calculate_barycentric_velocity_correction()
 
-    test_match_month_to_date()
+    # test_match_month_to_date()
 
-    test_polynomial_function()
+    # test_polynomial_function()
 
-    test_read_veloce_fits_image_and_metadata()
+    # test_read_veloce_fits_image_and_metadata()
 
-    test_identify_calibration_and_science_runs()
+    # test_identify_calibration_and_science_runs()
 
-    test_interpolate_spectrum()
+    # test_interpolate_spectrum()
 
-    test_lasercomb_wavelength_from_numbers()
+    # test_lasercomb_wavelength_from_numbers()
 
-    test_lasercomb_numbers_from_wavelength()
+    # test_lasercomb_numbers_from_wavelength()
 
-    test_read_in_wavelength_solution_coefficients_tinney()
+    # test_read_in_wavelength_solution_coefficients_tinney()
 
-    test_wavelength_vac_to_air()
+    # test_wavelength_vac_to_air()
 
-    test_wavelength_air_to_vac()
+    # test_wavelength_air_to_vac()
 
-    test_check_repeated_observations()
+    # test_check_repeated_observations()
 
-    test_monitor_vrad_for_repeat_observations()
+    # test_monitor_vrad_for_repeat_observations()
 
-    test_get_memory_usage()
+    # test_get_memory_usage()
 
-    test_degrade_spectral_resolution()
+    # test_degrade_spectral_resolution()
 
     test_update_fits_header_via_crossmatch_with_simbad()
 
-    test_find_best_radial_velocity_from_fits_header()
+    # test_find_best_radial_velocity_from_fits_header()
 
-    test_find_closest_korg_spectrum()
+    # test_find_closest_korg_spectrum()
 
     print('\n  DONE Testing: VR.utils.py')

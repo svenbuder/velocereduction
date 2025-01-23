@@ -506,7 +506,7 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
                     if len(np.where(exp_times_dark-exp_time_science >= 0.0)[0]) > 0:
                         exp_times_dark = exp_times_dark[exp_times_dark-exp_time_science >= 0.0]
                     else:
-                        print('  --> Warning: No DarkFrame with exposure time longer than Science exposure time ('+str(exp_time_science)+'s) found. Using closest DarkFrame.')
+                        print('  --> Warning: No DarkFrame > Science exposure time ('+str(exp_time_science)+'s) found. Using closest DarkFrame.')
 
                     # Now find the smallest one of those
                     best_matching_dark = exp_times_dark[np.argmin(exp_times_dark-exp_time_science)]
@@ -515,7 +515,7 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
                     # Calculate an exposure time adjusted dark frame, which has no negative entries.
                     adjusted_dark = (np.array(master_darks[str(best_matching_dark)]['ccd_'+str(ccd)], dtype=float) * exp_times_ratio_science_to_dark).clip(min=0.0)
 
-                    if (ccd == 1): print('  --> Subtracting '+str(best_matching_dark)+'s dark frame from Science exposure '+str(run)+' (D='+str(best_matching_dark)+'s vs. S='+str(exp_time_science)+'s, S/D = '+"{:.2f}".format(exp_times_ratio_science_to_dark)+' ~ '+str(int(np.median(adjusted_dark.flatten())))+' counts).')
+                    if (ccd == 1): print('  --> Subtracting '+str(best_matching_dark)+'s Dark from Science exposure '+str(run)+' (D='+str(best_matching_dark)+'s vs. S='+str(exp_time_science)+'s, S/D = '+"{:.2f}".format(exp_times_ratio_science_to_dark)+' ~ '+str(int(np.median(adjusted_dark.flatten())))+' counts).')
 
                     # Let's check that the dark and science frames have the same dimenions.
                     # This may fail if the archival 2Amp dark is used for a 4Amp science frame.
@@ -794,7 +794,7 @@ def optimise_tramline_polynomial(overscan_subtracted_images, order, order_ranges
             - The second array contains the polynomial coefficients for the tramline ending.
     """
 
-    if readout_mode != '2Amp': raise ValueError('Can only handle 2Amp readout mode')
+    #if readout_mode != '2Amp': raise ValueError('Can only handle 2Amp readout mode')
 
     ccd = order[4]
     

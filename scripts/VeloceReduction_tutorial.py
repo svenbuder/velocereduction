@@ -74,13 +74,6 @@ def get_script_input():
         
         # 4Amp example
 #         jupyter_date = "231121"
-
-#         jupyter_date = "240201"
-#         jupyter_date = "240321"
-#         jupyter_date = "240921"
-#         jupyter_date = "240919"
-#         jupyter_date = "240219"
-#         jupyter_date = "250111"
         
         jupyter_working_directory = "../"
         print("Running in a Jupyter notebook. Using predefined values")
@@ -295,46 +288,37 @@ for science_object in list(science_runs.keys()):
 # In[ ]:
 
 
-for science_object in list(science_runs.keys()):
+# for science_object in list(science_runs.keys()):
     
-    print('\nCalibrating wavelength for '+science_object+' with given radial velocity and synthetic Korg spectrum')
+#     print('\nCalibrating wavelength for '+science_object+' with given radial velocity and synthetic Korg spectrum')
     
-    with fits.open(config.working_directory+'reduced_data/'+config.date+'/'+science_object+'/veloce_spectra_'+science_object+'_'+config.date+'.fits', mode='update') as veloce_fits_file:
+#     with fits.open(config.working_directory+'reduced_data/'+config.date+'/'+science_object+'/veloce_spectra_'+science_object+'_'+config.date+'.fits', mode='update') as veloce_fits_file:
 
-        korg_spectra = VR.flux_comparison.read_available_korg_syntheses()
+#         korg_spectra = VR.flux_comparison.read_available_korg_syntheses()
         
-        # Find the closest match based on (possibly available) literature TEFF/LOGG/FE_H
-        closest_korg_spectrum = VR.utils.find_closest_korg_spectrum(
-            available_korg_spectra = korg_spectra,
-            fits_header = veloce_fits_file[0].header,
-        )
-
-        # Find the best RV or raise ValueError of none available.
-        vrad_for_calibration = VR.utils.find_best_radial_velocity_from_fits_header(fits_header = veloce_fits_file[0].header)
-
-        # Let's test this for a few orders (or simply set order_selection=None to use all)
-        #for order in ['ccd_3_order_71','ccd_3_order_94','ccd_3_order_89']:
-        for order in ['ccd_3_order_71']:
+#         # Find the closest match based on (possibly available) literature TEFF/LOGG/FE_H
+#         closest_korg_spectrum = VR.utils.find_closest_korg_spectrum(
+#             available_korg_spectra = korg_spectra,
+#             fits_header = veloce_fits_file[0].header,
+#         )
         
-            VR.flux_comparison.calculate_wavelength_coefficients_with_korg_synthesis(
-                veloce_fits_file,
-                korg_wavelength_vac = korg_spectra['wavelength_vac'],
-                korg_flux = korg_spectra['flux_'+closest_korg_spectrum],
-                vrad_for_calibration = vrad_for_calibration,
-                order_selection=[order],
-                telluric_hinkle_or_bstar = 'hinkle', # You can choose between 'hinkle' and 'bstar'
-                debug=False
-            )
+#         print(closest_korg_spectrum)
 
-            VR.flux_comparison.calculate_wavelength_coefficients_with_korg_synthesis(
-                veloce_fits_file,
-                korg_wavelength_vac = korg_spectra['wavelength_vac'],
-                korg_flux = korg_spectra['flux_'+closest_korg_spectrum],
-                vrad_for_calibration = vrad_for_calibration,
-                order_selection=[order],
-                telluric_hinkle_or_bstar = 'bstar', # You can choose between 'hinkle' and 'bstar'
-                debug=False
-            )
+#         # Find the best RV or raise ValueError of none available.
+#         vrad_for_calibration = VR.utils.find_best_radial_velocity_from_fits_header(fits_header = veloce_fits_file[0].header)
+
+#         # Let's test this for a few orders (or simply set order_selection = None to use all valid ones)
+#         for order in ['ccd_3_order_94','ccd_3_order_89']:
+
+#             VR.flux_comparison.calculate_wavelength_coefficients_with_korg_synthesis(
+#                 veloce_fits_file,
+#                 korg_wavelength_vac = korg_spectra['wavelength_vac'],
+#                 korg_flux = korg_spectra['flux_'+closest_korg_spectrum],
+#                 vrad_for_calibration = vrad_for_calibration,
+#                 order_selection=[order],
+#                 telluric_hinkle_or_bstar = 'hinkle', # You can choose between 'hinkle' and 'bstar'
+#                 debug=False
+#             )
 
 
 # ## Monitor RV (for stars with multiple observations and seperate reductions)
