@@ -852,20 +852,14 @@ def update_fits_header_via_crossmatch_with_simbad(fits_header):
         hip = unique_ids[[x[:4] == 'HIP ' for x in unique_ids]][0]
         match_with_hip_tmass_gaia.append(hip)
         fits_header['HIP_ID'] = (int(hip[4:]), 'Hipparcos Catalogue Identifier')
-    else:
-        pass
     if '2MASS ' in ids:
         tmass = unique_ids[[x[:6] == '2MASS ' for x in unique_ids]][0]
         match_with_hip_tmass_gaia.append(tmass)
         fits_header['TMASS_ID'] = (tmass[7:], '2MASS catalogue identifier (2MASS J removed)')
-    else:
-        pass
     if 'Gaia DR3 ' in ids:
         source_id = unique_ids[[x[:9] == 'Gaia DR3 ' for x in unique_ids]][0]
         match_with_hip_tmass_gaia.append(source_id)
         fits_header['GAIA_ID'] = (int(source_id[9:]), 'Gaia DR3 source_id (Gaia DR3 removed)')
-    else:
-        pass
     print('  --> Matches in HIP/2MASS/Gaia DR3: '+', '.join(match_with_hip_tmass_gaia))
 
     # Now let's add some literature information
@@ -878,8 +872,6 @@ def update_fits_header_via_crossmatch_with_simbad(fits_header):
         print('  --> Found literature VRAD/E_VRAD in Simbad: '+str(fits_header['VRAD_LIT'])+' +/- '+str(fits_header['E_VRAD_LIT'])+' km/s by '+str(fits_header['VRAD_BIB']))
     elif 'VRAD_LIT' in fits_header.keys():
         print('  --> Found literature VRAD in Simbad: '+str(fits_header['VRAD_LIT'])+' km/s by '+str(fits_header['VRAD_BIB']))
-    else:
-        pass
 
     if len(simbad_match_fe_h) > 0:
         # Add literature information on stellar parameters Teff/logg/[Fe/H]
@@ -897,8 +889,6 @@ def update_fits_header_via_crossmatch_with_simbad(fits_header):
         print('  --> Found literature TEFF/LOGG/FE_H in Simbad: '+str(fits_header['TEFF_LIT'])+'/'+str(fits_header['LOGG_LIT'])+'/'+str(fits_header['FE_H_LIT'])+' by '+str(fits_header['TLF_BIB']))
     elif 'FE_H_LIT' in fits_header.keys():
         print('  --> Found literature FE_H in Simbad: '+str(fits_header['FE_H_LIT'])+' by '+str(fits_header['TLF_BIB']))
-    else:
-        pass
 
     # Add information on B/V/G/R filters (where available) and parallax
     for bvgr_filter in ['B','V','G','R']:

@@ -736,7 +736,7 @@ def calibrate_wavelength(science_object, optimise_lc_solution=True, correct_bary
                     wavelength_to_fit,
                     flux_to_fit,
                     # initial_guess: [line_centre, offset, amplitude, sigma, gamma]
-                    initial_guess = [initial_centre_wavelength, np.median(flux_to_fit), 0.5, 0.5, 0.5],
+                    initial_guess = [initial_centre_wavelength, np.median(flux_to_fit).clip(min=0.5,max=1.0), 0.5, 0.5, 0.5],
                     # Let's assume an absolute RV below 500 km/s and otherwise (hopefully) reasonable estimates for the line profile.
                     bounds = (
                         [line_centre * (1-500./299792.), 0.1, 0.05, 0.0, 0.0],
@@ -744,10 +744,13 @@ def calibrate_wavelength(science_object, optimise_lc_solution=True, correct_bary
                     )
                 )
 
+                if abs(radial_velocity_from_line_shift(voigt_profile_parameters[0], line_centre)) > 500.:
+                    print('  --> Warning: Voigt profile fit for '+str(line_centre)+' hit boundary of 400 km/s. Resetting RV to 0 km/s.')
+                    voigt_profile_parameters[0] = line_centre
                 if voigt_profile_parameters[-2] == sigma_gamma_max:
-                    print('  --> Warning: Voigt profile fit hit upper boundary ('+str(sigma_gamma_max)+') for sigma')
+                    print('  --> Warning: Voigt profile fit for '+str(line_centre)+' hit upper boundary ('+str(sigma_gamma_max)+') for sigma')
                 if voigt_profile_parameters[-1] == sigma_gamma_max:
-                    print('  --> Warning: Voigt profile fit hit upper boundary ('+str(sigma_gamma_max)+') for gamma')
+                    print('  --> Warning: Voigt profile fit for '+str(line_centre)+' hit upper boundary ('+str(sigma_gamma_max)+') for gamma')
 
                 rv_voigt = radial_velocity_from_line_shift(voigt_profile_parameters[0], line_centre)
                 e_line_centre = np.sqrt(np.diag(voigt_profile_covariances))[0]
