@@ -31,12 +31,8 @@ def read_available_korg_syntheses():
       from Jofre et al. (2017, http://adsabs.harvard.edu/abs/2017A%26A...601A..38J) for the first 4 and
       from Soubiran et al. (2024, https://ui.adsabs.harvard.edu/abs/2024A&A...682A.145S) for 18 Sco,
     - on a wavelength grid 3590:0.01:9510 Angstrom and downgraded to resolution R=80,000,
-    - the default linelist of Korg based on an extraction of lines for the Sun from the VALD database.
+    - linelists from the VALD database with the below stellar parameters, hyper-fine splitting, and a depth threshold of 0.001.
     
-    Warning:
-    The linelist is not including lines between 9000 and 9510Å.
-    It is further not including lines that are not visible in the Sun, but possibly in the cooler stars.
-
     Stellar parameters:
     Sun:      Teff=5771, logg=4.44, [Fe/H]= 0.03, vmic=1.06, vsini=np.sqrt(1.6**2 +4.2**2)
     Acruturs: Teff=4286, logg=1.64, [Fe/H]=-0.52, vmic=1.58, vsini=np.sqrt(3.8**2 +5.0**2)
@@ -45,7 +41,7 @@ def read_available_korg_syntheses():
     18 Sco:   Teff=5824, logg=4.42, [Fe/H]= 0.03, vmic=1.00, vsini=np.sqrt(2.03**2+3.7**2)
 
     """
-    korg_spectra = Table.read(Path(__file__).resolve().parent / 'korg_flux' / 'korg_flux_sun_arcturus_61cyga_hd22879_18sco_R80000_3590_0.01_9510AA.fits')
+    korg_spectra = Table.read(Path(__file__).resolve().parent / 'korg_flux' / 'korg_flux_sun_arcturus_61cyga_hd22879_18sco_R80000_3500_0.01_9600AA.fits')
     return(korg_spectra)
 
 def read_korg_normalisation_buffers():

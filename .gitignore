@@ -9,6 +9,9 @@ raw_data/
 *.egg-info/
 .DS_Store
 .egg-info
-lsf_matrix_lsf_korg_veloce.jld2
 __pycache__/
+*.bib
+*.vald
+*.jld2
+korg_flux_sun_arcturus_61cyga_hd22879_18sco_R80000_3590_0.01_9510AA.fits
 .ipynb_checkpoints/
