@@ -74,7 +74,11 @@ def get_script_input():
         
         # 4Amp example
 #         jupyter_date = "231121"
-        
+
+#         jupyter_date = "240919"
+#         jupyter_date = "240920"
+#         jupyter_date = "250111"
+
         jupyter_working_directory = "../"
         print("Running in a Jupyter notebook. Using predefined values")
         args = argparse.Namespace(date=jupyter_date, working_directory=jupyter_working_directory)
@@ -180,6 +184,7 @@ if len(calibration_runs['Bstar']) > 0:
 # Extract Science Objects and save them into FITS files under reduced_data/
 for science_object in list(science_runs.keys()):
     print('\nExtracting '+science_object)
+
     try:
         science, science_noise, science_header = VR.extraction.extract_orders(
             ccd1_runs = science_runs[science_object],
@@ -201,7 +206,7 @@ for science_object in list(science_runs.keys()):
             telluric = master_bstars[closest_tellurics]
         else:
             print('No tellurics from B Stars available.')
-            telluric = science; telluric[:] = 1.0
+            telluric = np.ones(np.shape(science))
 
         # Create a primary HDU and HDU list
         primary_hdu = fits.PrimaryHDU()
@@ -235,6 +240,8 @@ for science_object in list(science_runs.keys()):
 
             # Apply rough renormalisation with outlier-robuster 90th percenile of ~middle of order
             science_90percentile = np.nanpercentile(science[ext_index,1500:2500],q=90)
+            if np.isnan(science_90percentile):
+                science_90percentile = 1.0
             science[ext_index,:] /= science_90percentile
             science_noise[ext_index,:] /= science_90percentile
 
@@ -340,6 +347,12 @@ print('Memory before starting the reduction was:')
 print(starting_memory)
 print('Memory after running the reduction is:')
 print(VR.utils.get_memory_usage())
+
+
+# In[ ]:
+
+
+
 
 
 # In[ ]:

@@ -669,7 +669,7 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
         plt.tight_layout()
 
         Path(config.working_directory+'reduced_data/'+config.date+'/_debug').mkdir(parents=True, exist_ok=True)
-        plt.savefig(config.working_directory+'reduced_data/'+config.date+f'/_debug/debug_tramlines{type}.pdf',dpi=200,bbox_inches='tight')
+        plt.savefig(config.working_directory+'reduced_data/'+config.date+f'/_debug/debug_tramlines{type}.pdf',bbox_inches='tight')
         if 'ipykernel' in sys.modules: plt.show()
         plt.close()
         

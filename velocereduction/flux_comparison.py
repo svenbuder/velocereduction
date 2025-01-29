@@ -23,25 +23,27 @@ def read_available_korg_syntheses():
         - flux_arcturus (array): normalised flux for Arcturus,
         - flux_61cyga (array):   normalised flux for 61 Cyg A,
         - flux_hd22879 (array):  normalised flux for HD 22879,
+        - flux_hip28011 (array): normalised flux for HIP 28011,
         - flux_18sco (array):    normalised flux for 18 Sco
 
     Details on how to recreate the spectra can be found in korg_flux/calculate_korg_flux.ipynb.    
     In short, spectra are synthesised:
-    - for the Sun, Arcturus, 61 Cyg A, HD 22879 and 18 Sco with stellar parameters (Teff, logg, [Fe/H], vmic, vsini)
+    - for the Sun, Arcturus, 61 Cyg A, HD 22879, HIP 28011, and 18 Sco with stellar parameters (Teff, logg, [Fe/H], vmic, vsini)
       from Jofre et al. (2017, http://adsabs.harvard.edu/abs/2017A%26A...601A..38J) for the first 4 and
       from Soubiran et al. (2024, https://ui.adsabs.harvard.edu/abs/2024A&A...682A.145S) for 18 Sco,
     - on a wavelength grid 3590:0.01:9510 Angstrom and downgraded to resolution R=80,000,
     - linelists from the VALD database with the below stellar parameters, hyper-fine splitting, and a depth threshold of 0.001.
     
     Stellar parameters:
-    Sun:      Teff=5771, logg=4.44, [Fe/H]= 0.03, vmic=1.06, vsini=np.sqrt(1.6**2 +4.2**2)
-    Acruturs: Teff=4286, logg=1.64, [Fe/H]=-0.52, vmic=1.58, vsini=np.sqrt(3.8**2 +5.0**2)
-    61 Cyg A: Teff=4373, logg=4.63, [Fe/H]=-0.33, vmic=1.07, vsini=np.sqrt(0.0**2 +4.2**2)
-    HD 22879: Teff=5868, logg=4.27, [Fe/H]=-0.86, vmic=1.05, vsini=np.sqrt(4.4**2 +5.4**2)
-    18 Sco:   Teff=5824, logg=4.42, [Fe/H]= 0.03, vmic=1.00, vsini=np.sqrt(2.03**2+3.7**2)
+    Sun:       Teff=5771, logg=4.44, [Fe/H]= 0.03, vmic=1.06, vsini=np.sqrt(1.6**2 +4.2**2)
+    Acruturs:  Teff=4286, logg=1.64, [Fe/H]=-0.52, vmic=1.58, vsini=np.sqrt(3.8**2 +5.0**2)
+    61 Cyg A:  Teff=4373, logg=4.63, [Fe/H]=-0.33, vmic=1.07, vsini=np.sqrt(0.0**2 +4.2**2)
+    HD 22879:  Teff=5868, logg=4.27, [Fe/H]=-0.86, vmic=1.05, vsini=np.sqrt(4.4**2 +5.4**2)
+    18 Sco:    Teff=5824, logg=4.42, [Fe/H]= 0.03, vmic=1.00, vsini=np.sqrt(2.03**2+3.7**2)
+    HIP 28011: Teff=4565, logg=2.50, [Fe/H]= 0.26, vmic=1.00, vsini=4.0
 
     """
-    korg_spectra = Table.read(Path(__file__).resolve().parent / 'korg_flux' / 'korg_flux_sun_arcturus_61cyga_hd22879_18sco_R80000_3500_0.01_9600AA.fits')
+    korg_spectra = Table.read(Path(__file__).resolve().parent / 'korg_flux' / 'korg_flux_sun_arcturus_61cyga_hd22879_18sco_hip28011_R80000_3500_0.01_9600AA.fits')
     return(korg_spectra)
 
 def read_korg_normalisation_buffers():
@@ -180,7 +182,7 @@ def make_veloce_and_korg_spectrum_compatible(wavelength_coefficients,veloce_scie
     """
 
     # Calculate the Veloce wavelength solution based on the given coefficients.
-    veloce_wavelength_vac = polynomial_function(np.arange(4128)-2064, *wavelength_coefficients)*10
+    veloce_wavelength_vac = polynomial_function(np.arange(len(veloce_science_flux))-int(len(veloce_science_flux)/2), *wavelength_coefficients)*10
 
     # Avoid infinite fluxes in the Veloce spectrum.
     veloce_flux_finite_pixels = np.isfinite(veloce_science_flux)

@@ -978,9 +978,14 @@ def find_closest_korg_spectrum(available_korg_spectra,fits_header):
         print('    --> Literature values for TEFF/LOGG/FE_H are: '+str(fits_header['TEFF_LIT'])+'/'+str(fits_header['LOGG_LIT'])+'/'+str(fits_header['FE_H_LIT']))
         # If the star is a giant with TEFF < 5000 and LOGG < 3.5, use 'arcturus'
         if fits_header['TEFF_LIT'] < 5000 and fits_header['LOGG_LIT'] < 3.5:
-            closest_korg_spectrum = 'arcturus'
-            print('    --> Object is a giant. Using Arcturus spectrum.')
-            return(closest_korg_spectrum)
+            if fits_header['FE_H_LIT'] < -0.25:
+                closest_korg_spectrum = 'arcturus'
+                print('    --> Object is a metal-poor giant. Using Arcturus spectrum.')
+                return(closest_korg_spectrum)
+            else:
+                closest_korg_spectrum = 'hip28011'
+                print('    --> Object is a metal-richer giant. Using HIP28011 spectrum.')
+                return(closest_korg_spectrum)
         elif fits_header['TEFF_LIT'] < 5000 and fits_header['LOGG_LIT'] >= 3.5:
             closest_korg_spectrum = '61cyga'
             print('    --> Object is a cool dwarf. Using 61 Cyg A spectrum.')
@@ -1019,8 +1024,8 @@ def find_closest_korg_spectrum(available_korg_spectra,fits_header):
                 color = 0.5
             
             if absolute_mag < 8 and color > 1:
-                closest_korg_spectrum = 'arcturus'
-                print('    --> Object is likely giant based on magnitude (< 8 mag) and color  (> 1 mag). Using Arcturus spectrum.')
+                closest_korg_spectrum = 'hip28011'
+                print('    --> Object is likely giant based on magnitude (< 8 mag) and color  (> 1 mag). Using HIP28011 spectrum.')
             elif absolute_mag >= 8 and color > 1:
                 closest_korg_spectrum = '61cyga'
                 print('    --> Object is likely cool dwarf based on magnitude (> 8 mag) and color (> 1 mag). Using 61 Cyg A spectrum.')
