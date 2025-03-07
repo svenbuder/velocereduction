@@ -862,7 +862,8 @@ def update_fits_header_via_crossmatch_with_simbad(fits_header):
         simbad_match_magnitudes = simbad_match_magnitudes[0]
 
         for filter in ['B','V','G','R']:
-            simbad_match_magnitudes[filter] = simbad_match_magnitudes[filter].filled(np.nan)
+            if isinstance(simbad_match_magnitudes[filter], np.ma.MaskedArray):
+                simbad_match_magnitudes[filter] = simbad_match_magnitudes[filter].filled(np.nan)
 
         # Veloce is meant to observe only down to 12th magnitude.
         # Let's test if the object is bright enough for Veloce (G < 12 mag) and print a warning if not.
@@ -908,9 +909,6 @@ def update_fits_header_via_crossmatch_with_simbad(fits_header):
 
     # Add literature information on stellar parameters Teff/logg/[Fe/H]
     if len(simbad_match_fe_h) > 0:
-        simbad_match_fe_h['mesfe_h.teff'] = simbad_match_fe_h['mesfe_h.teff'].filled(np.nan)
-        simbad_match_fe_h['mesfe_h.log_g'] = simbad_match_fe_h['mesfe_h.log_g'].filled(np.nan)
-        simbad_match_fe_h['mesfe_h.fe_h'] = simbad_match_fe_h['mesfe_h.fe_h'].filled(np.nan)
         if np.isfinite(simbad_match_fe_h['mesfe_h.teff']): fits_header['TEFF_LIT'] = (simbad_match_fe_h['mesfe_h.teff'], 'Effective temperature from Simbad')
         if np.isfinite(simbad_match_fe_h['mesfe_h.log_g']): fits_header['LOGG_LIT'] = (simbad_match_fe_h['mesfe_h.log_g'], 'Surface gravity from Simbad')
         if np.isfinite(simbad_match_fe_h['mesfe_h.fe_h']): fits_header['FE_H_LIT'] = (simbad_match_fe_h['mesfe_h.fe_h'], 'Iron abundance from Simbad')

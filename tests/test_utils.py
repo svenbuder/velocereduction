@@ -403,7 +403,10 @@ def test_update_fits_header_via_crossmatch_with_simbad():
 
     for fits_header in [fits_header_hip, fits_header_gaia, fits_header_18Sco, fits_header_alfAra, fits_header_gamAra, fits_header_lamAra, fits_header_TIC, fits_header_other, fits_header_18sco_with_different_name, fits_header_halo2, fits_header_fake_star]:
         # Call the function with the mock FITS header
+        # try:
         updated_header = VR.utils.update_fits_header_via_crossmatch_with_simbad(fits_header)
+        # except (pyvo.dal.exceptions.DALFormatError, requests.ConnectionError, RemoteServiceError) as e:
+        #     pytest.skip(f"Skipping test due to SIMBAD connection issue: {e}")
         # Print the updated header to see the changes
         print("  --> Updated FITS Header for OBJECT "+fits_header['OBJECT']+":")
         for key, value in updated_header.items():
