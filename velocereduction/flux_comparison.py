@@ -62,7 +62,7 @@ def read_korg_normalisation_buffers():
         normalisation_buffers[buffer[0]] = [int(buffer[1]),int(buffer[2])]
     return(normalisation_buffers)
 
-    
+
 def normalise_veloce_flux_via_smoothed_ratio_to_korg_flux(veloce_wavelength, veloce_flux, korg_flux, normalisation_buffers, filter_kernel_size = 501, debug=False):
     """
     Normalise the Veloce flux by dividing it by the Korg flux.
