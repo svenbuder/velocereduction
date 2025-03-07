@@ -502,6 +502,10 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
         if ccd == 2: runs = ccd2_runs
         if ccd == 3: runs = ccd3_runs
         
+        # Residual from implementing CURE mirror monitoring
+        #if Flat | ThXe:
+        #    f, ax = plt.subplots()
+
         for run in runs:
             full_image, metadata = read_veloce_fits_image_and_metadata(config.working_directory+'observations/'+config.date+'/ccd_'+str(ccd)+'/'+config.date[-2:]+match_month_to_date(config.date)+str(ccd)+run+'.fits')
             trimmed_image, os_median, os_rms, readout_mode = substract_overscan(full_image, metadata, debug_overscan)
@@ -541,7 +545,44 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
 
                     trimmed_image -= adjusted_dark
 
-            images['ccd_'+str(ccd)].append(trimmed_image)
+            # Add check if CURE mirror folded in: We expect strong signals for Flat and ThXe.
+            use_this_image = True
+            if Flat:
+                # Residual from implementing CURE mirror monitoring
+                #ax.hist(trimmed_image.flatten(),bins = np.linspace(0,65535,100), histtype='step', ls='dashed', label = 'Flat '+str(run))
+                nanmed = np.percentile(trimmed_image,99)
+                expectation = 5000
+                if nanmed < expectation:
+                    print('  --> Flat image '+str(run)+' for CCD '+str(ccd)+' has not enough signal ('+str(nanmed)+'<'+str(expectation)+'). Ignoring. Was CURE mirror maybe not folded in?')
+                    use_this_image = False
+            if ThXe:
+                # Residual from implementing CURE mirror monitoring
+                #ax.hist(trimmed_image.flatten(),bins = np.linspace(0,65535,100), histtype='step', ls='dashed', label = 'ThXe '+str(run))
+                nanmed = np.percentile(trimmed_image,99)
+                if ccd == 1:
+                    expectation = 80
+                elif ccd == 2:
+                    expectation = 200
+                else:
+                    expectation = 1000
+                if nanmed < expectation:
+                    print('  --> ThXe image '+str(run)+' for CCD '+str(ccd)+' has not enough signal ('+str(nanmed)+'<'+str(expectation)+'). Ignoring. Was CURE mirror maybe not folded in?')
+                    use_this_image = False
+
+            if use_this_image:
+                images['ccd_'+str(ccd)].append(trimmed_image)
+            elif (run == runs[-1]) & len(images['ccd_'+str(ccd)]) == 0:
+                print('  --> No good Flat or ThXe available for CCD '+str(ccd)+'. Be careful!')
+                images['ccd_'+str(ccd)].append(trimmed_image)
+
+        # Residual from implementing CURE mirror monitoring
+        #if Flat | ThXe:
+        #    ax.set_xlabel('Counts')
+        #    ax.set_ylabel('Number of Pixels')
+        #    ax.legend(ncol=2,fontsize=8)
+        #    ax.set_yscale('log')
+        #    plt.show()
+        #    plt.close()
         
         # For science: sum counts
         if Science: images['ccd_'+str(ccd)] = np.array(np.median(images['ccd_'+str(ccd)],axis=0),dtype=float)

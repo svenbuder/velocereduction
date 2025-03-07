@@ -854,21 +854,20 @@ def update_fits_header_via_crossmatch_with_simbad(fits_header):
         raise ConnectionError('  --> ConnectionError for Simbad. Try again later! Error Message: '+str(e))
 
     # Check how many measurements we have for magnitudes
-    if len(simbad_match_magnitudes) == 0: print('  --> Did not find a match in Simbad for magnitudes.')
-    elif len(simbad_match_magnitudes) == 1: simbad_match_magnitudes = simbad_match_magnitudes[0]
+    if len(simbad_match_magnitudes) == 0:
+        print('  --> Did not find a match in Simbad for magnitudes.')
     else:
-        print('  --> Found more than one entry in Simbad for magnitudes. Using the first match.')
+        if len(simbad_match_magnitudes) > 1:
+            print('  --> Found more than one entry in Simbad for magnitudes. Using the first match.')
         simbad_match_magnitudes = simbad_match_magnitudes[0]
 
-    # Veloce is meant to observe only down to 12th magnitude.
-    # Let's test if the object is bright enough for Veloce (G < 12 mag or V < 12 mag) and print a warning if not.
-    if 'G' in simbad_match_magnitudes.keys():
-        if abs(simbad_match_magnitudes['G'])>=0.0:
+        for filter in ['B','V','G','R']:
+            simbad_match_magnitudes[filter] = simbad_match_magnitudes[filter].filled(np.nan)
+
+        # Veloce is meant to observe only down to 12th magnitude.
+        # Let's test if the object is bright enough for Veloce (G < 12 mag) and print a warning if not.
+        if np.isfinite(simbad_match_magnitudes['G']):
             if simbad_match_magnitudes['G'] > 12: print('  --> Warning: Match fainter than G > 12 mag. Right match for a Veloce observations?')
-        elif 'V' in simbad_match_magnitudes.keys():
-            if simbad_match_magnitudes['V'] > 12: print('  --> Warning: Match fainter than V > 12 mag. Right match for a Veloce observations?')
-    elif 'V' in simbad_match_magnitudes.keys():
-        if simbad_match_magnitudes['V'] > 12: print('  --> Warning: Match fainter than V > 12 mag. Right match for a Veloce observations?')
 
     # Let's add some more information from the crossmatches with HIP/2MASS/Gaia DR3 and other literature where available
     if len(simbad_ids_vrad_plx['ids']) > 0:
@@ -909,9 +908,12 @@ def update_fits_header_via_crossmatch_with_simbad(fits_header):
 
     # Add literature information on stellar parameters Teff/logg/[Fe/H]
     if len(simbad_match_fe_h) > 0:
-        if np.isfinite(float(simbad_match_fe_h['mesfe_h.teff'])): fits_header['TEFF_LIT'] = (simbad_match_fe_h['mesfe_h.teff'], 'Effective temperature from Simbad')
-        if np.isfinite(float(simbad_match_fe_h['mesfe_h.log_g'])): fits_header['LOGG_LIT'] = (simbad_match_fe_h['mesfe_h.log_g'], 'Surface gravity from Simbad')
-        if np.isfinite(float(simbad_match_fe_h['mesfe_h.fe_h'])): fits_header['FE_H_LIT'] = (simbad_match_fe_h['mesfe_h.fe_h'], 'Iron abundance from Simbad')
+        simbad_match_fe_h['mesfe_h.teff'] = simbad_match_fe_h['mesfe_h.teff'].filled(np.nan)
+        simbad_match_fe_h['mesfe_h.log_g'] = simbad_match_fe_h['mesfe_h.log_g'].filled(np.nan)
+        simbad_match_fe_h['mesfe_h.fe_h'] = simbad_match_fe_h['mesfe_h.fe_h'].filled(np.nan)
+        if np.isfinite(simbad_match_fe_h['mesfe_h.teff']): fits_header['TEFF_LIT'] = (simbad_match_fe_h['mesfe_h.teff'], 'Effective temperature from Simbad')
+        if np.isfinite(simbad_match_fe_h['mesfe_h.log_g']): fits_header['LOGG_LIT'] = (simbad_match_fe_h['mesfe_h.log_g'], 'Surface gravity from Simbad')
+        if np.isfinite(simbad_match_fe_h['mesfe_h.fe_h']): fits_header['FE_H_LIT'] = (simbad_match_fe_h['mesfe_h.fe_h'], 'Iron abundance from Simbad')
         if simbad_match_fe_h['mesfe_h.bibcode'] is not None: fits_header['TLF_BIB'] = (simbad_match_fe_h['mesfe_h.bibcode'], 'Bibcode of Simbad TEFF/LOGG/FE_H')
     else:
         fits_header['TEFF_LIT'] = ('None', 'Effective temperature from Simbad')
