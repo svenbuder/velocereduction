@@ -365,6 +365,14 @@ def test_update_fits_header_via_crossmatch_with_simbad():
         'UTMJD': 60359.7838614119 # Modified Julian Date at start of exposure
     }
 
+    # Test TIC star that crashed before
+    fits_header_TIC = {
+        'OBJECT': 'TIC 56023695',
+        'MEANRA': 113.07445833533,  # Right Ascension in decimal degrees
+        'MEANDEC': -14.60811524167, # Declination in decimal degrees
+        'UTMJD': 60359.7838614119 # Modified Julian Date at start of exposure
+    }
+
     fits_header_other = {
         'OBJECT': '23_LZ_Gmag8',
         'MEANRA': 180.239807153083,  # Right Ascension in decimal degrees
@@ -393,7 +401,7 @@ def test_update_fits_header_via_crossmatch_with_simbad():
         'UTMJD': 60359.7838614119 # Modified Julian Date at start of exposure
     }
 
-    for fits_header in [fits_header_hip, fits_header_gaia, fits_header_18Sco, fits_header_alfAra, fits_header_gamAra, fits_header_lamAra, fits_header_other, fits_header_18sco_with_different_name, fits_header_halo2, fits_header_fake_star]:
+    for fits_header in [fits_header_hip, fits_header_gaia, fits_header_18Sco, fits_header_alfAra, fits_header_gamAra, fits_header_lamAra, fits_header_TIC, fits_header_other, fits_header_18sco_with_different_name, fits_header_halo2, fits_header_fake_star]:
         # Call the function with the mock FITS header
         updated_header = VR.utils.update_fits_header_via_crossmatch_with_simbad(fits_header)
         # Print the updated header to see the changes
