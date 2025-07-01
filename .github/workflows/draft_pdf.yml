@@ -8,7 +8,8 @@ on:
       - .github/workflows/draft_pdf.yml
   release:
     types: [created]
-
+  workflow_dispatch:
+  
 jobs:
   paper:
     runs-on: ubuntu-latest
