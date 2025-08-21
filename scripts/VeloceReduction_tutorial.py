@@ -72,6 +72,11 @@ def get_script_input():
         # 4Amp example
 #         jupyter_date = "231121"
 
+        # CV dates
+        jupyter_date = "250604"
+        jupyter_date = "250706"
+        jupyter_date = "250707"
+
         jupyter_working_directory = "../"
         print("Running in a Jupyter notebook. Using predefined values")
         args = argparse.Namespace(date=jupyter_date, working_directory=jupyter_working_directory)
@@ -99,10 +104,13 @@ print(f"Date: {config.date}, Working Directory: {config.working_directory}")
 
 
 # Extract the Calibration and Science data from the night log
+
+each_science_run_separately = True # Set this True, if you want to reduce the runs of the same object separately
+
 calibration_runs, science_runs = VR.utils.identify_calibration_and_science_runs(
     config.date,
     config.working_directory+'observations/',
-    each_science_run_separately = False # Set this True, if you want to reduce the runs of the same object separately
+    each_science_run_separately = each_science_run_separately
 )
 
 
@@ -151,8 +159,8 @@ if len(calibration_runs['SimLC']) > 0:
         # reduced_data/YYMMDD/debug/debug_tramlines_lc.pdf
     )
 else:
-    print('\nNo SimLC observed for this night; Skipping Master LC calibration and setting all values 0.0')
-    master_lc = master_thxe; master_lc[:] = 0.0
+    print('\nNo SimLC observed for this night; Skipping Master LC calibration and setting all values 1.0')
+    master_lc = master_thxe.copy(); master_lc[:] = 1.0
 
 # Extract Darks
 master_darks = dict()
@@ -172,7 +180,8 @@ if len(calibration_runs['Bstar']) > 0:
     for bstar_exposure in calibration_runs['Bstar'].keys():
         print('  --> '+str(bstar_exposure)+': '+', '.join(calibration_runs['Bstar'][bstar_exposure]))
         telluric_flux, telluric_mjd = VR.extraction.get_tellurics_from_bstar(
-            calibration_runs['Bstar'][bstar_exposure], master_flat_images
+            calibration_runs['Bstar'][bstar_exposure], master_flat_images,
+            debug = False
         )
         master_bstars[telluric_mjd] = telluric_flux
 
@@ -272,7 +281,8 @@ for science_object in list(science_runs.keys()):
         science_object,
         optimise_lc_solution=False,
         correct_barycentric_velocity=True,
-        create_overview_pdf=True
+        create_overview_pdf=True,
+        fit_voigt_for_rv = False
     )
 #         print('  -> Succesfully calibrated wavelength with diagnostic plots for '+science_object+'\n')
 #     except:
@@ -284,35 +294,35 @@ for science_object in list(science_runs.keys()):
 # In[ ]:
 
 
-for science_object in list(science_runs.keys()):
+# for science_object in list(science_runs.keys()):
     
-    print('\nCalibrating wavelength for '+science_object+' with given radial velocity and synthetic Korg spectrum')
+#     print('\nCalibrating wavelength for '+science_object+' with given radial velocity and synthetic Korg spectrum')
     
-    with fits.open(config.working_directory+'reduced_data/'+config.date+'/'+science_object+'/veloce_spectra_'+science_object+'_'+config.date+'.fits', mode='update') as veloce_fits_file:
+#     with fits.open(config.working_directory+'reduced_data/'+config.date+'/'+science_object+'/veloce_spectra_'+science_object+'_'+config.date+'.fits', mode='update') as veloce_fits_file:
         
-        korg_spectra = VR.flux_comparison.read_available_korg_syntheses()
+#         korg_spectra = VR.flux_comparison.read_available_korg_syntheses()
         
-        # Find the closest match based on (possibly available) literature TEFF/LOGG/FE_H
-        closest_korg_spectrum = VR.utils.find_closest_korg_spectrum(
-            available_korg_spectra = korg_spectra,
-            fits_header = veloce_fits_file[0].header,
-        )
+#         # Find the closest match based on (possibly available) literature TEFF/LOGG/FE_H
+#         closest_korg_spectrum = VR.utils.find_closest_korg_spectrum(
+#             available_korg_spectra = korg_spectra,
+#             fits_header = veloce_fits_file[0].header,
+#         )
 
-        # Find the best RV or raise ValueError of none available.
-        vrad_for_calibration = VR.utils.find_best_radial_velocity_from_fits_header(fits_header = veloce_fits_file[0].header)
+#         # Find the best RV or raise ValueError of none available.
+#         vrad_for_calibration = VR.utils.find_best_radial_velocity_from_fits_header(fits_header = veloce_fits_file[0].header)
 
-        # Let's test this for a few orders (or simply set order_selection = None to use all valid ones)
-        orders_to_calibrate = ['ccd_3_order_94','ccd_3_order_89']
+#         # Let's test this for a few orders (or simply set order_selection = None to use all valid ones)
+#         orders_to_calibrate = ['ccd_3_order_94','ccd_3_order_89']
 
-        VR.flux_comparison.calculate_wavelength_coefficients_with_korg_synthesis(
-            veloce_fits_file,
-            korg_wavelength_vac = korg_spectra['wavelength_vac'],
-            korg_flux = korg_spectra['flux_'+closest_korg_spectrum],
-            vrad_for_calibration = vrad_for_calibration,
-            order_selection=orders_to_calibrate,
-            telluric_hinkle_or_bstar = 'hinkle', # You can choose between 'hinkle' and 'bstar'
-            debug=False
-        )
+#         VR.flux_comparison.calculate_wavelength_coefficients_with_korg_synthesis(
+#             veloce_fits_file,
+#             korg_wavelength_vac = korg_spectra['wavelength_vac'],
+#             korg_flux = korg_spectra['flux_'+closest_korg_spectrum],
+#             vrad_for_calibration = vrad_for_calibration,
+#             order_selection=orders_to_calibrate,
+#             telluric_hinkle_or_bstar = 'hinkle', # You can choose between 'hinkle' and 'bstar'
+#             debug=False
+#         )
 
 
 # ## Monitor RV (for stars with multiple observations and seperate reductions)
@@ -334,12 +344,6 @@ print('Memory before starting the reduction was:')
 print(starting_memory)
 print('Memory after running the reduction is:')
 print(VR.utils.get_memory_usage())
-
-
-# In[ ]:
-
-
-
 
 
 # In[ ]:

@@ -531,13 +531,13 @@ def plot_wavelength_calibrated_order_data(order, science_object, file, overview_
         wavelength_to_plot = apply_velocity_shift_to_wavelength_array(velocity_in_kms=file[0].header['VRAD'], wavelength_array=wavelength_to_plot)
         f.suptitle(config.date+' '+science_object+' '+file[order].header['EXTNAME']+ r' $v_\mathrm{rad} = '+str(file[0].header['VRAD'])+r' \pm '+str(file[0].header['E_VRAD'])+r'\,\mathrm{km\,s^{-1}}$, $v_\mathrm{bary} = '+"{:.2f}".format(np.round(file[0].header['BARYVEL'],2))+r'\,\mathrm{km\,s^{-1}}$')
     else:
-        f.suptitle(config.date+' '+science_object+' '+file[order].header['EXTNAME']+ r' $v_\mathrm{rad} = N/A, $v_\mathrm{bary} = '+"{:.2f}".format(np.round(file[0].header['BARYVEL'],2))+r'\,\mathrm{km\,s^{-1}}$')
+        f.suptitle(config.date+' '+science_object+' '+file[order].header['EXTNAME']+ r' $v_\mathrm{rad}$ = N/A, $v_\mathrm{bary} = '+"{:.2f}".format(np.round(file[0].header['BARYVEL'],2))+r'\,\mathrm{km\,s^{-1}}$')
 
     # Panel 1: Science spectrum
     ax = gs[0]
 
     # To make the plotting easier, apply rough renormalisation with outlier-robuster 90th percenile of ~middle of order
-    science_flux_to_plot = file[order].data['SCIENCE']
+    science_flux_to_plot = (file[order].data['SCIENCE']).copy()
     science_90percentile = np.nanpercentile(science_flux_to_plot[1500:2500],q=90)
     if np.isnan(science_90percentile):
         science_90percentile = 1.0
