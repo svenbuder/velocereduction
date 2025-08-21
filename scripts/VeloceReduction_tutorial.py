@@ -1,9 +1,6 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# <h1>Table of Contents<span class="tocSkip"></span></h1>
-# <div class="toc"><ul class="toc-item"><li><span><a href="#Adjust-Date-and-Directory-(possibly-via-argument-parser)" data-toc-modified-id="Adjust-Date-and-Directory-(possibly-via-argument-parser)-1"><span class="toc-item-num">1&nbsp;&nbsp;</span>Adjust Date and Directory (possibly via argument parser)</a></span></li><li><span><a href="#Identfiy-Calibration-and-Science-Runs" data-toc-modified-id="Identfiy-Calibration-and-Science-Runs-2"><span class="toc-item-num">2&nbsp;&nbsp;</span>Identfiy Calibration and Science Runs</a></span></li><li><span><a href="#Extract-orders-and-save-in-initial-FITS-files-with-an-extension-per-order." data-toc-modified-id="Extract-orders-and-save-in-initial-FITS-files-with-an-extension-per-order.-3"><span class="toc-item-num">3&nbsp;&nbsp;</span>Extract orders and save in initial FITS files with an extension per order.</a></span></li><li><span><a href="#Wavelength-calibration" data-toc-modified-id="Wavelength-calibration-4"><span class="toc-item-num">4&nbsp;&nbsp;</span>Wavelength calibration</a></span></li><li><span><a href="#Comparison-with-synthetic-spectra" data-toc-modified-id="Comparison-with-synthetic-spectra-5"><span class="toc-item-num">5&nbsp;&nbsp;</span>Comparison with synthetic spectra</a></span></li><li><span><a href="#Monitor-RV-(for-stars-with-multiple-observations-and-seperate-reductions)" data-toc-modified-id="Monitor-RV-(for-stars-with-multiple-observations-and-seperate-reductions)-6"><span class="toc-item-num">6&nbsp;&nbsp;</span>Monitor RV (for stars with multiple observations and seperate reductions)</a></span></li><li><span><a href="#Final-Memory-Check" data-toc-modified-id="Final-Memory-Check-7"><span class="toc-item-num">7&nbsp;&nbsp;</span>Final Memory Check</a></span></li></ul></div>
-
 # # VeloceReduction -- Tutorial
 # 
 # This tutorial provides an example on how to reduce data of a given night YYMMDD.
@@ -116,7 +113,7 @@ calibration_runs, science_runs = VR.utils.identify_calibration_and_science_runs(
 
 # Extract Master Flat
 print('\nExtracting Master Flat')
-master_flat, _ = VR.extraction.extract_orders(
+master_flat, master_flat_images = VR.extraction.extract_orders(
     ccd1_runs = calibration_runs['Flat_60.0'],
     ccd2_runs = calibration_runs['Flat_1.0'],
     ccd3_runs = calibration_runs['Flat_0.1'],
@@ -131,25 +128,31 @@ master_flat, _ = VR.extraction.extract_orders(
 
 # Extract Master ThXe
 print('\nExtracting Master ThXe')
-master_thxe, _ = VR.extraction.extract_orders(
+master_thxe = VR.extraction.extract_orders(
     ccd1_runs = calibration_runs['FibTh_180.0'],
     ccd2_runs = calibration_runs['FibTh_60.0'],
     ccd3_runs = calibration_runs['FibTh_15.0'],
     ThXe = True,
+    master_flat_images = master_flat_images,
     debug_tramlines = True # Would create a tramlines trace PDF under
     # reduced_data/YYMMDD/debug/debug_tramlines_thxe.pdf
 )
 
 # Extract Master LC
-print('\nExtracting Master LC')
-master_lc, _ = VR.extraction.extract_orders(
-    ccd1_runs = calibration_runs['SimLC'],
-    ccd2_runs = calibration_runs['SimLC'],
-    ccd3_runs = calibration_runs['SimLC'],
-    LC = True,
-    debug_tramlines = True # Would create a tramlines trace PDF under
-    # reduced_data/YYMMDD/debug/debug_tramlines_lc.pdf
-)
+if len(calibration_runs['SimLC']) > 0:
+    print('\nExtracting Master LC')
+    master_lc = VR.extraction.extract_orders(
+        ccd1_runs = calibration_runs['SimLC'],
+        ccd2_runs = calibration_runs['SimLC'],
+        ccd3_runs = calibration_runs['SimLC'],
+        LC = True,
+        master_flat_images = master_flat_images,
+        debug_tramlines = True # Would create a tramlines trace PDF under
+        # reduced_data/YYMMDD/debug/debug_tramlines_lc.pdf
+    )
+else:
+    print('\nNo SimLC observed for this night; Skipping Master LC calibration and setting all values 0.0')
+    master_lc = master_thxe; master_lc[:] = 0.0
 
 # Extract Darks
 master_darks = dict()
@@ -169,7 +172,7 @@ if len(calibration_runs['Bstar']) > 0:
     for bstar_exposure in calibration_runs['Bstar'].keys():
         print('  --> '+str(bstar_exposure)+': '+', '.join(calibration_runs['Bstar'][bstar_exposure]))
         telluric_flux, telluric_mjd = VR.extraction.get_tellurics_from_bstar(
-            calibration_runs['Bstar'][bstar_exposure], master_flat
+            calibration_runs['Bstar'][bstar_exposure], master_flat_images
         )
         master_bstars[telluric_mjd] = telluric_flux
 
@@ -188,6 +191,7 @@ for science_object in list(science_runs.keys()):
         ccd3_runs = science_runs[science_object],
         Science=True,
         master_darks = master_darks, # These are needed to subtract the dark current
+        master_flat_images = master_flat_images, # These are needed for flat-field correction
         debug_tramlines = True, # Would create a tramlines trace PDF under
         # reduced_data/YYMMDD/debug/debug_tramlines_{metadata['OBJECT']}.pdf
         debug_overscan=False
@@ -230,25 +234,14 @@ for science_object in list(science_runs.keys()):
     for ext_index, ext_name in enumerate(order_beginning_coeffs):
         # Create an ImageHDU object for each extension
 
-        # Apply flat-field calibration to science
-        science[ext_index,:] /= master_flat[ext_index,:]
-        science_noise[ext_index,:] /= master_flat[ext_index,:]
-
-        # Apply rough renormalisation with outlier-robuster 90th percenile of ~middle of order
-        science_90percentile = np.nanpercentile(science[ext_index,1500:2500],q=90)
-        if np.isnan(science_90percentile):
-            science_90percentile = 1.0
-        science[ext_index,:] /= science_90percentile
-        science_noise[ext_index,:] /= science_90percentile
-
         # Define the columns with appropriate formats
         col1_def = fits.Column(name='wave_vac',format='E', array=np.arange(len(science[ext_index,:]),dtype=float))
         col2_def = fits.Column(name='wave_air',format='E', array=np.arange(len(science[ext_index,:]),dtype=float))
         col3_def = fits.Column(name='science', format='E', array=science[ext_index,:])
         col4_def = fits.Column(name='science_noise',   format='E', array=science_noise[ext_index,:])
         col5_def = fits.Column(name='flat',    format='E', array=master_flat[ext_index,:])
-        col6_def = fits.Column(name='thxe',    format='E', array=master_thxe[ext_index,:]/master_flat[ext_index,:])
-        col7_def = fits.Column(name='lc',      format='E', array=master_lc[ext_index,:]/master_flat[ext_index,:])
+        col6_def = fits.Column(name='thxe',    format='E', array=master_thxe[ext_index,:])
+        col7_def = fits.Column(name='lc',      format='E', array=master_lc[ext_index,:])
         col8_def = fits.Column(name='telluric',format='E', array=telluric[ext_index,:])
 
         # Combine columns to BinTable and add header from primary
@@ -279,7 +272,7 @@ for science_object in list(science_runs.keys()):
         science_object,
         optimise_lc_solution=False,
         correct_barycentric_velocity=True,
-        create_overview_pdf=False
+        create_overview_pdf=True
     )
 #         print('  -> Succesfully calibrated wavelength with diagnostic plots for '+science_object+'\n')
 #     except:

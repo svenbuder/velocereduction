@@ -381,7 +381,7 @@ def identify_calibration_and_science_runs(date, raw_data_dir, each_science_run_s
             utc_colon = line.find(":")
             run_object = line[8:utc_colon-2].strip()
             utc = line[utc_colon-2:utc_colon-25+32].strip()
-            exposure_time = line[utc_colon-25+35:utc_colon-25+42].strip()
+            exposure_time = line[utc_colon-25+34:utc_colon-25+42].strip()
             # snr_noise = line[utc_colon-25+42:utc_colon-25+48].strip()
             # snr_photons = line[utc_colon-25+48:utc_colon-25+53].strip()
             # seeing = line[utc_colon-25+55:utc_colon-25+59].strip()
@@ -389,8 +389,8 @@ def identify_calibration_and_science_runs(date, raw_data_dir, each_science_run_s
             # thxe_status = line[utc_colon-25+63:utc_colon-25+67].strip()
             # read_noise = line[utc_colon-25+70:utc_colon-25+85].strip()
             # airmass = line[utc_colon-25+87:utc_colon-25+91].strip()
-            overscan = line[utc_colon-25+97:].split()[0]
-            comments = line[utc_colon-25+98+len(overscan):]
+            overscan = line[utc_colon-25+95:].split()[0]
+            comments = line[utc_colon-25+100+len(overscan):]
             if len(comments) != 0:
                 if run_object != 'FlatField-Quartz':
                     print('  ||\n  ||  --> Warning for '+run_object+' (run '+run+'): '+comments)

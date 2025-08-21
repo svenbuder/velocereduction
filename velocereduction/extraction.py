@@ -407,13 +407,13 @@ def convert_bstar_to_telluric(bstar_flux_in_orders, filter_kernel_size=51, debug
 
     return(np.array(telluric_flux_in_orders))
 
-def get_tellurics_from_bstar(bstar_information, master_flat, debug=False):
+def get_tellurics_from_bstar(bstar_information, master_flat_images, debug=False):
     """
     Extract telluric orders from a B-star observation.
 
     Parameters:
         bstar_information (list): A list in the format [bstar_id, run, obsering_time]
-        master_flat (np.array): The master flat field image
+        master_flat_images (dict): The master flat field images
         debug (bool): Set to True to display debug plots.
 
     Returns:
@@ -428,11 +428,9 @@ def get_tellurics_from_bstar(bstar_information, master_flat, debug=False):
         ccd1_runs = [run],
         ccd2_runs = [run],
         ccd3_runs = [run],
-        Bstar = True
+        Bstar = True,
+        master_flat_images = master_flat_images
     )
-
-    # Flat-field correct the B-star flux
-    bstar_flux_in_orders /= master_flat
 
     # Convert the B-star flux to telluric flux by normalising the B-star flux to unity
     telluric_flux_in_orders = convert_bstar_to_telluric(bstar_flux_in_orders, debug=debug)
@@ -440,7 +438,7 @@ def get_tellurics_from_bstar(bstar_information, master_flat, debug=False):
     return(telluric_flux_in_orders, metadata['UTMJD'])
     
 
-def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlines_based_on_flat = False, LC = False, Bstar = False, Science = False, ThXe = False, master_darks = None, exposure_time_threshold_darks = 300, use_tinney_ranges = False, debug_tramlines = False, debug_rows = False, debug_overscan=False):
+def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlines_based_on_flat = False, LC = False, Bstar = False, Science = False, ThXe = False, master_darks = None, master_flat_images = None, exposure_time_threshold_darks = 300, use_tinney_ranges = False, debug_tramlines = False, debug_rows = False, debug_overscan=False):
     """
     Extracts spectroscopic orders from CCD images for various types of Veloce CCD images
     using predefined tramline ranges and providing detailed debug information.
@@ -456,6 +454,7 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
         Science (bool): Set to True to extract orders for science observations.
         ThXe (bool): Set to True to extract orders for ThXe calibration images.
         master_darks (dict): A dictionary containing master dark images for the three CCDs.
+        master_flat_images (dict): A dictionary containing master flat images for the three CCDs.
         exposure_time_threshold_darks (int, float): The threshold exposure time for applying master darks to science images in seconds. Default is 300 (seconds, i.e. 5 minutes).
         use_tinney_ranges (bool): Set to True to use tramline ranges specified by Chris Tinney.
         debug_tramlines (bool): Set to True to display debug plots for tramline extraction.
@@ -493,6 +492,7 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
 
     # Extract Images from CCDs 1-3
     images = dict()
+    scaled_noise = dict()
     
     # Read in, overscan subtract and append images to array
     for ccd in [1,2,3]:
@@ -516,9 +516,10 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
                 exp_time_science = float(metadata['EXPTIME'])
 
                 # Let's check if the science exposure is actually long enough to necessitate dark subtraction
-                if (ccd == 1) & (exp_time_science < exposure_time_threshold_darks):
-                    print('  --> Science exposure time ('+str(exp_time_science)+' seconds) is less than threshold of '+str(exposure_time_threshold_darks)+' seconds to apply dark subtraction.')
-                    print('      Adjust kwarg exposure_time_threshold_darks to change this threshold.')
+                if (exp_time_science < exposure_time_threshold_darks):
+                    if ccd == 1:
+                        print('  --> Science exposure time ('+str(exp_time_science)+' seconds) is less than threshold of '+str(exposure_time_threshold_darks)+' seconds to apply dark subtraction.')
+                        print('      Adjust kwarg exposure_time_threshold_darks to change this threshold.')
                 
                 # If the science exposure is long enough, apply dark subtraction
                 else:
@@ -555,7 +556,7 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
                 if nanmed < expectation:
                     print('  --> Flat image '+str(run)+' for CCD '+str(ccd)+' has not enough signal ('+str(nanmed)+'<'+str(expectation)+'). Ignoring. Was CURE mirror maybe not folded in?')
                     use_this_image = False
-            if ThXe:
+            elif ThXe:
                 # Residual from implementing CURE mirror monitoring
                 #ax.hist(trimmed_image.flatten(),bins = np.linspace(0,65535,100), histtype='step', ls='dashed', label = 'ThXe '+str(run))
                 nanmed = np.percentile(trimmed_image,99)
@@ -564,10 +565,17 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
                 elif ccd == 2:
                     expectation = 200
                 else:
-                    expectation = 1000
+                    expectation = 500
                 if nanmed < expectation:
                     print('  --> ThXe image '+str(run)+' for CCD '+str(ccd)+' has not enough signal ('+str(nanmed)+'<'+str(expectation)+'). Ignoring. Was CURE mirror maybe not folded in?')
                     use_this_image = False
+
+            # If we should have a master flat
+            if (not Flat) & (master_flat_images is not None):
+                # Use the master flat for correction
+                trimmed_image /= master_flat_images['ccd_'+str(ccd)]
+            elif (not Flat) & (ccd == 1):
+                print('     --> Warning: No flat-field correction applied')
 
             if use_this_image:
                 images['ccd_'+str(ccd)].append(trimmed_image)
@@ -584,9 +592,10 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
         #    plt.show()
         #    plt.close()
         
-        # For science: sum counts
-        if Science: images['ccd_'+str(ccd)] = np.array(np.median(images['ccd_'+str(ccd)],axis=0),dtype=float)
-        # For calibration: calculate median
+        # For science: calculate median counts (we previously use the co-adding, but found the median to be more robust)
+        if Science:
+            images['ccd_'+str(ccd)] = np.array(np.median(images['ccd_'+str(ccd)],axis=0),dtype=float)
+        # For calibration: calculate median counts
         else: images['ccd_'+str(ccd)] = np.array(np.median(images['ccd_'+str(ccd)],axis=0),dtype=float)
 
         if Flat:
@@ -681,21 +690,29 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
         elif readout_mode == '4Amp': order_ranges_adjusted_for_readout_mode = order_ranges[order][16:-16]
         else: raise ValueError('Cannot handle readout_mode other than 2Amp or 4Amp')
 
+        # Let's loop over the tramlines
         for x_index, x in enumerate(order_ranges_adjusted_for_readout_mode):
-            
-            counts_in_pixels_to_be_summed = images['ccd_'+str(ccd)][x,order_xrange_begin[x_index]:order_xrange_end[x_index]]
-            
-            order_counts[order_ranges[order][0] + x_index] = np.sum(counts_in_pixels_to_be_summed,axis=0)
-            
-            # We are making the quick assumption that the read noise is simply the maximum overscan RMS
-            total_read_noise = np.max([os_rms[region] for region in os_rms.keys()])*np.sqrt(len(counts_in_pixels_to_be_summed))
 
-            # For science: multiply read noise with nr of runs,
-            # since we are coadding frames, rather than using median
-            if Science: total_read_noise *= np.sqrt(len(runs))
+            # For each tramline, find the relevant pixels and then sum across the rows
+            counts_in_tramline = np.sum(images['ccd_'+str(ccd)][x,order_xrange_begin[x_index]:order_xrange_end[x_index]], axis=0)
+            order_counts[order_ranges[order][0] + x_index] = counts_in_tramline
+            
+            # If we are working with the Science or Bstar frame, also compute the noise:
+            if Science | Bstar: 
+                # We assume each pixel has the same initial read noise which we assume to be the maximum RMS of the overscan region
+                read_noise_per_pixel = np.max([os_rms[region] for region in os_rms.keys()])
 
-            # noise = sqrt(flux + pixel_read_noise**2 * nr of pixels * nr of exposures)
-            order_noise[order_ranges[order][0] + x_index] = np.sqrt(np.sum(counts_in_pixels_to_be_summed,axis=0) + total_read_noise**2)
+                # Because we upscale the flux, we also need to upscale the read noise
+                scaled_noise = read_noise_per_pixel / master_flat_images['ccd_'+str(ccd)]
+
+                # For each tramline, find the relevant pixels and then sum across the rows
+                scaled_noise_in_tramline = np.sum(scaled_noise[x,order_xrange_begin[x_index]:order_xrange_end[x_index]], axis=0)
+
+                # For science: multiply read noise with nr of runs,
+                scaled_noise_in_tramline *= np.sqrt(len(runs))
+
+                # noise = sqrt(flux + total_read_noise**2)
+                order_noise[order_ranges[order][0] + x_index] = np.sqrt(counts_in_tramline + scaled_noise_in_tramline**2)
 
         counts_in_orders.append(order_counts)
         noise_in_orders.append(order_noise)
@@ -714,8 +731,12 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
         if 'ipykernel' in sys.modules: plt.show()
         plt.close()
         
-    if Science | Bstar: return(np.array(counts_in_orders),np.array(noise_in_orders),metadata)
-    else: return(np.array(counts_in_orders),np.array(noise_in_orders))
+    if Science | Bstar:
+        return(np.array(counts_in_orders),np.array(noise_in_orders),metadata)
+    elif Flat:
+        return(np.array(counts_in_orders), images)
+    else:
+        return(np.array(counts_in_orders))
 
 
 def find_tramline_beginning_and_ending(order, x_index, x_pixels, previous_beginning, previous_ending, expected_tramline_width = 38, tolerance=2, tolerance_to_previous=3, debug=False):

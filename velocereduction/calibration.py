@@ -535,7 +535,16 @@ def plot_wavelength_calibrated_order_data(order, science_object, file, overview_
 
     # Panel 1: Science spectrum
     ax = gs[0]
-    ax.plot(file[order].data['SCIENCE'], lw=1)
+
+    # To make the plotting easier, apply rough renormalisation with outlier-robuster 90th percenile of ~middle of order
+    science_flux_to_plot = file[order].data['SCIENCE']
+    science_90percentile = np.nanpercentile(science_flux_to_plot[1500:2500],q=90)
+    if np.isnan(science_90percentile):
+        science_90percentile = 1.0
+    science_flux_to_plot /= science_90percentile
+
+    # Now plot
+    ax.plot(science_flux_to_plot, lw=1)
     ax.set_ylabel('Science')
     ax.set_ylim(-0.1, 1.2)
     ticks = np.arange(0, len(wavelength_to_plot), 100)
