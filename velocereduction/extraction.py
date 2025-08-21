@@ -423,14 +423,21 @@ def get_tellurics_from_bstar(bstar_information, master_flat_images, debug=False)
 
     bstar_id, run, time = bstar_information
 
+    if debug:
+        print('Starting Order Extraction')
+
     # Extract the B-star flux in the orders and the metadata
-    bstar_flux_in_orders, _, metadata = extract_orders(
+    bstar_flux_in_orders, metadata = extract_orders(
         ccd1_runs = [run],
         ccd2_runs = [run],
         ccd3_runs = [run],
         Bstar = True,
-        master_flat_images = master_flat_images
+        master_flat_images = master_flat_images,
+        debug_overscan = debug
     )
+
+    if debug:
+        print('Starting Telluric Flux Conversion')
 
     # Convert the B-star flux to telluric flux by normalising the B-star flux to unity
     telluric_flux_in_orders = convert_bstar_to_telluric(bstar_flux_in_orders, debug=debug)
@@ -492,12 +499,13 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
 
     # Extract Images from CCDs 1-3
     images = dict()
-    scaled_noise = dict()
+    images_noise = dict()
     
     # Read in, overscan subtract and append images to array
     for ccd in [1,2,3]:
         
         images['ccd_'+str(ccd)] = []
+        images_noise['ccd_'+str(ccd)] = []
         if ccd == 1: runs = ccd1_runs
         if ccd == 2: runs = ccd2_runs
         if ccd == 3: runs = ccd3_runs
@@ -531,8 +539,8 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
                     else:
                         print('  --> Warning: No DarkFrame > Science exposure time ('+str(exp_time_science)+'s) found. Using closest DarkFrame.')
 
-                    # Now find the smallest one of those
-                    best_matching_dark = exp_times_dark[np.argmin(exp_times_dark-exp_time_science)]
+                    # Now find the clostest one of those
+                    best_matching_dark = exp_times_dark[np.argmin(np.abs(exp_times_dark-exp_time_science))]
                     exp_times_ratio_science_to_dark = float(exp_time_science / best_matching_dark)
 
                     # Calculate an exposure time adjusted dark frame, which has no negative entries.
@@ -574,6 +582,14 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
             if (not Flat) & (master_flat_images is not None):
                 # Use the master flat for correction
                 trimmed_image /= master_flat_images['ccd_'+str(ccd)]
+
+                if Science:
+                    # Calculate noise:
+                    # sqrt( flux + read-out-noise^2), so flux variance = flux + read-out-noise^2
+                    # with read-out-noise = max(os_rms) / master_flat
+                    # Note: We assume the maximum RMS in the quadrants to be the relevant RMS
+                    trimmed_image_variance = trimmed_image + (np.ones(np.shape(trimmed_image)) * np.max([os_rms[quadrant] for quadrant in os_rms.keys()]) / master_flat_images['ccd_'+str(ccd)])**2
+                    images_noise['ccd_'+str(ccd)].append(trimmed_image_variance)
             elif (not Flat) & (ccd == 1):
                 print('     --> Warning: No flat-field correction applied')
 
@@ -592,9 +608,10 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
         #    plt.show()
         #    plt.close()
         
-        # For science: calculate median counts (we previously use the co-adding, but found the median to be more robust)
+        # For science: sum the flux and calculate the calculate median counts (we previously use the co-adding, but found the median to be more robust)
         if Science:
-            images['ccd_'+str(ccd)] = np.array(np.median(images['ccd_'+str(ccd)],axis=0),dtype=float)
+            images['ccd_'+str(ccd)] = np.array(np.sum(images['ccd_'+str(ccd)],axis=0),dtype=float)
+            images_noise['ccd_'+str(ccd)] = np.array(np.sqrt(np.sum(images_noise['ccd_'+str(ccd)],axis=0)),dtype=float)
         # For calibration: calculate median counts
         else: images['ccd_'+str(ccd)] = np.array(np.median(images['ccd_'+str(ccd)],axis=0),dtype=float)
 
@@ -634,7 +651,8 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
     order_ranges, order_beginning_coefficients, order_ending_coefficients = read_in_order_tramlines()
 
     counts_in_orders = []
-    noise_in_orders = []
+    if Science:
+        noise_in_orders = []
     
     # Create the debug_tramlines plot if we are debugging or fitting the tramlines
     if debug_tramlines | (update_tramlines_based_on_flat & Flat):
@@ -665,7 +683,8 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
 
         # Prepare to the flux from each tramlines in a row; give NaN values to regions without flux
         order_counts = np.zeros(np.shape(images['ccd_'+str(ccd)])[1]); order_counts[:] = np.nan
-        order_noise = np.zeros(np.shape(images['ccd_'+str(ccd)])[1]); order_noise[:] = np.nan
+        if Science:
+            order_noise = np.zeros(np.shape(images_noise['ccd_'+str(ccd)])[1]); order_noise[:] = np.nan
 
         order_xrange_begin = np.array(polynomial_function(np.arange(np.shape(images['ccd_'+str(ccd)])[0]),*order_beginning_coefficients[order])-1,dtype=int)
         order_xrange_end   = np.array(polynomial_function(np.arange(np.shape(images['ccd_'+str(ccd)])[0]),*order_ending_coefficients[order])+1,dtype=int)
@@ -696,26 +715,15 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
             # For each tramline, find the relevant pixels and then sum across the rows
             counts_in_tramline = np.sum(images['ccd_'+str(ccd)][x,order_xrange_begin[x_index]:order_xrange_end[x_index]], axis=0)
             order_counts[order_ranges[order][0] + x_index] = counts_in_tramline
-            
-            # If we are working with the Science or Bstar frame, also compute the noise:
-            if Science | Bstar: 
-                # We assume each pixel has the same initial read noise which we assume to be the maximum RMS of the overscan region
-                read_noise_per_pixel = np.max([os_rms[region] for region in os_rms.keys()])
 
-                # Because we upscale the flux, we also need to upscale the read noise
-                scaled_noise = read_noise_per_pixel / master_flat_images['ccd_'+str(ccd)]
-
+            # If we are working with the Science frame, also compute the noise:
+            if Science:
                 # For each tramline, find the relevant pixels and then sum across the rows
-                scaled_noise_in_tramline = np.sum(scaled_noise[x,order_xrange_begin[x_index]:order_xrange_end[x_index]], axis=0)
-
-                # For science: multiply read noise with nr of runs,
-                scaled_noise_in_tramline *= np.sqrt(len(runs))
-
-                # noise = sqrt(flux + total_read_noise**2)
-                order_noise[order_ranges[order][0] + x_index] = np.sqrt(counts_in_tramline + scaled_noise_in_tramline**2)
+                order_noise[order_ranges[order][0] + x_index] = np.sqrt(np.sum(images_noise['ccd_'+str(ccd)][x,order_xrange_begin[x_index]:order_xrange_end[x_index]]**2, axis=0))
 
         counts_in_orders.append(order_counts)
-        noise_in_orders.append(order_noise)
+        if Science:
+            noise_in_orders.append(order_noise)
 
     if debug_tramlines | (update_tramlines_based_on_flat & Flat):
         if Flat: type='_flat'
@@ -731,8 +739,10 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
         if 'ipykernel' in sys.modules: plt.show()
         plt.close()
         
-    if Science | Bstar:
+    if Science:
         return(np.array(counts_in_orders),np.array(noise_in_orders),metadata)
+    elif Bstar:
+        return(np.array(counts_in_orders), metadata)
     elif Flat:
         return(np.array(counts_in_orders), images)
     else:

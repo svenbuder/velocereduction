@@ -416,14 +416,17 @@ def identify_calibration_and_science_runs(date, raw_data_dir, each_science_run_s
                         calibration_runs['Darks'][exposure_time].append(run)
                     else:
                         calibration_runs['Darks'][exposure_time] = [run]
-                elif run_object in [
+                else:
+                    # Run Bstars both as calibration and science frames (the latter is important for flux calibration post-processing)
+                    if run_object in [
                     "10144","14228","37795","47670","50013","56139","89080","91465","93030","98718","105435","105937","106490","108248","108249","108483",
                     "109026","109668","110879","118716","120324","121263","121743","121790","122451","125238","127972","129116","132058","134481","136298",
                     "136504","138690","139365","142669","143018","143118","143275","144470","157246","158094","158427","158926","160578","165024","169022",
                     "175191","209952"
                     ]:
-                    calibration_runs['Bstar'][utc] = [run_object, run, utc]
-                else:
+                        calibration_runs['Bstar'][utc] = [run_object, run, utc]
+                        run_object = 'HD'+run_object
+
                     if each_science_run_separately:
                         science_runs[run_object+'_'+str(run)] = [run]
                     else:
@@ -653,8 +656,16 @@ def monitor_vrad_for_repeat_observations(date, repeated_observations):
             utmjd = np.array(utmjd)
             vrad = np.array(vrad)
             e_vrad = np.array(e_vrad)
-            
-            if len(vrad) > 1:
+
+            finite_vrad = np.where([vrad_value != 'None' for vrad_value in vrad])[0]
+
+            if len(finite_vrad) > 1:
+
+                # Limit to finite values
+                utmjd = utmjd[finite_vrad]
+                vrad = vrad[finite_vrad]
+                e_vrad = e_vrad[finite_vrad]
+
                 # Plot the RV measurements
                 f, ax = plt.subplots()
                 ax.errorbar(
@@ -760,6 +771,11 @@ def update_fits_header_via_crossmatch_with_simbad(fits_header):
     dec       = fits_header['MEANDEC']
 
     print('\n  --> Updating FITS header for '+object_id+' with RA and Dec: '+str(ra)+' and '+str(dec))
+
+    if object_id[-5] == '_':
+        print('\n  --> this seems to be the specific run '+object_id[-4:]+' of an object; adjusting OBJECT to reflect this')
+        fits_header['OBJECT'] = object_id[:-5]
+        object_id = object_id[:-5]
 
     # First, let's identify the likely way we want to query Simbad
     if object_id[:3] == 'HIP':
