@@ -574,7 +574,7 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
             if (not Flat) & (master_flat_images is not None):
                 # Use the master flat for correction
                 trimmed_image /= master_flat_images['ccd_'+str(ccd)]
-            elif ccd == 1:
+            elif (not Flat) & (ccd == 1):
                 print('     --> Warning: No flat-field correction applied')
 
             if use_this_image:
