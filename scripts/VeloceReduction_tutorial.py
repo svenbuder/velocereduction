@@ -139,16 +139,20 @@ master_thxe = VR.extraction.extract_orders(
 )
 
 # Extract Master LC
-print('\nExtracting Master LC')
-master_lc = VR.extraction.extract_orders(
-    ccd1_runs = calibration_runs['SimLC'],
-    ccd2_runs = calibration_runs['SimLC'],
-    ccd3_runs = calibration_runs['SimLC'],
-    LC = True,
-    master_flat_images = master_flat_images,
-    debug_tramlines = True # Would create a tramlines trace PDF under
-    # reduced_data/YYMMDD/debug/debug_tramlines_lc.pdf
-)
+if len(calibration_runs['SimLC']) > 0:
+    print('\nExtracting Master LC')
+    master_lc = VR.extraction.extract_orders(
+        ccd1_runs = calibration_runs['SimLC'],
+        ccd2_runs = calibration_runs['SimLC'],
+        ccd3_runs = calibration_runs['SimLC'],
+        LC = True,
+        master_flat_images = master_flat_images,
+        debug_tramlines = True # Would create a tramlines trace PDF under
+        # reduced_data/YYMMDD/debug/debug_tramlines_lc.pdf
+    )
+else:
+    print('\nNo SimLC observed for this night; Skipping Master LC calibration and setting all values 0.0')
+    master_lc = master_thxe; master_lc[:] = 0.0
 
 # Extract Darks
 master_darks = dict()
