@@ -85,7 +85,7 @@ def test_get_tellurics_from_bstar():
         'Bstar': {'18:57:01': ['127972', '0154', '18:57:01']}
     }
 
-    master_flat, _ = VR.extraction.extract_orders(
+    master_flat, master_flat_images = VR.extraction.extract_orders(
         ccd1_runs = calibration_runs['Flat_60.0'],
         ccd2_runs = calibration_runs['Flat_1.0'],
         ccd3_runs = calibration_runs['Flat_0.1'],
@@ -98,7 +98,7 @@ def test_get_tellurics_from_bstar():
 
     for bstar_exposure in calibration_runs['Bstar'].keys():
         telluric_flux, telluric_mjd = VR.extraction.get_tellurics_from_bstar(
-            calibration_runs['Bstar'][bstar_exposure], master_flat,
+            calibration_runs['Bstar'][bstar_exposure], master_flat_images,
             debug = True
         )
 
@@ -118,7 +118,7 @@ def test_extract_orders_Flat():
     }
 
     print('\n      --> Testing with update_tramlines_based_on_flat=True & debug_rows=True')
-    master_flat, _ = VR.extraction.extract_orders(
+    master_flat, master_flat_images = VR.extraction.extract_orders(
         ccd1_runs = calibration_runs['Flat_60.0'],
         ccd2_runs = calibration_runs['Flat_1.0'],
         ccd3_runs = calibration_runs['Flat_0.1'],
@@ -130,7 +130,7 @@ def test_extract_orders_Flat():
     )
 
     print('\n      --> Testing with debug_overscan=True')
-    master_flat, _ = VR.extraction.extract_orders(
+    master_flat, master_flat_images = VR.extraction.extract_orders(
         ccd1_runs = calibration_runs['Flat_60.0'],
         ccd2_runs = calibration_runs['Flat_1.0'],
         ccd3_runs = calibration_runs['Flat_0.1'],
@@ -142,7 +142,7 @@ def test_extract_orders_Flat():
     )
 
     print('\n     --> Testing with debug_rows=True')
-    master_flat, _ = VR.extraction.extract_orders(
+    master_flat, master_flat_images = VR.extraction.extract_orders(
         ccd1_runs = calibration_runs['Flat_60.0'],
         ccd2_runs = calibration_runs['Flat_1.0'],
         ccd3_runs = calibration_runs['Flat_0.1'],
@@ -154,7 +154,7 @@ def test_extract_orders_Flat():
     )
 
     print('\n     --> Testing with debug_tramlines=True')
-    master_flat, _ = VR.extraction.extract_orders(
+    master_flat, master_flat_images = VR.extraction.extract_orders(
         ccd1_runs = calibration_runs['Flat_60.0'],
         ccd2_runs = calibration_runs['Flat_1.0'],
         ccd3_runs = calibration_runs['Flat_0.1'],
@@ -180,7 +180,7 @@ def test_extract_orders_ThXe():
     }
 
     print('\n     --> Testing with debug_tramlines=True')
-    master_thxe, _ = VR.extraction.extract_orders(
+    master_thxe = VR.extraction.extract_orders(
         ccd1_runs = calibration_runs['FibTh_180.0'],
         ccd2_runs = calibration_runs['FibTh_60.0'],
         ccd3_runs = calibration_runs['FibTh_15.0'],
@@ -203,7 +203,7 @@ def test_extract_orders_LC():
     }
 
     print('\n     --> Testing with debug_tramlines=True')
-    master_lc, _ = VR.extraction.extract_orders(
+    master_lc = VR.extraction.extract_orders(
         ccd1_runs = calibration_runs['SimLC'],
         ccd2_runs = calibration_runs['SimLC'],
         ccd3_runs = calibration_runs['SimLC'],
@@ -263,7 +263,7 @@ def test_extract_orders_ValueErrors():
 
     print('     --> Testing ValueError with neither Flat nor LC nor Bstar nor Science nor ThXe')
     with pytest.raises(ValueError) as excinfo:
-        master_thxe, _ = VR.extraction.extract_orders(
+        master_thxe = VR.extraction.extract_orders(
             ccd1_runs = calibration_runs['FibTh_180.0'],
             ccd2_runs = calibration_runs['FibTh_60.0'],
             ccd3_runs = calibration_runs['FibTh_15.0']
@@ -272,7 +272,7 @@ def test_extract_orders_ValueErrors():
 
     print('     --> Testing ValueError with Flat=False and update_tramlines_based_on_flat, wrongly using ThXe=True.')
     with pytest.raises(ValueError) as excinfo:
-        master_thxe, _ = VR.extraction.extract_orders(
+        master_thxe = VR.extraction.extract_orders(
             ccd1_runs = calibration_runs['FibTh_180.0'],
             ccd2_runs = calibration_runs['FibTh_60.0'],
             ccd3_runs = calibration_runs['FibTh_15.0'],
