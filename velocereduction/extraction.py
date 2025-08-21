@@ -516,9 +516,10 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
                 exp_time_science = float(metadata['EXPTIME'])
 
                 # Let's check if the science exposure is actually long enough to necessitate dark subtraction
-                if (ccd == 1) & (exp_time_science < exposure_time_threshold_darks):
-                    print('  --> Science exposure time ('+str(exp_time_science)+' seconds) is less than threshold of '+str(exposure_time_threshold_darks)+' seconds to apply dark subtraction.')
-                    print('      Adjust kwarg exposure_time_threshold_darks to change this threshold.')
+                if (exp_time_science < exposure_time_threshold_darks):
+                    if ccd == 1:
+                        print('  --> Science exposure time ('+str(exp_time_science)+' seconds) is less than threshold of '+str(exposure_time_threshold_darks)+' seconds to apply dark subtraction.')
+                        print('      Adjust kwarg exposure_time_threshold_darks to change this threshold.')
                 
                 # If the science exposure is long enough, apply dark subtraction
                 else:
@@ -564,7 +565,7 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
                 elif ccd == 2:
                     expectation = 200
                 else:
-                    expectation = 1000
+                    expectation = 500
                 if nanmed < expectation:
                     print('  --> ThXe image '+str(run)+' for CCD '+str(ccd)+' has not enough signal ('+str(nanmed)+'<'+str(expectation)+'). Ignoring. Was CURE mirror maybe not folded in?')
                     use_this_image = False
