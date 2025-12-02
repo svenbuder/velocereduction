@@ -523,12 +523,19 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
 
                 exp_time_science = float(metadata['EXPTIME'])
 
+                shape_darkframe = np.shape(master_darks[list(master_darks.keys())[-1]]['ccd_'+str(ccd)])
+
                 # Let's check if the science exposure is actually long enough to necessitate dark subtraction
                 if (exp_time_science < exposure_time_threshold_darks):
                     if ccd == 1:
                         print('  --> Science exposure time ('+str(exp_time_science)+' seconds) is less than threshold of '+str(exposure_time_threshold_darks)+' seconds to apply dark subtraction.')
                         print('      Adjust kwarg exposure_time_threshold_darks to change this threshold.')
                 
+                # Ensure that the Darks and Science frames have the same shape (as we may use an archival DarkFrame)
+                elif shape_darkframe != np.shape(trimmed_image):
+                    print('Shapes of DarkFrame and Science do not match: ',shape_darkframe, np.shape(trimmed_image))
+                    print('Skipping DarkFrame subtraction.')
+
                 # If the science exposure is long enough, apply dark subtraction
                 else:
                     # Let's find the best matching dark frame (just above the exposure time) and apply it based on the exposure time ratio of science and said dark frame.
