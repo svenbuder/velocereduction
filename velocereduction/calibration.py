@@ -126,8 +126,123 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, ov
             except:
                 previous_calibration_coefficients = np.loadtxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_{order_name}_thxe.txt')
 
-        wavelength = polynomial_function(np.arange(4128)-2064,*previous_calibration_coefficients)*10
+        central_pixel = int(len(lc_pixel_values)/2)
+        centred_pixels = np.arange(len(lc_pixel_values))-int(len(lc_pixel_values)/2)
+        wavelength = polynomial_function(centred_pixels,*previous_calibration_coefficients)*10
 
+        # Let's figure out, where we expect LC peaks at this wavelength
+        lc_number_upper = np.floor(lasercomb_numbers_from_wavelength(wavelength[0]))
+        lc_number_lower = np.ceil(lasercomb_numbers_from_wavelength(wavelength[-1]))
+        lc_numbers = np.arange(lc_number_lower, lc_number_upper+1)
+        lc_wavelengths = lasercomb_wavelength_from_numbers(np.arange(lc_number_lower, lc_number_upper+1))[::-1]
+
+        # By inverting the previous wavelength solution, we can compute the expected LC pixel positions
+        lc_peak_pixel_expectations = np.interp(lc_wavelengths, wavelength, centred_pixels) + central_pixel
+
+        f, ax = plt.subplots(figsize=(20,3))
+        ax.plot(
+            lc_pixel_values, lw = 0.5
+        )
+        for lc_peak_pixel_expectation in lc_peak_pixel_expectations:
+            ax.axvline(lc_peak_pixel_expectation, ls = 'dashed', lw = 0.5, color = 'C3')
+
+        plt.show()
+        plt.close()
+
+        lc_pixel_arange = np.arange(len(lc_pixel_values))
+        
+        lc_fit_positions = []
+        lc_fit_wavelengths = []
+        lc_fit_fwhms = []
+
+        for lc_peak_index in range(len(lc_peak_pixel_expectations)):
+            lc_peak_wavelength = lc_wavelengths[lc_peak_index]
+            lc_peak_pixel = lc_peak_pixel_expectations[lc_peak_index]
+
+            lc_peak_fitting_window = 5 # pixels
+
+            lc_pixels_in_window = lc_pixel_arange[int(lc_peak_pixel-lc_peak_fitting_window):int(lc_peak_pixel+lc_peak_fitting_window)]
+            lc_pixel_values_in_window = lc_pixel_values[int(lc_peak_pixel-lc_peak_fitting_window):int(lc_peak_pixel+lc_peak_fitting_window)]
+
+            significant_peak_within_window = False
+            if len(lc_pixel_values_in_window) > 0:
+                highest_value = np.argmax(lc_pixel_values_in_window)
+                if lc_pixel_values_in_window[highest_value] > 10000:
+                    significant_peak_within_window = True
+                    detection = 'Yes'
+                    marker = 'x'
+                else:
+                    detection = 'No'
+                    marker = 'o'
+
+                if debug:
+                    plt.figure()
+                    plt.plot(
+                        lc_pixels_in_window,
+                        lc_pixel_values_in_window, label = 'LC measurement'
+                    )
+                    plt.axvline(lc_peak_pixel, label = 'Expected peak position')
+                    plt.scatter(lc_pixels_in_window[highest_value],lc_pixel_values_in_window[highest_value], marker = marker, label = detection)
+                    plt.title('LC peak '+str(int(lc_numbers[lc_peak_index]))+' at '+str(np.round(lc_peak_wavelength,3))+' Å')
+                    plt.legend()
+                    if 'ipykernel' in sys.modules: plt.show()
+                    plt.close()
+
+                try:
+                    popt, pcov = curve_fit(
+                        lc_peak_gauss,
+                        lc_pixels_in_window,
+                        lc_pixel_values_in_window,
+                        p0 = [lc_pixels_in_window[highest_value], 1, lc_pixel_values_in_window[highest_value], 0]
+                    )
+
+                    lc_fit_positions.append(popt[0])
+                    lc_fit_wavelengths.append(lc_peak_wavelength)
+                    lc_fit_fwhms.append(2*np.sqrt(2*np.log(2))*popt[1])
+                except:
+                    if debug: print('      --> Failed fit for finer peak '+str(peak)+' at position '+str(peak+lc_beginning)+'. Using rough peak.')
+            else:
+                if debug: print('LC peak '+str(int(lc_numbers[lc_peak_index]))+' at '+str(np.round(lc_peak_wavelength,3))+' Å not in window!')
+
+        lc_fit_positions = np.array(lc_fit_positions)
+        lc_fit_wavelengths = np.array(lc_fit_wavelengths)
+        lc_fit_fwhms = np.array(lc_fit_fwhms)
+
+        plt.plot(lc_fit_positions - central_pixel,lc_fit_wavelengths)
+        plt.show()
+        plt.close()
+
+        # fine_peaks = []
+        # for peak in peaks:
+
+        #     # Find the pixels that are +- 0.5*peak_distance away from the peak
+        #     pixels_around_peak = np.arange(
+        #         np.max([0,peak - int(np.ceil(peak_distance1/2))]),
+        #         np.min([len(lc_pixel_values[in_panel]),peak + int(np.ceil(peak_distance1/2))+1])
+        #     )
+        #     pixel_values_around_peak = lc_pixel_values[in_panel][pixels_around_peak]
+        #     pixel_minmax = list(np.nanpercentile(pixel_values_around_peak,q=[1,99]))
+
+        #     try:
+        #         popt, pcov = curve_fit(
+        #             lc_peak_gauss,
+        #             pixels_around_peak,
+        #             pixel_values_around_peak,
+        #             p0 = [peak, 1, pixel_minmax[1]-pixel_minmax[0], pixel_minmax[0]]
+        #         )
+
+        #         # Make sure the Gaussian is not too far off!
+        #         # Use initial peak integer otherwise
+        #         if abs(peak - popt[0] > 1):
+        #             fine_peaks.append(peak)
+        #         else:
+        #             fine_peaks.append(popt[0])
+        #     except:
+        #         if debug: print('      --> Failed fit for finer peak '+str(peak)+' at position '+str(peak+lc_beginning)+'. Using rough peak.')
+        #         fine_peaks.append(peak)
+        # fine_peaks = np.array(fine_peaks)
+
+        """
         # Identify the range for which we will fit the peaks
         lc_beginning, lc_ending = lc_range[order_name]
         # previous defaults have been: lc_beginning = 500, lc_ending = 3700
@@ -307,7 +422,7 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, ov
             use_peaks_and_modes = len(peaks)
 
         # Fit a polynomial function to pixel and wavelength data
-        lc_pixels_to_fit = lc_beginning + fine_peaks[:use_peaks_and_modes] - 2064
+        lc_pixels_to_fit = lc_beginning + fine_peaks[:use_peaks_and_modes] - central_pixel
         lc_wavelengths_to_fit = lc_wavelengths[:use_peaks_and_modes]
         coeffs_lc, _ = curve_fit(
             polynomial_function,
@@ -322,7 +437,7 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, ov
         rms_velocity = 299792.46 * np.std(wavelength_residuals/(lc_wavelengths_to_fit))
 
         if debug:
-            plt.figure(figsize=(15,5))
+            f, gs = plt.subplots(2,1,figsize=(15,7))
             plt.title(order_name,fontsize=15)
 
         # Calculate X-sigma RMS velocity outliers, clip them, and refit the wavelength solution
@@ -331,10 +446,16 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, ov
         if len(rms_velocity_x_sigma_outlier) > 0:
 
             if debug:
-                print('    --> Refitting wavelength solution after clipping '+str(len(rms_velocity_x_sigma_outlier))+' '+str(rms_sigma)+'-sigma RMS velocity outliers: ',np.round(lc_pixels_to_fit[rms_velocity_x_sigma_outlier]+2064))
-                plt.scatter(
-                    lc_pixels_to_fit[rms_velocity_x_sigma_outlier]+2064,
+                print('    --> Refitting wavelength solution after clipping '+str(len(rms_velocity_x_sigma_outlier))+' '+str(rms_sigma)+'-sigma RMS velocity outliers: ',np.round(lc_pixels_to_fit[rms_velocity_x_sigma_outlier]+central_pixel))
+                gs[0].scatter(
+                    lc_pixels_to_fit[rms_velocity_x_sigma_outlier]+central_pixel,
                     lc_wavelengths_to_fit[rms_velocity_x_sigma_outlier] - (polynomial_function(lc_pixels_to_fit[rms_velocity_x_sigma_outlier],*coeffs_lc)*10),
+                    s = 5, c = 'C3',
+                    label = str(len(rms_velocity_x_sigma_outlier))+' '+str(rms_sigma)+'-sigma RMS velocity outlier(s)'
+                )
+                gs[1].scatter(
+                    lc_pixels_to_fit[rms_velocity_x_sigma_outlier]+central_pixel,
+                    (lc_wavelengths_to_fit[rms_velocity_x_sigma_outlier] - (polynomial_function(lc_pixels_to_fit[rms_velocity_x_sigma_outlier],*coeffs_lc)*10))/lc_wavelengths_to_fit[rms_velocity_x_sigma_outlier] * 299792458.,
                     s = 5, c = 'C3',
                     label = str(len(rms_velocity_x_sigma_outlier))+' '+str(rms_sigma)+'-sigma RMS velocity outlier(s)'
                 )
@@ -348,7 +469,7 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, ov
             )
             wavelength_residuals = lc_wavelengths_to_fit - (polynomial_function(lc_pixels_to_fit,*coeffs_lc)*10) # Aangstroem
             rms_wavelength = np.std(wavelength_residuals)
-            rms_velocity = 299792.46 * np.std(wavelength_residuals/lc_wavelengths_to_fit)
+            rms_velocity = 299792458. * np.std(wavelength_residuals/lc_wavelengths_to_fit)
 
         if overwrite: np.savetxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_{order_name}_lc.txt',coeffs_lc)
 
@@ -360,46 +481,85 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, ov
         if debug:
 
             # LC Wavelength Solution
-            plt.scatter(
-                lc_pixels_to_fit+2064,
-                (lc_wavelengths_to_fit - (polynomial_function(lc_pixels_to_fit,*coeffs_lc))*10),
+            wavelength_residual_aangstroem = (lc_wavelengths_to_fit - (polynomial_function(lc_pixels_to_fit,*coeffs_lc))*10)
+            wavelength_residual_ms = wavelength_residual_aangstroem / lc_wavelengths_to_fit * 299792458. # speed of light in in m/s
+
+            gs[0].set_xlabel('Pixels')
+            gs[0].set_ylabel('Residual Å')
+            gs[0].scatter(
+                lc_pixels_to_fit+central_pixel,
+                wavelength_residual_aangstroem,
                 s = 1,
-                label = 'LC Peaks, RMS = '+str(np.round(rms_wavelength,4))+' Å or '+str(np.round(rms_velocity,3))+' km/s'
+                label = 'LC Peaks, RMS = '+str(np.round(rms_wavelength,4))+' Å or '+str(np.round(rms_velocity))+' m/s'
             )
-            plt.plot(
-                np.arange(4128),
-                np.zeros(4128),
+            gs[0].plot(
+                np.arange(len(lc_pixel_values)),
+                np.zeros(len(lc_pixel_values)),
+                label = 'LC Wavelength Solution'
+            )
+
+            gs[1].set_xlabel('Pixels')
+            gs[1].set_ylabel('Residual m/s')
+            gs[1].scatter(
+                lc_pixels_to_fit+central_pixel,
+                wavelength_residual_ms,
+                s = 1,
+                label = 'LC Peaks, RMS = '+str(np.round(rms_wavelength,4))+' Å or '+str(np.round(rms_velocity))+' m/s'
+            )
+            gs[1].plot(
+                np.arange(len(lc_pixel_values)),
+                np.zeros(len(lc_pixel_values)),
                 label = 'LC Wavelength Solution'
             )
 
             # Tinney Wavelength Solution
             coeffs_tinney = read_in_wavelength_solution_coefficients_tinney()
-            wavelength_tinney = polynomial_function(np.arange(4128)-2450-3,*coeffs_tinney[order_name][:-1])*10
+            wavelength_tinney = polynomial_function(np.arange(len(lc_pixel_values))-2450-3,*coeffs_tinney[order_name][:-1])*10
             if order_name[4] == '2': wavelength_tinney = wavelength_air_to_vac(wavelength_tinney)
 
-            plt.plot(
-                np.arange(4128),
+            gs[0].plot(
+                np.arange(len(lc_pixel_values)),
                 wavelength_tinney -
-                polynomial_function(np.arange(4128)-2064,*coeffs_lc)*10,
+                polynomial_function(np.arange(len(lc_pixel_values))-central_pixel,*coeffs_lc)*10,
                 label = 'Tinney Wavelength Solution'
             )
 
             # ThXe Wavelegnth Solution
             coeffs_thxe = np.loadtxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_{order_name}_thxe.txt')
-            plt.plot(
-                np.arange(4128),
-                polynomial_function(np.arange(4128)-2064,*coeffs_thxe)*10 - 
-                polynomial_function(np.arange(4128)-2064,*coeffs_lc)*10,
+            gs[0].plot(
+                np.arange(len(lc_pixel_values)),
+                polynomial_function(np.arange(len(lc_pixel_values))-central_pixel,*coeffs_thxe)*10 - 
+                polynomial_function(np.arange(len(lc_pixel_values))-central_pixel,*coeffs_lc)*10,
                 label = 'ThXe Wavelength Solution'
             )
 
-            if use_ylim: plt.ylim(-0.5,0.5)
-            plt.legend()
+            if use_ylim: gs[0].set_ylim(-0.5,0.5)
+            for ax in gs:
+                ax.legend()
             plt.tight_layout()
             if 'ipykernel' in sys.modules: plt.show()
             plt.close()
 
         return(coeffs_lc)
+        """
+    
+def add_wavelength_solution_to_fits_header(file, order, lc_thxe_or_korg, reference_pixel, wavelength_coefficients):
+    """
+    adds wavelength solution to FITS header of specific order/extension
+    
+    file (HDUList):                         An open FITS file object from astropy.io.fits, which should contain the spectral data.
+                                            The spectral data of each order should be accessible via indexing.
+    order (int):                            The index of the order within the FITS file to calibrate. This specifies which HDU in the
+                                            FITS file is being calibrated.
+    lc_thxe_or_korg (str):                  LC/ThXe/Korg to describe source of wavelength solution
+    reference_pixel:                        Central reference pixel CRPIX of wavelength solution
+    wavelength_coefficients (array):        Coefficients of polynomial wavelnegth solution
+    """
+
+    file[order].header['HIERARCH AIRVAC_'+lc_thxe_or_korg] = 'VAC'
+    file[order].header['HIERARCH WAVE_REFPIX_'+lc_thxe_or_korg] = reference_pixel
+    for coefficient_index, wavelength_coefficient in enumerate(wavelength_coefficients):
+        file[order].header['HIERARCH WAVE_COEFF_'+lc_thxe_or_korg+'_'+str(coefficient_index)] = wavelength_coefficient
 
 def calibrate_single_order(file, order, barycentric_velocity=None, optimise_lc_solution=True, debug=False):
     """
@@ -453,14 +613,26 @@ def calibrate_single_order(file, order, barycentric_velocity=None, optimise_lc_s
     # 1) Coefficients fitted with 18Sco (RV = 11.7640 +- 0.0004 km/s) and Korg synthesis
     # 2) Coefficients fitted with LC
     # 3) Coefficients fitted with ThXe
+    best_wavelength_solution = 'None'
+    try:
+        wavelength_solution_vacuum_coefficients = np.loadtxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_{order_name}_thxe.txt')
+        add_wavelength_solution_to_fits_header(file, order, 'ThXe', order_centre_pixel, wavelength_solution_vacuum_coefficients)
+        best_wavelength_solution = 'ThXe'
+    except:
+        pass
+    try:
+        wavelength_solution_vacuum_coefficients = np.loadtxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_{order_name}_lc.txt')
+        add_wavelength_solution_to_fits_header(file, order, 'LC', order_centre_pixel, wavelength_solution_vacuum_coefficients)
+        best_wavelength_solution = 'LC'
+    except:
+        pass
     try:
         wavelength_solution_vacuum_coefficients = np.loadtxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_{order_name}_korg.txt')
+        add_wavelength_solution_to_fits_header(file, order, 'Korg', order_centre_pixel, wavelength_solution_vacuum_coefficients)
+        best_wavelength_solution = 'Korg'
     except:
-        try:
-            wavelength_solution_vacuum_coefficients = np.loadtxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_{order_name}_lc.txt')
-        except:
-            wavelength_solution_vacuum_coefficients = np.loadtxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_{order_name}_thxe.txt')
-    
+        pass
+
     # Optimise the LC solution based on the refitted peaks of the laser comb, if enabled
     if optimise_lc_solution:
         if (
@@ -468,20 +640,29 @@ def calibrate_single_order(file, order, barycentric_velocity=None, optimise_lc_s
             # Let's use the last 2 digits to avoid warnings, because not all of CCD3 are > 100 (but all of CCD2).
             ((order_name[4] == '2') & (int(order_name[-2:]) >= 3) & (int(order_name[-2:]) <= 34))
         ):
-            wavelength_solution_vacuum_coefficients = optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values = file[order].data['LC'], debug=debug)
+            try:
+                wavelength_solution_vacuum_coefficients = optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values = file[order].data['LC'], debug=debug)
+                add_wavelength_solution_to_fits_header(file, order, 'LC', order_centre_pixel, wavelength_solution_vacuum_coefficients)
+                best_wavelength_solution = 'LC'
+            except:
+                pass
 
-    # Calculate vacuum wavelengths and convert them to air wavelengths
-    wavelength_solution_vacuum = polynomial_function(
-        np.arange(len(file[order].data['WAVE_VAC'])) - order_centre_pixel,
-        *wavelength_solution_vacuum_coefficients
-    ) * 10  # Convert from nm to Å
-    file[order].data['WAVE_VAC'] = wavelength_solution_vacuum
+    file[order].header['HIERARCH WAVE_SOURCE'] = best_wavelength_solution
 
-    if barycentric_velocity is not None: file[order].data['WAVE_VAC'] = apply_velocity_shift_to_wavelength_array(barycentric_velocity, file[order].data['WAVE_VAC'])
+    if best_wavelength_solution != 'None':
 
-    # Using conversion from Birch, K. P., & Downs, M. J. 1994, Metro, 31, 315
-    # Consistent to the 2024 version of Korg (https://github.com/ajwheeler/Korg.jl)
-    file[order].data['WAVE_AIR'] = wavelength_vac_to_air(file[order].data['WAVE_VAC'])
+        # Calculate vacuum wavelengths and convert them to air wavelengths
+        wavelength_solution_vacuum = polynomial_function(
+            np.arange(len(file[order].data['WAVE_VAC'])) - order_centre_pixel,
+            *wavelength_solution_vacuum_coefficients
+        ) * 10  # Convert from nm to Å
+        file[order].data['WAVE_VAC'] = wavelength_solution_vacuum
+
+        if barycentric_velocity is not None: file[order].data['WAVE_VAC'] = apply_velocity_shift_to_wavelength_array(barycentric_velocity, file[order].data['WAVE_VAC'])
+
+        # Using conversion from Birch, K. P., & Downs, M. J. 1994, Metro, 31, 315
+        # Consistent to the 2024 version of Korg (https://github.com/ajwheeler/Korg.jl)
+        file[order].data['WAVE_AIR'] = wavelength_vac_to_air(file[order].data['WAVE_VAC'])
 
 def plot_wavelength_calibrated_order_data(order, science_object, file, overview_pdf):
     """
