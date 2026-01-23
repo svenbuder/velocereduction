@@ -131,8 +131,8 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, ov
         wavelength = polynomial_function(centred_pixels,*previous_calibration_coefficients)*10
 
         # Let's figure out, where we expect LC peaks at this wavelength
-        lc_number_upper = np.floor(lasercomb_numbers_from_wavelength(wavelength[0]))
-        lc_number_lower = np.ceil(lasercomb_numbers_from_wavelength(wavelength[-1]))
+        lc_number_upper = np.floor(lasercomb_numbers_from_wavelength(wavelength[0])) - 35
+        lc_number_lower = np.ceil(lasercomb_numbers_from_wavelength(wavelength[-1])) + 15
         lc_numbers = np.arange(lc_number_lower, lc_number_upper+1)
         lc_wavelengths = lasercomb_wavelength_from_numbers(np.arange(lc_number_lower, lc_number_upper+1))[::-1]
 
@@ -151,9 +151,9 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, ov
 
         lc_pixel_arange = np.arange(len(lc_pixel_values))
         
-        lc_fit_positions = []
-        lc_fit_wavelengths = []
-        lc_fit_fwhms = []
+        lc_pixels_to_fit = []
+        lc_wavelengths_to_fit = []
+        lc_fwhms = []
 
         for lc_peak_index in range(len(lc_peak_pixel_expectations)):
             lc_peak_wavelength = lc_wavelengths[lc_peak_index]
@@ -175,18 +175,18 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, ov
                     detection = 'No'
                     marker = 'o'
 
-                if debug:
-                    plt.figure()
-                    plt.plot(
-                        lc_pixels_in_window,
-                        lc_pixel_values_in_window, label = 'LC measurement'
-                    )
-                    plt.axvline(lc_peak_pixel, label = 'Expected peak position')
-                    plt.scatter(lc_pixels_in_window[highest_value],lc_pixel_values_in_window[highest_value], marker = marker, label = detection)
-                    plt.title('LC peak '+str(int(lc_numbers[lc_peak_index]))+' at '+str(np.round(lc_peak_wavelength,3))+' Å')
-                    plt.legend()
-                    if 'ipykernel' in sys.modules: plt.show()
-                    plt.close()
+                # if debug:
+                #     plt.figure()
+                #     plt.plot(
+                #         lc_pixels_in_window,
+                #         lc_pixel_values_in_window, label = 'LC measurement'
+                #     )
+                #     plt.axvline(lc_peak_pixel, label = 'Expected peak position')
+                #     plt.scatter(lc_pixels_in_window[highest_value],lc_pixel_values_in_window[highest_value], marker = marker, label = detection)
+                #     plt.title('LC peak '+str(int(lc_numbers[lc_peak_index]))+' at '+str(np.round(lc_peak_wavelength,3))+' Å')
+                #     plt.legend()
+                #     if 'ipykernel' in sys.modules: plt.show()
+                #     plt.close()
 
                 try:
                     popt, pcov = curve_fit(
@@ -196,53 +196,24 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, ov
                         p0 = [lc_pixels_in_window[highest_value], 1, lc_pixel_values_in_window[highest_value], 0]
                     )
 
-                    lc_fit_positions.append(popt[0])
-                    lc_fit_wavelengths.append(lc_peak_wavelength)
-                    lc_fit_fwhms.append(2*np.sqrt(2*np.log(2))*popt[1])
+                    lc_pixels_to_fit.append(popt[0])
+                    lc_wavelengths_to_fit.append(lc_peak_wavelength)
+                    lc_fwhms.append(2*np.sqrt(2*np.log(2))*popt[1])
                 except:
-                    if debug: print('      --> Failed fit for finer peak '+str(peak)+' at position '+str(peak+lc_beginning)+'. Using rough peak.')
+                    if debug: print('      --> Failed fit for finer peak '+str(lc_peak_pixel)+' at position '+str(lc_peak_wavelength)+' Å.')
             else:
                 if debug: print('LC peak '+str(int(lc_numbers[lc_peak_index]))+' at '+str(np.round(lc_peak_wavelength,3))+' Å not in window!')
 
-        lc_fit_positions = np.array(lc_fit_positions)
-        lc_fit_wavelengths = np.array(lc_fit_wavelengths)
-        lc_fit_fwhms = np.array(lc_fit_fwhms)
-
-        plt.plot(lc_fit_positions - central_pixel,lc_fit_wavelengths)
-        plt.show()
-        plt.close()
-
-        # fine_peaks = []
-        # for peak in peaks:
-
-        #     # Find the pixels that are +- 0.5*peak_distance away from the peak
-        #     pixels_around_peak = np.arange(
-        #         np.max([0,peak - int(np.ceil(peak_distance1/2))]),
-        #         np.min([len(lc_pixel_values[in_panel]),peak + int(np.ceil(peak_distance1/2))+1])
-        #     )
-        #     pixel_values_around_peak = lc_pixel_values[in_panel][pixels_around_peak]
-        #     pixel_minmax = list(np.nanpercentile(pixel_values_around_peak,q=[1,99]))
-
-        #     try:
-        #         popt, pcov = curve_fit(
-        #             lc_peak_gauss,
-        #             pixels_around_peak,
-        #             pixel_values_around_peak,
-        #             p0 = [peak, 1, pixel_minmax[1]-pixel_minmax[0], pixel_minmax[0]]
-        #         )
-
-        #         # Make sure the Gaussian is not too far off!
-        #         # Use initial peak integer otherwise
-        #         if abs(peak - popt[0] > 1):
-        #             fine_peaks.append(peak)
-        #         else:
-        #             fine_peaks.append(popt[0])
-        #     except:
-        #         if debug: print('      --> Failed fit for finer peak '+str(peak)+' at position '+str(peak+lc_beginning)+'. Using rough peak.')
-        #         fine_peaks.append(peak)
-        # fine_peaks = np.array(fine_peaks)
+        lc_pixels_to_fit = np.array(lc_pixels_to_fit) - central_pixel
+        lc_wavelengths_to_fit = np.array(lc_wavelengths_to_fit)
+        lc_fwhms = np.array(lc_fwhms)
 
         """
+        # The following code has previously been used to find_peaks across an order
+        # and then fine-tune them with Gaussian fits.
+        # This was not as robust against missing peaks though!
+        # The version above should be more robust as it is using expected peaks
+
         # Identify the range for which we will fit the peaks
         lc_beginning, lc_ending = lc_range[order_name]
         # previous defaults have been: lc_beginning = 500, lc_ending = 3700
@@ -424,11 +395,13 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, ov
         # Fit a polynomial function to pixel and wavelength data
         lc_pixels_to_fit = lc_beginning + fine_peaks[:use_peaks_and_modes] - central_pixel
         lc_wavelengths_to_fit = lc_wavelengths[:use_peaks_and_modes]
+        """
+
         coeffs_lc, _ = curve_fit(
             polynomial_function,
             lc_pixels_to_fit,
             lc_wavelengths_to_fit/10.,
-            p0=[np.median(lc_wavelengths_to_fit), 0.05, 0.0, 0.0, 0.0, 0.0]
+            p0=[np.median(lc_wavelengths_to_fit/10.), 0.05, 0.0, 0.0, 0.0, 0.0]
         )
 
         # Calculate the RMS wavelength and velocity
@@ -541,7 +514,6 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, ov
             plt.close()
 
         return(coeffs_lc)
-        """
     
 def add_wavelength_solution_to_fits_header(file, order, lc_thxe_or_korg, reference_pixel, wavelength_coefficients):
     """
