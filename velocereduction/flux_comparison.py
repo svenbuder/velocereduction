@@ -4,6 +4,7 @@ import sys
 import numpy as np
 from numpy.polynomial.chebyshev import Chebyshev
 from astropy.table import Table
+from astropy.io import fits
 from scipy.optimize import minimize
 from scipy.ndimage import median_filter
 import matplotlib.pyplot as plt
@@ -290,7 +291,7 @@ def make_veloce_and_korg_spectrum_compatible(wavelength_coefficients,veloce_scie
             if 'ipykernel' in sys.modules: plt.show()
             plt.close()
 
-    return(veloce_flux_normalised_with_korg_flux, korg_flux_interpolated)
+    return(veloce_flux_normalised_with_korg_flux, korg_flux_interpolated, veloce_wavelength_vac_rv_shifted, veloce_wavelength_air_rv_shifted, telluric_flux_interpolated)
 
 def calculate_absolute_residual_sum_between_veloce_and_korg_spectrum(wavelength_coefficients, veloce_science_flux, barycentric_velocity, radial_velocity, korg_wavelength_vac, korg_flux, normalisation_buffers, telluric_line_wavelengths = None, telluric_line_fluxes = None, debug=False):
     """
@@ -316,7 +317,7 @@ def calculate_absolute_residual_sum_between_veloce_and_korg_spectrum(wavelength_
     """
     
     # Make Veloce and Korg fluxes compatible: normalised and interpolated onto the same wavelength array.
-    normalised_veloce_science_flux, korg_flux_interpolated = make_veloce_and_korg_spectrum_compatible(
+    normalised_veloce_science_flux, korg_flux_interpolated, veloce_wavelength_vac_rv_shifted, veloce_wavelength_air_rv_shifted, telluric_flux_interpolated = make_veloce_and_korg_spectrum_compatible(
         wavelength_coefficients,
         veloce_science_flux,
         radial_velocity,
@@ -399,7 +400,7 @@ def fit_wavelength_solution_with_korg_spectrum(order, veloce_fits_file, radial_v
         print('    --> Coefficients with minimum Sum(Abs(Residuals)):',[f"{number:.5e}" for number in wavelength_coefficients_minimum.x])
 
     # Once the fitting is finished, plot the Korg and Veloce spectra and how the latter was normalised
-    normalised_veloce_science_flux, korg_flux_interpolated = make_veloce_and_korg_spectrum_compatible(
+    normalised_veloce_science_flux, korg_flux_interpolated, veloce_wavelength_vac_rv_shifted, veloce_wavelength_air_rv_shifted, telluric_flux_interpolated = make_veloce_and_korg_spectrum_compatible(
         wavelength_coefficients_minimum.x,
         veloce_science_flux,
         radial_velocity,
@@ -411,6 +412,55 @@ def fit_wavelength_solution_with_korg_spectrum(order, veloce_fits_file, radial_v
         telluric_line_fluxes,
         debug=True
     )
+
+    # If a previous Korg calibration was done, we only need to overwrite the columns
+    if 'korg_rest_wave_vac' in veloce_fits_file[order].data.dtype.names:
+
+        veloce_fits_file[order].data['korg_rest_wave_vac'] = np.array(veloce_wavelength_vac_rv_shifted, dtype=np.float32)
+        veloce_fits_file[order].data['korg_rest_wave_air'] = np.array(veloce_wavelength_air_rv_shifted, dtype=np.float32)
+        veloce_fits_file[order].data['korg_rest_flux_observed'] = np.array(normalised_veloce_science_flux, dtype=np.float32)
+        veloce_fits_file[order].data['korg_rest_flux_model'] = np.array(korg_flux_interpolated, dtype=np.float32)
+        veloce_fits_file[order].data['korg_rest_flux_telluric'] = np.array(telluric_flux_interpolated, dtype=np.float32)
+        
+    # Otherwise we have to add the columns to the FITS extension
+    else:
+
+        extension = veloce_fits_file[order]
+        old_columns = extension.columns
+
+        # Create new FITS columns and add them to the existing extension
+        new_columns = fits.ColDefs([
+            fits.Column(
+                name="korg_rest_wave_vac",
+                format="E",
+                array = np.array(veloce_wavelength_vac_rv_shifted, dtype=np.float32)
+            ),
+            fits.Column(
+                name="korg_rest_wave_air",
+                format="E",
+                array = np.array(veloce_wavelength_air_rv_shifted, dtype=np.float32)
+            ),
+            fits.Column(
+                name="korg_rest_flux_observed",
+                format="E",
+                array = np.array(normalised_veloce_science_flux, dtype=np.float32)
+            ),
+            fits.Column(
+                name="korg_rest_flux_model",
+                format="E",
+                array = np.array(korg_flux_interpolated, dtype=np.float32)
+            ),
+            fits.Column(
+                name="korg_rest_flux_telluric",
+                format="E",
+                array = np.array(telluric_flux_interpolated, dtype=np.float32)
+            ),
+        ])
+
+        all_columns = old_columns + new_columns
+        new_extension = fits.BinTableHDU.from_columns(all_columns, header=extension.header)
+        veloce_fits_file[veloce_fits_file.index_of(order)] = new_extension
+        veloce_fits_file.flush()
 
 def calculate_wavelength_coefficients_with_korg_synthesis(veloce_fits_file, korg_wavelength_vac, korg_flux, vrad_for_calibration, order_selection=None, enforce_vrad=None, telluric_hinkle_or_bstar = 'hinkle', debug=False):
     """
