@@ -1,7 +1,22 @@
 import numpy as np
+from scipy.ndimage import shift
 import velocereduction as VR
 from pathlib import Path
 import pytest
+
+def test_phase_correlation_shift():
+    print('\n  --> Testing: phase_correlation_shift()')
+
+    # Create two mock images
+    reference_image = np.zeros((100, 100))
+    moving_image = np.zeros((100, 100))
+    reference_image[40:60, 40:60] = 1.0
+    moving_image[42:62, 38:58] = 1.0
+
+    dy, dx, error = VR.utils.phase_correlation_shift(reference_image, moving_image, upsample_factor = 100)
+    print(f"  --> Shift: ({dy}, {dx}) with error: {error}")
+
+    print('\n  --> DONE Testing: phase_correlation_shift()')
 
 def test_apply_velocity_shift_to_wavelength_array():
     print('\n  --> Testing: apply_velocity_shift_to_wavelength_array()')

@@ -7,7 +7,7 @@ from scipy.optimize import curve_fit
 from scipy.ndimage import median_filter
 
 from . import config
-from .utils import read_veloce_fits_image_and_metadata, match_month_to_date, polynomial_function, calculate_barycentric_velocity_correction
+from .utils import read_veloce_fits_image_and_metadata, match_month_to_date, polynomial_function, calculate_barycentric_velocity_correction, phase_correlation_shift
 
 def substract_overscan(full_image, metadata, debug_overscan = False):
     """
@@ -140,7 +140,7 @@ def substract_overscan(full_image, metadata, debug_overscan = False):
         quadrant1 -= overscan_median['q1']
 
         # Quadrant 2: 2088: and :2112
-        quadrant2 = np.array(full_image[32:-32,2112+32:],dtype=int)
+        quadrant2 = np.array(full_image[32:-32,2112+32:-32],dtype=int)
         overscan = np.zeros(np.shape(full_image),dtype=bool)
         overscan[:, 2112:][:overscan_size, :] = True  # Top edge
         overscan[:, 2112:][-overscan_size:, :] = True  # Bottom edge
@@ -164,6 +164,98 @@ def substract_overscan(full_image, metadata, debug_overscan = False):
     if debug_overscan: print('      -->',overscan_median, overscan_rms, metadata['READOUT'])
         
     return(trimmed_image, overscan_median, overscan_rms, metadata['READOUT'])
+
+def estimate_ccd_pixel_shifts_wrt_reference(calibration_runs):
+    """
+    Estimate pixel shifts in x and y directions with respect to reference frames (from 001122).
+    The following reference frames are used:
+    - CCD1: SimTh_180.0
+    - CCD2: SimTh_60.0  and SimLC
+    - CCD3: SimTh_15.0  and SimLC
+
+    Neglecting FibTh frames, because while SimTh and SimLC shifts were similar, FibTh differed.
+    """
+    pixel_shifts_wrt_reference = {}
+
+    for ccd in [1,2,3]:
+
+        pixel_shift_x = []
+        pixel_shift_y = []
+
+        if ccd == 1:
+            calibrations_to_compare = [
+                # ['FibTh_180.0','0047'],
+                ['SimTh_180.0','0003']
+            ]
+        elif ccd == 2:
+            calibrations_to_compare = [
+                # ['FibTh_60.0','0042'],
+                ['SimTh_60.0','0057'],
+                ['SimLC','0159']
+            ]
+        elif ccd == 3:
+            calibrations_to_compare = [
+                # ['FibTh_15.0','0037'],
+                ['SimTh_15.0','0062'],
+                ['SimLC','0159']
+            ]
+        
+        for calibration_type, reference_run in calibrations_to_compare:
+            if len(calibration_runs[calibration_type]) == 0:
+                print(f"No calibration runs found for {calibration_type} on CCD{ccd}. Skipping shift estimate for this type.")
+            else:
+                # a) Reference frame
+                full_image, metadata = read_veloce_fits_image_and_metadata(
+                    config.working_directory+
+                    'observations/001122/ccd_'+str(ccd)+'/22nov'+str(ccd)+reference_run+'.fits'
+                )
+                reference_image, _, _, _ = substract_overscan(full_image, metadata, debug_overscan=False)
+
+                # b) Median of frames of the night
+                images = []
+                for run in calibration_runs[calibration_type]:
+                    frame_path = config.working_directory+'observations/'+config.date+'/ccd_'+str(ccd)+'/'+config.date[-2:]+match_month_to_date(config.date)+str(ccd)+run+'.fits'
+                    image, metadata = read_veloce_fits_image_and_metadata(frame_path)
+                    trimmed_image, _, _, _ = substract_overscan(image, metadata, debug_overscan=False)
+                    images.append(trimmed_image)
+                median_image = np.median(np.array(images), axis=0)
+
+                # c) Estimate shifts
+                dx, dy, error = phase_correlation_shift(reference_image, median_image)
+                print(f"Shift CCD{ccd} (from {calibration_type}):", dx, dy, error)
+                pixel_shift_x.append(dx)
+                pixel_shift_y.append(dy)
+
+        if len(pixel_shift_x) > 0:
+            pixel_shift_x_mean = np.mean(np.array(pixel_shift_x))
+            if len(pixel_shift_x) > 1:
+                pixel_shift_x_std  = np.std(np.array(pixel_shift_x))
+                if pixel_shift_x_std > 0.5:
+                    print(f'  --> dX estimated to be {pixel_shift_x_mean} +/- {pixel_shift_x_std} pixels for CCD{ccd}. Large scatter!')
+            else:
+                pixel_shift_x_std = np.nan
+        else:
+            pixel_shift_x_mean = 0.0
+            pixel_shift_x_std = np.nan
+            print('  --> Could not estimate pixel shift in X for CCD{ccd}. Setting to 0.0')
+
+        if len(pixel_shift_y) > 0:
+            pixel_shift_y_mean = np.mean(np.array(pixel_shift_y))
+            if len(pixel_shift_y) > 1:
+                pixel_shift_y_std  = np.std(np.array(pixel_shift_y))
+                if pixel_shift_y_std > 0.5:
+                    print(f'  --> dY estimated to be {pixel_shift_y_mean} +/- {pixel_shift_y_std} pixels for CCD{ccd}. Large scatter!')
+            else:
+                pixel_shift_y_std = np.nan
+        else:
+            pixel_shift_y_mean = 0.0
+            pixel_shift_y_std = np.nan
+            print('  --> Could not estimate pixel shift in Y for CCD{ccd}. Setting to 0.0')
+        pixel_shifts_wrt_reference[ccd] = (np.round(pixel_shift_x_mean,2), np.round(pixel_shift_y_mean,2))
+
+        print(f'Shifts for CCD{ccd}: {pixel_shift_x_mean:+.2f} +/- {pixel_shift_x_std:.2f} and {pixel_shift_y_mean:+.2f} +/- {pixel_shift_y_std:.2f}')
+
+    return(pixel_shifts_wrt_reference)
 
 def read_in_order_tramlines_tinney():
     """

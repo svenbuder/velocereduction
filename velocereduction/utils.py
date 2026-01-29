@@ -16,6 +16,9 @@ from scipy.interpolate import interp1d
 from scipy.ndimage import gaussian_filter1d
 from scipy.optimize import curve_fit
 
+# scikit-image package
+from skimage.registration import phase_cross_correlation
+
 # Matplotlib package
 import matplotlib.pyplot as plt
 
@@ -44,6 +47,34 @@ simbad_magnitudes_query.add_votable_fields('B')
 simbad_magnitudes_query.add_votable_fields('V')
 simbad_magnitudes_query.add_votable_fields('G')
 simbad_magnitudes_query.add_votable_fields('R')
+
+def phase_correlation_shift(reference_image, moving_image, upsample_factor = 100):
+    """
+    Calculate the occured shift between two images.
+    Uses scikit-image package's skimage.registration.phase_cross_correlation.
+
+    Parameters:
+        reference_image:    reference array
+        moving_image:       second array with same shape as reference array
+        upsample_factor:    100 == 0.01 pixel scaling; factors of 10–200 typical; higher = slower, more precise
+
+    Returns:
+        dx:    Occured shift in x-direction
+        dy:    Occured shift in y-direction
+        error: Error of skimage.registration.phase_cross_correlation
+    """
+    # reference_image, moving_image: 2D numpy arrays of reference and new image
+    shift, error, phasediff = phase_cross_correlation(
+        reference_image,
+        moving_image,
+        upsample_factor=upsample_factor,
+        normalization="phase" # robust to intensity scaling
+    )
+    # shift == shift in y and x required to register moving image with reference_image
+    # Use negative to see how much images shifted from reference to moving one.
+    dy, dx = -shift
+
+    return(dx, dy, error)
 
 def apply_velocity_shift_to_wavelength_array(velocity_in_kms, wavelength_array):
     """
@@ -304,7 +335,7 @@ def read_veloce_fits_image_and_metadata(file_path):
 
     return(full_image, metadata)
 
-def identify_calibration_and_science_runs(date, raw_data_dir, each_science_run_separately = False):
+def identify_calibration_and_science_runs(date, raw_data_dir, each_science_run_separately = False, print_information = True):
     """
     Parses a log file in a specified directory to categorize and list calibration and science runs based on 
     the observation data. This function is tailored to handle the file structure and content specific to 
@@ -332,10 +363,10 @@ def identify_calibration_and_science_runs(date, raw_data_dir, each_science_run_s
 
     """
     
-    print('\n  =================================================')
-    print('  ||\n  ||  --> Identifying calibration and science runs now\n  ||')
+    if print_information: print('\n  =================================================')
+    if print_information: print('  ||\n  ||  --> Identifying calibration and science runs now\n  ||')
 
-    raw_file_path = raw_data_dir+'/'+date+'/'
+    raw_file_path = raw_data_dir+'/'+date
 
     log_file_path = glob.glob(raw_file_path+'*.log')
     
@@ -392,7 +423,7 @@ def identify_calibration_and_science_runs(date, raw_data_dir, each_science_run_s
             overscan = line[utc_colon-25+95:].split()[0]
             comments = line[utc_colon-25+100+len(overscan):]
             if len(comments) != 0:
-                if run_object != 'FlatField-Quartz':
+                if (run_object != 'FlatField-Quartz') & print_information:
                     print('  ||\n  ||  --> Warning for '+run_object+' (run '+run+'): '+comments)
 
             # Read in type of observation from CCD3 info (since Rosso should always be available)
@@ -437,23 +468,23 @@ def identify_calibration_and_science_runs(date, raw_data_dir, each_science_run_s
 
     # Print all DarkFrame exposures, if any
     dark_frames = [key for key in calibration_runs['Darks'].keys()]
-    if len(dark_frames) > 0:
-        print('  ||\n  || DarkFrame observations: '+', '.join(dark_frames))
+    if (len(dark_frames) > 0):
+        if print_information: print('  ||\n  || DarkFrame observations: '+', '.join(dark_frames))
     else:
-        print('  ||\n  || No DarkFrame observations identified.')
+        if print_information: print('  ||\n  || No DarkFrame observations identified.')
                         
     if len(calibration_runs['Bstar']) > 0:
-        print('  ||\n  || Bstar observations happened at: '+', '.join(calibration_runs['Bstar'].keys()))
+        if print_information: print('  ||\n  || Bstar observations happened at: '+', '.join(calibration_runs['Bstar'].keys()))
     else:
-        print('  ||\n  || No Bstar observations identified.')
+        if print_information: print('  ||\n  || No Bstar observations identified.')
 
-    print('  ||\n  || The following science observations were identified: '+', '.join(list(science_runs.keys())))
+    if print_information: print('  ||\n  || The following science observations were identified: '+', '.join(list(science_runs.keys())))
 
     if len(science_runs) > 0:
         directory_path = Path(config.working_directory+'reduced_data/'+config.date)
         directory_path.mkdir(parents=True, exist_ok=True)
-        print('  ||\n  || Will save reduced data into directory '+str(directory_path))
-        print('  ||\n  =================================================\n')
+        if print_information: print('  ||\n  || Will save reduced data into directory '+str(directory_path))
+        if print_information: print('  ||\n  =================================================\n')
 
     return(calibration_runs, science_runs)
 

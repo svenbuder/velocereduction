@@ -7,6 +7,7 @@ setup(
         "numpy",
         "astropy",
         "scipy",
+        "scikit-image",
         "matplotlib",
         "astroquery>=0.4.8",
         "pytest",

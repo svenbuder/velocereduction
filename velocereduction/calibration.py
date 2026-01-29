@@ -127,6 +127,17 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, ov
                 previous_calibration_coefficients = np.loadtxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_{order_name}_thxe.txt')
 
         central_pixel = int(len(lc_pixel_values)/2)
+
+        if central_pixel == 2064:
+            print('  --> Running for 4Amp case with 2064 pixels.')
+        elif central_pixel == 2048:
+            print('  --> Running for 2Amp case with 2048 pixels.')
+            if order_name[4] == '2':
+                print('  --> Moving central_pixel for LC peak expectation by +3 pixels to 2052 based on offset monitoring for 2Amp readouts of CCD2. This value is not yet validated or has a physical reasoning...')
+                central_pixel = 2051
+        else:
+            raise ValueError('Central_pixel should be 2064 or 2048!')
+
         centred_pixels = np.arange(len(lc_pixel_values))-int(len(lc_pixel_values)/2)
         wavelength = polynomial_function(centred_pixels,*previous_calibration_coefficients)*10
 
@@ -139,33 +150,32 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, ov
         # By inverting the previous wavelength solution, we can compute the expected LC pixel positions
         lc_peak_pixel_expectations = np.interp(lc_wavelengths, wavelength, centred_pixels) + central_pixel
 
-        f, ax = plt.subplots(figsize=(20,3))
-        ax.plot(
-            lc_pixel_values, lw = 0.5
-        )
-        for lc_peak_pixel_expectation in lc_peak_pixel_expectations:
-            ax.axvline(lc_peak_pixel_expectation, ls = 'dashed', lw = 0.5, color = 'C3')
-
-        plt.show()
-        plt.close()
-
         lc_pixel_arange = np.arange(len(lc_pixel_values))
         
         lc_pixels_to_fit = []
         lc_wavelengths_to_fit = []
         lc_fwhms = []
 
+        lc_fit_nr_expected = len(lc_wavelengths)
+        lc_fit_failed = 0
+        lc_fit_bad_quality = 0
+        lc_fit_outside_window = 0
+
+        lc_fit_peak_position = []
+        lc_fit_peak_offsets = []
+        lc_fit_peak_sigmas = []
+
         for lc_peak_index in range(len(lc_peak_pixel_expectations)):
             lc_peak_wavelength = lc_wavelengths[lc_peak_index]
             lc_peak_pixel = lc_peak_pixel_expectations[lc_peak_index]
 
-            lc_peak_fitting_window = 5 # pixels
+            lc_peak_fitting_window = 6 # pixels
 
             lc_pixels_in_window = lc_pixel_arange[int(lc_peak_pixel-lc_peak_fitting_window):int(lc_peak_pixel+lc_peak_fitting_window)]
             lc_pixel_values_in_window = lc_pixel_values[int(lc_peak_pixel-lc_peak_fitting_window):int(lc_peak_pixel+lc_peak_fitting_window)]
 
             significant_peak_within_window = False
-            if len(lc_pixel_values_in_window) > 0:
+            if len(lc_pixel_values_in_window) > 5:
                 highest_value = np.argmax(lc_pixel_values_in_window)
                 if lc_pixel_values_in_window[highest_value] > 10000:
                     significant_peak_within_window = True
@@ -176,33 +186,84 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, ov
                     marker = 'o'
 
                 # if debug:
-                #     plt.figure()
-                #     plt.plot(
+                #     f2, ax_new = plt.subplots()
+                #     ax_new.plot(
                 #         lc_pixels_in_window,
                 #         lc_pixel_values_in_window, label = 'LC measurement'
                 #     )
-                #     plt.axvline(lc_peak_pixel, label = 'Expected peak position')
-                #     plt.scatter(lc_pixels_in_window[highest_value],lc_pixel_values_in_window[highest_value], marker = marker, label = detection)
-                #     plt.title('LC peak '+str(int(lc_numbers[lc_peak_index]))+' at '+str(np.round(lc_peak_wavelength,3))+' Å')
-                #     plt.legend()
-                #     if 'ipykernel' in sys.modules: plt.show()
-                #     plt.close()
+                #     ax_new.axvline(lc_peak_pixel, label = 'Expected peak position')
+                #     ax_new.scatter(lc_pixels_in_window[highest_value],lc_pixel_values_in_window[highest_value], marker = marker, label = detection)
+                #     ax_new.set_title('LC peak '+str(int(lc_numbers[lc_peak_index]))+' at '+str(np.round(lc_peak_wavelength,3))+' Å')
 
                 try:
                     popt, pcov = curve_fit(
                         lc_peak_gauss,
                         lc_pixels_in_window,
                         lc_pixel_values_in_window,
-                        p0 = [lc_pixels_in_window[highest_value], 1, lc_pixel_values_in_window[highest_value], 0]
+                        p0 = [lc_peak_pixel, 1, np.nanmax(lc_pixel_values_in_window), 0],
+                        # bounds:
+                        # peak sigma must be between 0.35 and 2.0
+                        # peak amplitude must be at least 0.5 and up to 2e6
+                        # peak offset must be positive and should be less than 500
+                        bounds=([lc_peak_pixel-4,0.35,0.5,0],[lc_peak_pixel+4,2.0,2e6,500])
                     )
+                    # if debug:
+                    #     ax_new.plot(
+                    #         lc_pixels_in_window,
+                    #         lc_peak_gauss(lc_pixels_in_window,*popt)
+                    #     )
+                except:
+                    popt = [np.nan,np.nan,np.nan,np.nan]
 
+                # if debug:
+                #     ax_new.legend()
+                #     if 'ipykernel' in sys.modules: plt.show(f2)
+                #     plt.close(f2)
+
+                lc_fit_peak_position.append(lc_peak_pixel)
+                lc_fit_peak_offsets.append(lc_peak_pixel - popt[0])
+                lc_fit_peak_sigmas.append(popt[1])
+
+                # Quality control:
+                if (
+                    # peak position must be less than 3 pixels off from expected position
+                    (np.abs(lc_peak_pixel - popt[0]) < 4) &
+                    # peak sigma must be between 0.35 and 2.0
+                    ((popt[1] > 0.35) & (popt[1] < 2.0)) &
+                    # ratio of peak amplitude to offset must be at least 2
+                    ((popt[2] / popt[3] > 2))
+                ):
                     lc_pixels_to_fit.append(popt[0])
                     lc_wavelengths_to_fit.append(lc_peak_wavelength)
                     lc_fwhms.append(2*np.sqrt(2*np.log(2))*popt[1])
-                except:
-                    if debug: print('      --> Failed fit for finer peak '+str(lc_peak_pixel)+' at position '+str(lc_peak_wavelength)+' Å.')
+                else:
+                    lc_fit_bad_quality += 1
+                    # if debug: print('      --> Peak quality for '+str(lc_peak_pixel)+' at position '+str(lc_peak_wavelength)+' Å below criteria: '+str(np.round(np.abs(lc_peak_pixel - popt[0]),2))+' Pixel shift  / Sigma. '+str(np.round(popt[1],1))+' / Ampl. Ratio '+str(np.round(popt[2] / popt[3],1))+' = '+str(popt[2])+'/'+str(popt[3]))
+                # except:
+
+                    # lc_fit_failed += 1
+                    # # if debug: print('      --> Failed fit for finer peak '+str(lc_peak_pixel)+' at position '+str(lc_peak_wavelength)+' Å.')
             else:
-                if debug: print('LC peak '+str(int(lc_numbers[lc_peak_index]))+' at '+str(np.round(lc_peak_wavelength,3))+' Å not in window!')
+                lc_fit_outside_window += 1
+                # if debug: print('LC peak '+str(int(lc_numbers[lc_peak_index]))+' at '+str(np.round(lc_peak_wavelength,3))+' Å not in window!')
+
+        if debug:
+            f2, (ax_new1, ax_new2) = plt.subplots(2,1)
+            ax_new1.scatter(
+                lc_fit_peak_position,
+                lc_fit_peak_offsets
+            )
+            ax_new1.set_xlabel('Pixel')
+            ax_new1.set_ylabel('Offsets')
+            ax_new2.scatter(
+                lc_fit_peak_position,
+                lc_fit_peak_sigmas
+            )
+            ax_new2.set_xlabel('Pixel')
+            ax_new2.set_ylabel('Sigma')
+            if 'ipykernel' in sys.modules: plt.show(f2)
+            plt.close(f2)
+
 
         lc_pixels_to_fit = np.array(lc_pixels_to_fit) - central_pixel
         lc_wavelengths_to_fit = np.array(lc_wavelengths_to_fit)
@@ -401,7 +462,7 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, ov
             polynomial_function,
             lc_pixels_to_fit,
             lc_wavelengths_to_fit/10.,
-            p0=[np.median(lc_wavelengths_to_fit/10.), 0.05, 0.0, 0.0, 0.0, 0.0]
+            p0=previous_calibration_coefficients
         )
 
         # Calculate the RMS wavelength and velocity
@@ -410,39 +471,70 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, ov
         rms_velocity = 299792.46 * np.std(wavelength_residuals/(lc_wavelengths_to_fit))
 
         if debug:
-            f, gs = plt.subplots(2,1,figsize=(15,7))
-            plt.title(order_name,fontsize=15)
+            f, gs = plt.subplots(3,1,figsize=(15,7))
+            f.suptitle(order_name,fontsize=15)
+
+            gs[0].plot(
+                lc_pixel_values, lw = 0.5, label = 'LC Counts'
+            )
+            gs[0].set_ylabel('LC counts')
+            gs[0].set_ylim(0,2*np.nanpercentile(lc_pixel_values,q=90))
+            for lc_peak_pixel_expectation in lc_peak_pixel_expectations:
+                if lc_peak_pixel_expectation == lc_peak_pixel_expectations[0]:
+                    label = 'Peak expectation previous solution'
+                else:
+                    label = '_nolegend_'
+                gs[0].axvline(lc_peak_pixel_expectation, ls = 'dashed', lw = 0.5, color = 'C3', label = label)
 
         # Calculate X-sigma RMS velocity outliers, clip them, and refit the wavelength solution
-        rms_sigma = 3
-        rms_velocity_x_sigma_outlier = np.where(299792.46 * np.abs(wavelength_residuals/(lc_wavelengths_to_fit)) / rms_velocity > rms_sigma)[0]        
+        rms_sigma = 3 < 299792.46 * np.abs(wavelength_residuals/(lc_wavelengths_to_fit)) / rms_velocity
+        rms_500ms = 299792458.0 * np.abs(wavelength_residuals/(lc_wavelengths_to_fit)) > 500.0
+
+        rms_velocity_x_sigma_outlier = np.where(rms_sigma | rms_500ms)[0]
+
+        if len(rms_sigma) - len(rms_velocity_x_sigma_outlier) < 20:
+            if debug: print('   --> Too many outliers to delete them. Relaxing outliers to 2km/s!')
+            rms_2000ms = 299792458.0 * np.abs(wavelength_residuals/(lc_wavelengths_to_fit)) > 2000.0
+            rms_velocity_x_sigma_outlier = np.where(rms_sigma | rms_2000ms)[0]
+            if len(rms_sigma) - len(rms_velocity_x_sigma_outlier) < 20:
+                if debug: print('   --> Still too many outliers to delete them. Relaxing outliers to 3-sigma outliers only!')
+                rms_velocity_x_sigma_outlier = np.where(rms_sigma)[0]
+                if len(rms_sigma) - len(rms_velocity_x_sigma_outlier) < 20:
+                    if debug: print('   --> Still too many outliers to delete them. Using all data point!')
+                    rms_velocity_x_sigma_outlier = []
+            
+        if debug: print('   --> Peaks: Of '+str(lc_fit_nr_expected)+', '+str(lc_fit_outside_window)+' were outside window, '+str(lc_fit_failed)+' failed, '+str(lc_fit_bad_quality)+' bad quality, and '+str(len(rms_velocity_x_sigma_outlier))+' RMS outliers. Nr peaks for fit: '+str(len(lc_pixels_to_fit)))
+
         if len(rms_velocity_x_sigma_outlier) > 0:
 
-            if debug:
-                print('    --> Refitting wavelength solution after clipping '+str(len(rms_velocity_x_sigma_outlier))+' '+str(rms_sigma)+'-sigma RMS velocity outliers: ',np.round(lc_pixels_to_fit[rms_velocity_x_sigma_outlier]+central_pixel))
-                gs[0].scatter(
-                    lc_pixels_to_fit[rms_velocity_x_sigma_outlier]+central_pixel,
-                    lc_wavelengths_to_fit[rms_velocity_x_sigma_outlier] - (polynomial_function(lc_pixels_to_fit[rms_velocity_x_sigma_outlier],*coeffs_lc)*10),
-                    s = 5, c = 'C3',
-                    label = str(len(rms_velocity_x_sigma_outlier))+' '+str(rms_sigma)+'-sigma RMS velocity outlier(s)'
-                )
-                gs[1].scatter(
-                    lc_pixels_to_fit[rms_velocity_x_sigma_outlier]+central_pixel,
-                    (lc_wavelengths_to_fit[rms_velocity_x_sigma_outlier] - (polynomial_function(lc_pixels_to_fit[rms_velocity_x_sigma_outlier],*coeffs_lc)*10))/lc_wavelengths_to_fit[rms_velocity_x_sigma_outlier] * 299792458.,
-                    s = 5, c = 'C3',
-                    label = str(len(rms_velocity_x_sigma_outlier))+' '+str(rms_sigma)+'-sigma RMS velocity outlier(s)'
-                )
+            outlier_pixels = lc_pixels_to_fit[rms_velocity_x_sigma_outlier]+central_pixel
+            outlier_wavelengths = lc_wavelengths_to_fit[rms_velocity_x_sigma_outlier]
+
             lc_pixels_to_fit = np.delete(lc_pixels_to_fit, rms_velocity_x_sigma_outlier)
             lc_wavelengths_to_fit = np.delete(lc_wavelengths_to_fit, rms_velocity_x_sigma_outlier)
             coeffs_lc, _ = curve_fit(
                 polynomial_function,
                 lc_pixels_to_fit,
                 lc_wavelengths_to_fit/10.,
-                p0=[np.median(lc_wavelengths_to_fit), 0.05, 0.0, 0.0, 0.0, 0.0]
+                p0=coeffs_lc
             )
             wavelength_residuals = lc_wavelengths_to_fit - (polynomial_function(lc_pixels_to_fit,*coeffs_lc)*10) # Aangstroem
             rms_wavelength = np.std(wavelength_residuals)
             rms_velocity = 299792458. * np.std(wavelength_residuals/lc_wavelengths_to_fit)
+
+            if debug:
+                gs[1].scatter(
+                    outlier_pixels,
+                    np.zeros(len(outlier_pixels)),
+                    s = 5, c = 'C3',
+                    label = str(len(rms_velocity_x_sigma_outlier))+' RMS velocity outlier(s) 3sigma or 500m/s'
+                )
+                gs[2].scatter(
+                    outlier_pixels,
+                    np.zeros(len(outlier_pixels)),
+                    s = 5, c = 'C3',
+                    label = str(len(rms_velocity_x_sigma_outlier))+' RMS velocity outlier(s) 3sigma or 500m/s'
+                )
 
         if overwrite: np.savetxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_{order_name}_lc.txt',coeffs_lc)
 
@@ -453,33 +545,37 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, ov
         # Also inform the user about the wavelength and RV RMS.
         if debug:
 
+            print('   --> Fitted coefficients:',coeffs_lc)
+
             # LC Wavelength Solution
             wavelength_residual_aangstroem = (lc_wavelengths_to_fit - (polynomial_function(lc_pixels_to_fit,*coeffs_lc))*10)
             wavelength_residual_ms = wavelength_residual_aangstroem / lc_wavelengths_to_fit * 299792458. # speed of light in in m/s
 
-            gs[0].set_xlabel('Pixels')
-            gs[0].set_ylabel('Residual Å')
-            gs[0].scatter(
+            rms_wavelength = np.std(wavelength_residual_aangstroem)
+            rms_velocity = np.std(wavelength_residual_ms)
+
+            gs[1].set_ylabel('Residual Å')
+            gs[1].scatter(
                 lc_pixels_to_fit+central_pixel,
                 wavelength_residual_aangstroem,
                 s = 1,
                 label = 'LC Peaks, RMS = '+str(np.round(rms_wavelength,4))+' Å or '+str(np.round(rms_velocity))+' m/s'
             )
-            gs[0].plot(
+            gs[1].plot(
                 np.arange(len(lc_pixel_values)),
                 np.zeros(len(lc_pixel_values)),
                 label = 'LC Wavelength Solution'
             )
 
-            gs[1].set_xlabel('Pixels')
-            gs[1].set_ylabel('Residual m/s')
-            gs[1].scatter(
+            gs[2].set_xlabel('Pixels')
+            gs[2].set_ylabel('Residual m/s')
+            gs[2].scatter(
                 lc_pixels_to_fit+central_pixel,
                 wavelength_residual_ms,
                 s = 1,
                 label = 'LC Peaks, RMS = '+str(np.round(rms_wavelength,4))+' Å or '+str(np.round(rms_velocity))+' m/s'
             )
-            gs[1].plot(
+            gs[2].plot(
                 np.arange(len(lc_pixel_values)),
                 np.zeros(len(lc_pixel_values)),
                 label = 'LC Wavelength Solution'
@@ -490,16 +586,16 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, ov
             wavelength_tinney = polynomial_function(np.arange(len(lc_pixel_values))-2450-3,*coeffs_tinney[order_name][:-1])*10
             if order_name[4] == '2': wavelength_tinney = wavelength_air_to_vac(wavelength_tinney)
 
-            gs[0].plot(
-                np.arange(len(lc_pixel_values)),
-                wavelength_tinney -
-                polynomial_function(np.arange(len(lc_pixel_values))-central_pixel,*coeffs_lc)*10,
-                label = 'Tinney Wavelength Solution'
-            )
+            # gs[0].plot(
+            #     np.arange(len(lc_pixel_values)),
+            #     wavelength_tinney -
+            #     polynomial_function(np.arange(len(lc_pixel_values))-central_pixel,*coeffs_lc)*10,
+            #     label = 'Tinney Wavelength Solution'
+            # )
 
             # ThXe Wavelegnth Solution
             coeffs_thxe = np.loadtxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_{order_name}_thxe.txt')
-            gs[0].plot(
+            gs[1].plot(
                 np.arange(len(lc_pixel_values)),
                 polynomial_function(np.arange(len(lc_pixel_values))-central_pixel,*coeffs_thxe)*10 - 
                 polynomial_function(np.arange(len(lc_pixel_values))-central_pixel,*coeffs_lc)*10,
@@ -508,14 +604,14 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, ov
 
             if use_ylim: gs[0].set_ylim(-0.5,0.5)
             for ax in gs:
-                ax.legend()
+                ax.legend(ncol=5)
             plt.tight_layout()
             if 'ipykernel' in sys.modules: plt.show()
             plt.close()
 
-        return(coeffs_lc)
+        return(coeffs_lc, rms_wavelength, rms_velocity)
     
-def add_wavelength_solution_to_fits_header(file, order, lc_thxe_or_korg, reference_pixel, wavelength_coefficients):
+def add_wavelength_solution_to_fits_header(file, order, lc_thxe_or_korg, reference_pixel, wavelength_coefficients, rms_wavelength = None, rms_velocity = None):
     """
     adds wavelength solution to FITS header of specific order/extension
     
@@ -532,6 +628,10 @@ def add_wavelength_solution_to_fits_header(file, order, lc_thxe_or_korg, referen
     file[order].header['HIERARCH WAVE_REFPIX_'+lc_thxe_or_korg] = reference_pixel
     for coefficient_index, wavelength_coefficient in enumerate(wavelength_coefficients):
         file[order].header['HIERARCH WAVE_COEFF_'+lc_thxe_or_korg+'_'+str(coefficient_index)] = wavelength_coefficient
+    if rms_wavelength is not None:
+        file[order].header['HIERARCH WAVE_RMS_'+lc_thxe_or_korg+'_AA'] = rms_wavelength
+    if rms_wavelength is not None:
+        file[order].header['HIERARCH WAVE_RMS_'+lc_thxe_or_korg+'_MS'] = rms_velocity
 
 def calibrate_single_order(file, order, barycentric_velocity=None, optimise_lc_solution=True, debug=False):
     """
@@ -613,8 +713,8 @@ def calibrate_single_order(file, order, barycentric_velocity=None, optimise_lc_s
             ((order_name[4] == '2') & (int(order_name[-2:]) >= 3) & (int(order_name[-2:]) <= 34))
         ):
             try:
-                wavelength_solution_vacuum_coefficients = optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values = file[order].data['LC'], debug=debug)
-                add_wavelength_solution_to_fits_header(file, order, 'LC', order_centre_pixel, wavelength_solution_vacuum_coefficients)
+                wavelength_solution_vacuum_coefficients, lc_rms_wavelength, lc_rms_velocity = optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values = file[order].data['LC'], debug=debug)
+                add_wavelength_solution_to_fits_header(file, order, 'LC', order_centre_pixel, wavelength_solution_vacuum_coefficients, rms_wavelength = lc_rms_wavelength, rms_velocity = lc_rms_velocity)
                 best_wavelength_solution = 'LC'
             except:
                 pass
