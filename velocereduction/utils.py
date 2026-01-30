@@ -421,7 +421,7 @@ def identify_calibration_and_science_runs(date, raw_data_dir, each_science_run_s
             # read_noise = line[utc_colon-25+70:utc_colon-25+85].strip()
             # airmass = line[utc_colon-25+87:utc_colon-25+91].strip()
             overscan = line[utc_colon-25+95:].split()[0]
-            comments = line[utc_colon-25+100+len(overscan):]
+            comments = line[utc_colon-25+97+len(overscan):]
             if len(comments) != 0:
                 if (run_object != 'FlatField-Quartz') & print_information:
                     print('  ||\n  ||  --> Warning for '+run_object+' (run '+run+'): '+comments)
