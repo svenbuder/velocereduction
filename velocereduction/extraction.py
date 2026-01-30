@@ -139,7 +139,7 @@ def substract_overscan(full_image, metadata, debug_overscan = False):
         overscan_rms['q1'] = np.diff(np.percentile(overscan,q=[16,84]))/2
         quadrant1 -= overscan_median['q1']
 
-        # Quadrant 2: 2088: and :2112
+        # Quadrant 2: 2088:
         quadrant2 = np.array(full_image[32:-32,2112+32:-32],dtype=int)
         overscan = np.zeros(np.shape(full_image),dtype=bool)
         overscan[:, 2112:][:overscan_size, :] = True  # Top edge
@@ -184,20 +184,21 @@ def estimate_ccd_pixel_shifts_wrt_reference(calibration_runs):
 
         if ccd == 1:
             calibrations_to_compare = [
-                # ['FibTh_180.0','0047'],
-                ['SimTh_180.0','0003']
+                ['SimTh_180.0','0001'],
+                # ['FibTh_180.0','0004']
+                
             ]
         elif ccd == 2:
             calibrations_to_compare = [
-                # ['FibTh_60.0','0042'],
-                ['SimTh_60.0','0057'],
-                ['SimLC','0159']
+                ['SimTh_60.0','0002'],
+                # ['FibTh_60.0','0005'],
+                ['SimLC','0007']
             ]
         elif ccd == 3:
             calibrations_to_compare = [
-                # ['FibTh_15.0','0037'],
-                ['SimTh_15.0','0062'],
-                ['SimLC','0159']
+                ['SimTh_15.0','0003'],
+                # ['FibTh_15.0','0006'],
+                ['SimLC','0008']
             ]
         
         for calibration_type, reference_run in calibrations_to_compare:
