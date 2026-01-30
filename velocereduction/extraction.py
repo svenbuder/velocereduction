@@ -3,6 +3,7 @@ from pathlib import Path
 
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.colors import LogNorm
 from scipy.optimize import curve_fit
 from scipy.ndimage import median_filter
 
@@ -45,6 +46,9 @@ def substract_overscan(full_image, metadata, debug_overscan = False):
         plt.close()
 
     if metadata['READOUT'] == '4Amp':
+
+        # Initial dimensions: (4240, 4224)
+        # Trimmed dimensions: (4112, 4096)
 
         # We report the median overscan
         # And we calculate a robust standard deviation, i.e.,
@@ -124,6 +128,9 @@ def substract_overscan(full_image, metadata, debug_overscan = False):
 
     if metadata['READOUT'] == '2Amp':
 
+        # Initial dimensions: (4176, 4224)
+        # Trimmed dimensions: (4112, 4096)
+
         overscan_size = 32
 
         # Quadrant 1: :2088 and :
@@ -161,7 +168,7 @@ def substract_overscan(full_image, metadata, debug_overscan = False):
         if 'ipykernel' in sys.modules: plt.show()
         plt.close()
         
-    if debug_overscan: print('      -->',overscan_median, overscan_rms, metadata['READOUT'])
+    if debug_overscan: print('      -->',np.shape(trimmed_image),overscan_median, overscan_rms, metadata['READOUT'])
         
     return(trimmed_image, overscan_median, overscan_rms, metadata['READOUT'])
 
@@ -178,6 +185,7 @@ def estimate_ccd_pixel_shifts_wrt_reference(calibration_runs):
     pixel_shifts_wrt_reference = {}
 
     for ccd in [1,2,3]:
+        print('Estimating pixel shifts for CCD', ccd)
 
         pixel_shift_x = []
         pixel_shift_y = []
@@ -198,7 +206,7 @@ def estimate_ccd_pixel_shifts_wrt_reference(calibration_runs):
             calibrations_to_compare = [
                 ['SimTh_15.0','0003'],
                 # ['FibTh_15.0','0006'],
-                ['SimLC','0008']
+                ['SimLC','0007']
             ]
         
         for calibration_type, reference_run in calibrations_to_compare:
@@ -223,7 +231,7 @@ def estimate_ccd_pixel_shifts_wrt_reference(calibration_runs):
 
                 # c) Estimate shifts
                 dx, dy, error = phase_correlation_shift(reference_image, median_image)
-                print(f"Shift CCD{ccd} (from {calibration_type}):", dx, dy, error)
+                print(f"  --> Shift CCD{ccd} (from {calibration_type}):", dx, dy, error)
                 pixel_shift_x.append(dx)
                 pixel_shift_y.append(dy)
 
@@ -252,9 +260,10 @@ def estimate_ccd_pixel_shifts_wrt_reference(calibration_runs):
             pixel_shift_y_mean = 0.0
             pixel_shift_y_std = np.nan
             print('  --> Could not estimate pixel shift in Y for CCD{ccd}. Setting to 0.0')
-        pixel_shifts_wrt_reference[ccd] = (np.round(pixel_shift_x_mean,2), np.round(pixel_shift_y_mean,2))
+        pixel_shifts_wrt_reference['ccd_'+str(ccd)] = (np.round(pixel_shift_x_mean,2), np.round(pixel_shift_y_mean,2))
 
-        print(f'Shifts for CCD{ccd}: {pixel_shift_x_mean:+.2f} +/- {pixel_shift_x_std:.2f} and {pixel_shift_y_mean:+.2f} +/- {pixel_shift_y_std:.2f}')
+        print(f'  --> Recommended shift estimate for CCD{ccd}:')
+        print(f'      dX {pixel_shift_x_mean:+.2f} +/- {pixel_shift_x_std:.2f} and dY {pixel_shift_y_mean:+.2f} +/- {pixel_shift_y_std:.2f}')
 
     return(pixel_shifts_wrt_reference)
 
@@ -283,8 +292,8 @@ def read_in_order_tramlines_tinney():
             - order_tramline_endings: Dictionary with ending tramline positions.
     """
     order_ranges = dict()
-    order_beginning_coefficients = dict()
-    order_ending_coefficients = dict()
+    order_beginning_coeffs = dict()
+    order_ending_coeffs = dict()
 
     with open(Path(__file__).resolve().parent / 'veloce_reference_data' / 'azzurro-th-m138-167-all.txt') as fp:
         line = fp.readline()
@@ -295,9 +304,9 @@ def read_in_order_tramlines_tinney():
                 order = int(split_lines[0])
                 order_ranges['ccd_1_order_'+ str(order)] = np.arange(int(split_lines[1]),int(split_lines[2]))
             if cnt % 4 == 1:
-                order_beginning_coefficients['ccd_1_order_'+ str(order)] = [float(coeff) for coeff in line[10:-1].split(' ')]
-                order_beginning_coefficients['ccd_1_order_'+ str(order)][0] -= 45
-                order_ending_coefficients['ccd_1_order_'+ str(order)] = [float(coeff) for coeff in line[10:-1].split(' ')]
+                order_beginning_coeffs['ccd_1_order_'+ str(order)] = [float(coeff) for coeff in line[10:-1].split(' ')]
+                order_beginning_coeffs['ccd_1_order_'+ str(order)][0] -= 45
+                order_ending_coeffs['ccd_1_order_'+ str(order)] = [float(coeff) for coeff in line[10:-1].split(' ')]
             line = fp.readline()
             cnt += 1
 
@@ -310,9 +319,9 @@ def read_in_order_tramlines_tinney():
                 order = int(split_lines[0])
                 order_ranges['ccd_2_order_'+ str(order)] = np.arange(int(split_lines[1]), int(split_lines[2]))
             if cnt % 4 == 1:
-                order_beginning_coefficients['ccd_2_order_'+ str(order)] = [float(coeff) for coeff in line[10:-1].split(' ')]
-                order_beginning_coefficients['ccd_2_order_'+ str(order)][0] -= 45
-                order_ending_coefficients['ccd_2_order_'+ str(order)] = [float(coeff) for coeff in line[10:-1].split(' ')]
+                order_beginning_coeffs['ccd_2_order_'+ str(order)] = [float(coeff) for coeff in line[10:-1].split(' ')]
+                order_beginning_coeffs['ccd_2_order_'+ str(order)][0] -= 45
+                order_ending_coeffs['ccd_2_order_'+ str(order)] = [float(coeff) for coeff in line[10:-1].split(' ')]
             line = fp.readline()
             cnt += 1
 
@@ -325,9 +334,9 @@ def read_in_order_tramlines_tinney():
                 order = int(split_lines[0])
                 order_ranges['ccd_3_order_'+ str(order)] = np.arange(int(split_lines[1]), int(split_lines[2]))
             if cnt % 4 == 1:
-                order_beginning_coefficients['ccd_3_order_'+ str(order)] = [float(coeff) for coeff in line[10:-1].split(' ')]
-                order_beginning_coefficients['ccd_3_order_'+ str(order)][0] -= 45
-                order_ending_coefficients['ccd_3_order_'+ str(order)] = [float(coeff) for coeff in line[10:-1].split(' ')]
+                order_beginning_coeffs['ccd_3_order_'+ str(order)] = [float(coeff) for coeff in line[10:-1].split(' ')]
+                order_beginning_coeffs['ccd_3_order_'+ str(order)][0] -= 45
+                order_ending_coeffs['ccd_3_order_'+ str(order)] = [float(coeff) for coeff in line[10:-1].split(' ')]
             line = fp.readline()
             cnt += 1
 
@@ -335,11 +344,11 @@ def read_in_order_tramlines_tinney():
     # with open('./VeloceReduction/veloce_reference_data/verde-lc-m104-135-all.txt') as fp:
     # with open('./VeloceReduction/veloce_reference_data/rosso-lc-m65-104-all.txt') as fp:
     # For now, we simply assume that the laser comb position is just slightly offset from the order_ending
-    # (so that we can simply use the order_ending_coefficients).
+    # (so that we can simply use the order_ending_coeffs).
 
     order_ranges_sorted = dict()
-    order_beginning_coefficients_sorted = dict()
-    order_ending_coefficients_sorted = dict()
+    order_beginning_coeffs_sorted = dict()
+    order_ending_coeffs_sorted = dict()
 
     for ccd in ['1','2','3']:
         if ccd == '1': orders = np.arange(167, 138-1, -1)
@@ -348,10 +357,10 @@ def read_in_order_tramlines_tinney():
 
         for order in orders:
             order_ranges_sorted['ccd_'+ccd+'_order_'+str(order)] = order_ranges['ccd_'+ccd+'_order_'+str(order)]
-            order_beginning_coefficients_sorted['ccd_'+ccd+'_order_'+str(order)] = order_beginning_coefficients['ccd_'+ccd+'_order_'+str(order)]
-            order_ending_coefficients_sorted['ccd_'+ccd+'_order_'+str(order)] = order_ending_coefficients['ccd_'+ccd+'_order_'+str(order)]
+            order_beginning_coeffs_sorted['ccd_'+ccd+'_order_'+str(order)] = order_beginning_coeffs['ccd_'+ccd+'_order_'+str(order)]
+            order_ending_coeffs_sorted['ccd_'+ccd+'_order_'+str(order)] = order_ending_coeffs['ccd_'+ccd+'_order_'+str(order)]
 
-    return(order_ranges_sorted, order_beginning_coefficients_sorted, order_ending_coefficients_sorted)
+    return(order_ranges_sorted, order_beginning_coeffs_sorted, order_ending_coeffs_sorted)
 
 def read_in_order_tramlines(use_default = False):
     """
@@ -380,7 +389,7 @@ def read_in_order_tramlines(use_default = False):
     './VeloceReduction/tramline_information/tramlines_begin_end_ccd_{ccd}_order_{order}.txt'
 
     The function constructs three dictionaries:
-        - order_tramline_ranges: Maps 'ccd_{ccd}_{order}' to a range of pixel indices (0 to 4111).
+        - order_tramline_ranges: Maps 'ccd_{ccd}_{order}' to a range of pixel indices (0 to 4096-1).
         - order_tramline_beginning_coefficients: Coefficients for 5th order polynomial for starting pixel positions for tramlines.
         - order_tramline_ending_coefficients: Coefficients for 5th order polynomial for ending pixel positions for tramlines.
     """
@@ -395,7 +404,7 @@ def read_in_order_tramlines(use_default = False):
         if ccd == '3': orders = np.arange(104,  65-1, -1)
 
         for order in orders:
-            order_tramline_ranges['ccd_'+ccd+'_order_'+str(order)] = np.arange(4112)
+            order_tramline_ranges['ccd_'+ccd+'_order_'+str(order)] = np.arange(4096)
 
             if use_default:
                 tramline_information = np.loadtxt(Path(__file__).resolve().parent / 'tramline_information' / f'tramlines_begin_end_ccd_{ccd}_order_{order}.txt')
@@ -428,10 +437,10 @@ def get_master_dark(runs, archival=False):
     for ccd in [1,2,3]:
         images['ccd_'+str(ccd)] = []
 
-        # If we use acrhival dark frames, we use frames 0224-0226 from date 001122.
+        # If we use acrhival dark frames, we use the master dark frame for 1800s from reference date 001122.
         if not archival: date = config.date
         else:
-            runs = ['0224']
+            runs = ['0011']
             date = '001122'
 
         for run in runs:
@@ -538,7 +547,7 @@ def get_tellurics_from_bstar(bstar_information, master_flat_images, debug=False)
     return(telluric_flux_in_orders, metadata['UTMJD'])
     
 
-def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlines_based_on_flat = False, LC = False, Bstar = False, Science = False, ThXe = False, master_darks = None, master_flat_images = None, exposure_time_threshold_darks = 300, use_tinney_ranges = False, debug_tramlines = False, debug_rows = False, debug_overscan=False):
+def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlines_based_on_flat = False, LC = False, Bstar = False, Science = False, ThXe = False, master_darks = None, master_flat_images = None, pixel_shifts = None, exposure_time_threshold_darks = 300, use_tinney_ranges = False, debug_tramlines = False, debug_rows = False, debug_overscan=False):
     """
     Extracts spectroscopic orders from CCD images for various types of Veloce CCD images
     using predefined tramline ranges and providing detailed debug information.
@@ -555,6 +564,7 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
         ThXe (bool): Set to True to extract orders for ThXe calibration images.
         master_darks (dict): A dictionary containing master dark images for the three CCDs.
         master_flat_images (dict): A dictionary containing master flat images for the three CCDs.
+        pixel_shifts (dict): A dictionary containing pixel shifts for the three CCDs.
         exposure_time_threshold_darks (int, float): The threshold exposure time for applying master darks to science images in seconds. Default is 300 (seconds, i.e. 5 minutes).
         use_tinney_ranges (bool): Set to True to use tramline ranges specified by Chris Tinney.
         debug_tramlines (bool): Set to True to display debug plots for tramline extraction.
@@ -585,10 +595,21 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
     # Raise warning if we use Science exposures but do not provide master darks.
     if (Science) & (master_darks is None): print('     --> Warning: Note using any dark subtraction.')
 
-    order_ranges, order_beginning_coefficients, order_ending_coefficients = read_in_order_tramlines()
+    # Identify the rough (too wide) tramline ranges for each order as reported by default fit or C.Tinney (with slight adjustments).
+    try:
+        order_ranges, order_beginning_coeffs, order_ending_coeffs = read_in_order_tramlines(use_default=True)
+    except:
+        order_ranges, order_beginning_coeffs, order_ending_coeffs = read_in_order_tramlines_tinney()
 
-    # Extract initial order ranges and coefficients
-    if use_tinney_ranges: order_ranges, order_beginning_coefficients, order_ending_coefficients = read_in_order_tramlines_tinney()    
+    # Apply pixel shifts to tramline coefficients if significant enough
+    for ccd in [1,2,3]:
+        if np.abs(pixel_shifts['ccd_'+str(ccd)][0]) > 0.1:
+            if Flat:
+                print(f'  --> Applying pixel shift dX={pixel_shifts["ccd_"+str(ccd)][0]:+.2f} for tramline positions for CCD'+str(ccd))
+            for order in list(order_beginning_coeffs):
+                if order.startswith('ccd_'+str(ccd)+'_'):
+                    order_beginning_coeffs[order][0] += pixel_shifts['ccd_'+str(ccd)][0]
+                    order_ending_coeffs[order][0]    += pixel_shifts['ccd_'+str(ccd)][0]
 
     # Extract Images from CCDs 1-3
     images = dict()
@@ -723,20 +744,15 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
             # Ensure that Flat pixels with negative value or 0.0 exactly are reset to 1.0
             images['ccd_'+str(ccd)][np.where(images['ccd_'+str(ccd)] <= 0.0)] = 1.0
 
-            # Identify the rough (too wide) tramline ranges for each order as reported by default fit or C.Tinney (with slight adjustments).
-            try:
-                order_ranges, order_beginning_coeffs, order_ending_coeffs = read_in_order_tramlines(use_default=True)
-            except:
-                order_ranges, order_beginning_coeffs, order_ending_coeffs = read_in_order_tramlines_tinney()
-
             # Update tramlines if this was requested
             if update_tramlines_based_on_flat:
                 if ccd == 1:
                     print('  --> Optimising tramlines based on Flat images (saving at reduced_data/YYMMDD/_tramline_information/).')
                     print('      Check reduced_data/YYMMDD/_debug/debug_tramlines_flat.pdf for results.')
-                for order in list(order_beginning_coefficients):
+                for order in list(order_beginning_coeffs):
+
                     if order[4] == str(ccd):
-                        optimise_tramline_polynomial(
+                        order_beginning_fit, order_ending_fit = optimise_tramline_polynomial(
                             overscan_subtracted_images = images['ccd_'+str(ccd)], 
                             order = order,
                             readout_mode = readout_mode,
@@ -747,8 +763,8 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
                             debug = debug_rows
                         )
 
-    # Read in the overwritten tramline information for the night
-    order_ranges, order_beginning_coefficients, order_ending_coefficients = read_in_order_tramlines()
+                        order_beginning_coeffs[order] = order_beginning_fit
+                        order_ending_coeffs[order] = order_ending_fit
 
     counts_in_orders = []
     if Science:
@@ -756,6 +772,8 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
     
     # Create the debug_tramlines plot if we are debugging or fitting the tramlines
     if debug_tramlines | (update_tramlines_based_on_flat & Flat):
+
+        # Create a figure that shows the tramlines on each CCD
         f, gs = plt.subplots(1,3,figsize=(15,4))
         for panel_index in [0,1,2]:
 
@@ -777,8 +795,63 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
             gs[panel_index].set_ylabel('Y Pixel')
             gs[panel_index].set_xlim(0,np.shape(images['ccd_'+str(panel_index+1)])[1])
             gs[panel_index].set_ylim(np.shape(images['ccd_'+str(panel_index+1)])[0],0)
+
+        # Create zoomed figures for each tramline
+        for order in order_beginning_coeffs.keys():
+
+            ccd = order[4]
+
+            f_order, ax_order = plt.subplots(figsize=(8,5))
+
+            order_xrange_begin  = np.array(polynomial_function(np.arange(np.shape(images['ccd_'+str(ccd)])[0]),*order_beginning_coeffs[order])-1)
+            order_xrange_end    = np.array(polynomial_function(np.arange(np.shape(images['ccd_'+str(ccd)])[0]),*order_ending_coeffs[order])+1)
+            
+            # Limit to width around center for visualisation with height of *width_around_center* pixels and populate a 2D array for imshow
+            width_around_center = 70
+            order_xrange_center = np.array((order_xrange_begin + order_xrange_end) / 2,dtype=int)
+            debug_order_range_begin = (order_xrange_center - width_around_center // 2).clip(min=0,max=4096)
+            debug_order_range_end   = (order_xrange_center + width_around_center // 2).clip(min=0,max=4096)
+            flat_region_to_show = np.zeros((len(order_xrange_center), width_around_center)); flat_region_to_show[:] = np.nan
+            for x_index, x in enumerate(order_ranges[order]):
+
+                row = images['ccd_'+str(ccd)][x,debug_order_range_begin[x_index]:debug_order_range_end[x_index]]
+                # If the row is shorter than width_around_center, pad with NaNs
+                if len(row) < width_around_center:
+                    if debug_order_range_begin[x_index] == 0:
+                        row = np.concatenate((row, np.full((width_around_center - len(row)), np.nan)))
+                    else:
+                        row = np.concatenate((np.full((width_around_center - len(row)), np.nan), row))
+                flat_region_to_show[x_index,:] = row
+
+            s = ax_order.imshow(flat_region_to_show, norm=LogNorm(vmin=np.max([0.0001,np.nanpercentile(flat_region_to_show,50)]), vmax=np.nanpercentile(flat_region_to_show,95)), cmap='Reds_r', aspect='auto', extent=[-width_around_center//2, width_around_center//2, len(order_xrange_center), 0])
+            ax_order.set_xlim(-width_around_center//2, width_around_center//2)
+
+            # if order in ['ccd_3_order_93','ccd_3_order_81']:
+            #     ax_order.set_xticks([])
+            #     ax_order.set_yticks([])
+            #     plt.axis('off')
+            #     plt.tight_layout()
+            #     Path(config.working_directory+'reduced_data/'+config.date+'/_debug').mkdir(parents=True, exist_ok=True)
+            #     plt.savefig(config.working_directory+'reduced_data/'+config.date+f'/_debug/debug_tramlines_{order}.pdf',bbox_inches='tight',dpi=600)
+            #     plt.savefig(config.working_directory+'reduced_data/'+config.date+f'/_debug/debug_tramlines_{order}.png',bbox_inches='tight',dpi=600)
+            # else:
+            ax_order.plot(np.floor(order_xrange_begin - order_xrange_center), np.arange(len(order_xrange_begin)), c='C0', lw=0.1)
+            ax_order.plot(np.ceil(order_xrange_end - order_xrange_center), np.arange(len(order_xrange_end)), c='C0', lw=0.1)
+            
+            cbar = plt.colorbar(s, ax=ax_order, extend='both')
+
+            ax_order.set_title(f'CCD {ccd} Order {order[9:]} Tramline Extraction')
+            ax_order.set_xlabel('Relative X Pixel (w.r.t. center of tramline)')
+            ax_order.set_ylabel('Y Pixel')
+            plt.tight_layout()
+
+
+            # Path(config.working_directory+'reduced_data/'+config.date+'/_tramline_information').mkdir(parents=True, exist_ok=True)
+            # plt.savefig(config.working_directory+'reduced_data/'+config.date+f'/_tramline_information/debug_tramline_ccd_{ccd}_order_{order[9:]}.pdf',bbox_inches='tight')
+            if 'ipykernel' in sys.modules: plt.show()
+            plt.close()
     
-    for order in order_beginning_coefficients.keys():
+    for order in order_beginning_coeffs.keys():
         ccd = order[4]
 
         # Prepare to the flux from each tramlines in a row; give NaN values to regions without flux
@@ -786,16 +859,16 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
         if Science:
             order_noise = np.zeros(np.shape(images_noise['ccd_'+str(ccd)])[1]); order_noise[:] = np.nan
 
-        order_xrange_begin = np.array(polynomial_function(np.arange(np.shape(images['ccd_'+str(ccd)])[0]),*order_beginning_coefficients[order])-1,dtype=int)
-        order_xrange_end   = np.array(polynomial_function(np.arange(np.shape(images['ccd_'+str(ccd)])[0]),*order_ending_coefficients[order])+1,dtype=int)
+        order_xrange_begin = np.array(polynomial_function(np.arange(np.shape(images['ccd_'+str(ccd)])[0]),*order_beginning_coeffs[order])-1,dtype=int)
+        order_xrange_end   = np.array(polynomial_function(np.arange(np.shape(images['ccd_'+str(ccd)])[0]),*order_ending_coeffs[order])+1,dtype=int)
 
         # If we are using the LC, use the region 11+-6 pixels to the right of the end of the main tramline
         if LC:
-            order_xrange_begin = np.array(polynomial_function(np.arange(np.shape(images['ccd_'+str(ccd)])[0]),*order_ending_coefficients[order])+5,dtype=int)
-            order_xrange_end   = np.array(polynomial_function(np.arange(np.shape(images['ccd_'+str(ccd)])[0]),*order_ending_coefficients[order])+17,dtype=int)
+            order_xrange_begin = np.array(polynomial_function(np.arange(np.shape(images['ccd_'+str(ccd)])[0]),*order_ending_coeffs[order])+5,dtype=int)
+            order_xrange_end   = np.array(polynomial_function(np.arange(np.shape(images['ccd_'+str(ccd)])[0]),*order_ending_coeffs[order])+17,dtype=int)
 
         if debug_tramlines | (update_tramlines_based_on_flat & Flat):
-            if order == list(order_beginning_coefficients.keys())[0]:
+            if order == list(order_beginning_coeffs.keys())[0]:
                 label_left = 'Tramline left edges'
                 label_right = 'Tramline right edges'
             else:
@@ -804,13 +877,8 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
             gs[int(ccd)-1].plot(order_xrange_begin,np.arange(len(order_xrange_begin)),c='C0',lw=0.1,label=label_left)
             gs[int(ccd)-1].plot(order_xrange_end,np.arange(len(order_xrange_begin)),c='C1',lw=0.1,label=label_right)
         
-        # Because of the extended overscan region in 4Amplifier readout mode, we have to adjust which region we are using the extract the orders from.
-        if readout_mode == '2Amp': order_ranges_adjusted_for_readout_mode = order_ranges[order]
-        elif readout_mode == '4Amp': order_ranges_adjusted_for_readout_mode = order_ranges[order][16:-16]
-        else: raise ValueError('Cannot handle readout_mode other than 2Amp or 4Amp')
-
-        # Let's loop over the tramlines
-        for x_index, x in enumerate(order_ranges_adjusted_for_readout_mode):
+        # Let's loop over the x-pixels (aka rows) of the tramlines
+        for x_index, x in enumerate(order_ranges[order]):
 
             # For each tramline, find the relevant pixels and then sum across the rows
             counts_in_tramline = np.sum(images['ccd_'+str(ccd)][x,order_xrange_begin[x_index]:order_xrange_end[x_index]], axis=0)
@@ -1119,14 +1187,7 @@ def optimise_tramline_polynomial(overscan_subtracted_images, order, order_ranges
     buffer['ccd_3_order_103'] = [710,150]
     buffer['ccd_3_order_104'] = [1600,150]
 
-    # Because of the extended overscan region in 4Amplifier readout mode, we have to adjust which region we are using the extract the orders from.
-    if readout_mode == '2Amp': order_ranges_adjusted_for_readout_mode = order_ranges[order]
-    elif readout_mode == '4Amp': order_ranges_adjusted_for_readout_mode = order_ranges[order][16:-16]
-    else: raise ValueError('Cannot handle readout_mode other than 2Amp or 4Amp')
-
-    order_ranges_adjusted_for_readout_mode = np.arange(image_dimensions[0])
-
-    for x_index, x in enumerate(order_ranges_adjusted_for_readout_mode):
+    for x_index, x in enumerate(order_ranges[order]):
 
         # The uppermost and lowermost ~100 pixels typically do no get a lot of exposure
         # For robustness, let's neglect these pixels

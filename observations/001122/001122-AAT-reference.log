@@ -8,7 +8,7 @@ Summary: This nightlog includes the entries for the reference night (001122), cr
 =======================================================================================================================
 Run   Object           Midtime       Exp    SN/pix   See  Simul     OSrms_Q1-4        Ph     OS_Q1-4          Comments
 =======================================================================================================================
-0001  3 SimThLong        08:13:30 m  180.0     0    0          ThXe   3.2,3.2,3.2,3.1  1.00      1015,1015,1011,1011 N/A
+0001  3 SimThLong        08:13:30 m  180.0     0    0          ThXe   3.2,3.2,3.2,3.1  1.00      1015,1015,1011,1011 N/A to limit storage
 0001  2 SimThLong        08:13:30 m  180.0     1    5          ThXe   2.6,2.6,2.6,2.6  1.00      992,992,996,997 N/A to limit storage
 0001  1 SimThLong        08:13:30 m  180.0     0    0          ThXe   2.6,2.6,2.6,2.6  1.00      995,995,995,996 Median of 10 runs from 240219.
 0002  3 SimThLong        08:37:14 m   60.0     0    0          ThXe   3.2,3.2,3.1,3.1  1.00      1014,1014,1011,1011 N/A to limit storage
