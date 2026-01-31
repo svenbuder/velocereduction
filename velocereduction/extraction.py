@@ -601,27 +601,30 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
     except:
         order_ranges, order_beginning_coeffs, order_ending_coeffs = read_in_order_tramlines_tinney()
 
+    if pixel_shifts is None:
+        pixel_shifts = dict()
+        for ccd in [1,2,3]:
+            pixel_shifts['ccd_'+str(ccd)] = (0.0,0.0)
+
     # Apply significant pixel shifts to tramline x-constant and expected y-position
     pixels_for_tramline_extraction = dict()
     for ccd in [1,2,3]:
         pixels_for_tramline_extraction['ccd_'+str(ccd)] = np.arange(4096,dtype=float)
 
-        # Apply pixel shifts if provided
-        if (pixel_shifts is not None):
-            # X-position
-            if np.abs(pixel_shifts['ccd_'+str(ccd)][0]) > 0.1:
-                if Flat:
-                    print(f'  --> Applying pixel shift dX={pixel_shifts["ccd_"+str(ccd)][0]:+.2f} for tramline positions for CCD'+str(ccd)+' (and will do so for all extractions!)')
-                for order in list(order_beginning_coeffs):
-                    if order[4] == str(ccd):
-                        order_beginning_coeffs[order][0] += pixel_shifts['ccd_'+str(ccd)][0]
-                        order_ending_coeffs[order][0]    += pixel_shifts['ccd_'+str(ccd)][0]
+        # X-position
+        if np.abs(pixel_shifts['ccd_'+str(ccd)][0]) > 0.1:
+            if Flat:
+                print(f'  --> Applying pixel shift dX={pixel_shifts["ccd_"+str(ccd)][0]:+.2f} for tramline positions for CCD'+str(ccd)+' (and will do so for all extractions!)')
+            for order in list(order_beginning_coeffs):
+                if order[4] == str(ccd):
+                    order_beginning_coeffs[order][0] += pixel_shifts['ccd_'+str(ccd)][0]
+                    order_ending_coeffs[order][0]    += pixel_shifts['ccd_'+str(ccd)][0]
 
-            # Y-position
-            if np.abs(pixel_shifts['ccd_'+str(ccd)][1]) > 0.1:
-                if Flat:
-                    print(f'  --> Applying pixel shift dY={pixel_shifts["ccd_"+str(ccd)][1]:+.2f} for tramline positions for CCD'+str(ccd)+' (and will do so for all extractions!)')
-                pixels_for_tramline_extraction['ccd_'+str(ccd)] += pixel_shifts['ccd_'+str(ccd)][1]
+        # Y-position
+        if np.abs(pixel_shifts['ccd_'+str(ccd)][1]) > 0.1:
+            if Flat:
+                print(f'  --> Applying pixel shift dY={pixel_shifts["ccd_"+str(ccd)][1]:+.2f} for tramline positions for CCD'+str(ccd)+' (and will do so for all extractions!)')
+            pixels_for_tramline_extraction['ccd_'+str(ccd)] += pixel_shifts['ccd_'+str(ccd)][1]
 
     # Extract Images from CCDs 1-3
     images = dict()
@@ -642,9 +645,9 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
 
         for run in runs:
 
-            # There is not LC flux in CCD1, so we create mock ones with zero flux.
+            # There is not LC flux in CCD1, so we create mock ones with unit flux.
             if LC & (ccd == 1):
-                trimmed_image = np.zeros((4112,4096),dtype=float)
+                trimmed_image = np.ones((4112,4096),dtype=float)
                 os_median = {'q1':0,'q2':0}
                 os_rms = {'q1':0,'q2':0}
                 readout_mode = 'None'
@@ -719,7 +722,7 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
                     print('  --> ThXe image '+str(run)+' for CCD '+str(ccd)+' has not enough signal in 99th percentile ('+str(nanmed)+'<'+str(expectation)+'). Ignoring. Was CURE mirror maybe not folded in?')
                     use_this_image = False
 
-            # If we should have a master flat
+            # Apply flat-field correction
             if (not Flat) & (master_flat_images is not None):
 
                 F = master_flat_images['ccd_'+str(ccd)]
@@ -733,19 +736,11 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
                     rn = np.max([os_rms[q] for q in os_rms.keys()])
                     V_S = S + rn**2
 
+                    # Flat-field correct the variance
                     images_noise['ccd_'+str(ccd)].append(V_S / (F**2))
 
+                # Flat-field correct the image
                 trimmed_image = S / F
-
-
-                if Science:
-                    trimmed_image_variance = trimmed_image + (np.ones(np.shape(trimmed_image)) * np.max([os_rms[quadrant] for quadrant in os_rms.keys()]))**2
-
-                    # Add the flat-field variance to "image_noise" (we will later take the sqrt of the sum of variances to get the actual noise).
-                    images_noise['ccd_'+str(ccd)].append(trimmed_image_variance / (master_flat_images['ccd_'+str(ccd)]**2))
-
-                # Use the master flat for correction
-                trimmed_image /= master_flat_images['ccd_'+str(ccd)]
 
             elif (not Flat) & (ccd == 1):
                 print('     --> Warning: No flat-field correction applied')
@@ -809,28 +804,40 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
     # Create the debug_tramlines plot if we are debugging or fitting the tramlines
     if debug_tramlines | (update_tramlines_based_on_flat & Flat):
 
+        if Flat: type='_flat'
+        elif Science: type='_'+metadata['OBJECT']
+        elif LC: type='_lc'
+        elif ThXe: type='_thxe'
+        else: raise ValueError('Unknown type of observation.')
+
         # Create a figure that shows the tramlines on each CCD
         f_flat_tramlines, gs = plt.subplots(1,3,figsize=(15,4))
         for panel_index in [0,1,2]:
 
-            if Science | ThXe:
-                s = gs[panel_index].imshow(np.log10(images['ccd_'+str(panel_index+1)]), vmin=0.1, vmax=np.nanpercentile(np.log10(images['ccd_'+str(panel_index+1)]),95), cmap='Greys')
-                cbar_label = r'$\log_{10}(\mathrm{Counts})$'
-            else:
-                if Flat: vmin = 0; vmax = 0.1
-                elif LC: vmin = 1; vmax = 10
-                else: vmin = 1; vmax = 50
-                s = gs[panel_index].imshow(images['ccd_'+str(panel_index+1)], vmin=vmin, vmax=vmax, cmap='Greys')
-                if Flat: cbar_label = r'Normalised Counts'
-                else: cbar_label = r'Counts'
+            vmin = np.nanpercentile(images['ccd_'+str(panel_index+1)], 50).clip(min=0.01)
+            # Make LC exposures more prominent
+            if LC:
+                vmin = np.nanpercentile(images['ccd_'+str(panel_index+1)], 90).clip(min=0.01)
+            if Science:
+                vmin = np.nanpercentile(images['ccd_'+str(panel_index+1)], 16).clip(min=0.01)
+            if np.isnan(vmin):
+                vmin = 0.01
+
+            vmax = np.nanpercentile(images['ccd_'+str(panel_index+1)], 95).clip(min=1.0)
+            if np.isnan(vmax):
+                vmax = 1.0
+
+            s = gs[panel_index].imshow(images['ccd_'+str(panel_index+1)],cmap='Oranges_r', norm = LogNorm(vmin=vmin, vmax=vmax))
+            cbar_label = r'Log10(Counts)'
 
             gs[panel_index].set_title('CCD '+str(panel_index+1))
-            cbar = plt.colorbar(s, ax=gs[panel_index-1],extend='both')
+            cbar = plt.colorbar(s, ax=gs[panel_index-1], extend='both')
             cbar.set_label(cbar_label)
             gs[panel_index].set_xlabel('X Pixel')
             gs[panel_index].set_ylabel('Y Pixel')
             gs[panel_index].set_xlim(0,np.shape(images['ccd_'+str(panel_index+1)])[1])
             gs[panel_index].set_ylim(np.shape(images['ccd_'+str(panel_index+1)])[0],0)
+            f_flat_tramlines.tight_layout()
 
         # Create zoomed figures for each tramline
         for order in order_beginning_coeffs.keys():
@@ -851,12 +858,12 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
                     width_around_center = 30
 
                     # Default offsets for LC region
-                    offset_begin = 1
-                    offset_end = 5
+                    offset_begin = 9 + pixel_shifts['ccd_'+str(ccd)][0]
+                    offset_end = 14 + pixel_shifts['ccd_'+str(ccd)][0]
                     # Adjust offsets for CCD3
                     if ccd == '3':
-                        offset_begin = 10
-                        offset_end = 14
+                        offset_begin = 8 + pixel_shifts['ccd_'+str(ccd)][0]
+                        offset_end = 12 + pixel_shifts['ccd_'+str(ccd)][0]
                     order_xrange_begin = np.array(polynomial_function(pixels_for_tramline_extraction['ccd_'+str(ccd)],*order_ending_coeffs[order])+offset_begin)
                     order_xrange_end   = np.array(polynomial_function(pixels_for_tramline_extraction['ccd_'+str(ccd)],*order_ending_coeffs[order])+offset_end)
                 
@@ -887,10 +894,10 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
                 ax_order.set_title(f'CCD {ccd} Order {order[9:]} Tramline Extraction')
                 ax_order.set_xlabel('Relative X Pixel (w.r.t. center of tramline)')
                 ax_order.set_ylabel('Y Pixel')
-                plt.tight_layout()
+                f_order.tight_layout()
 
                 Path(config.working_directory+'reduced_data/'+config.date+'/_tramline_information').mkdir(parents=True, exist_ok=True)
-                f_order.savefig(config.working_directory+'reduced_data/'+config.date+f'/_tramline_information/tramline_{order}.pdf',bbox_inches='tight')
+                f_order.savefig(config.working_directory+'reduced_data/'+config.date+f'/_tramline_information/tramline{type}_{order}.pdf',bbox_inches='tight')
                 if 'ipykernel' in sys.modules: plt.show(f_order)
                 plt.close(f_order)
     
@@ -914,12 +921,12 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
         # The SimLC position is slightly different for CCD2 and CCD3.
         if LC:
             # Default offsets for LC region
-            offset_begin = 1
-            offset_end = 5
+            offset_begin = 9 + pixel_shifts['ccd_'+str(ccd)][0]
+            offset_end = 14 + pixel_shifts['ccd_'+str(ccd)][0]
             # Adjust offsets for CCD3
             if ccd == '3':
-                offset_begin = 10
-                offset_end = 14
+                offset_begin = 8 + pixel_shifts['ccd_'+str(ccd)][0]
+                offset_end = 12 + pixel_shifts['ccd_'+str(ccd)][0]
             order_xrange_begin = np.array(polynomial_function(pixels_for_tramline_extraction['ccd_'+str(ccd)],*order_ending_coeffs[order])+offset_begin,dtype=int)
             order_xrange_end   = np.array(polynomial_function(pixels_for_tramline_extraction['ccd_'+str(ccd)],*order_ending_coeffs[order])+offset_end,dtype=int)
 
@@ -949,18 +956,11 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
         if Science:
             noise_in_orders.append(order_noise)
 
-    if debug_tramlines | (update_tramlines_based_on_flat & Flat):
-        if Flat: type='_flat'
-        elif Science: type='_'+metadata['OBJECT']
-        elif LC: type='_lc'
-        elif ThXe: type='_thxe'
-        else: raise ValueError('Unknown type of observation.')
-        
-        plt.tight_layout()
-
+    if debug_tramlines | (update_tramlines_based_on_flat & Flat):        
+        f_flat_tramlines.tight_layout()
         Path(config.working_directory+'reduced_data/'+config.date+'/_debug').mkdir(parents=True, exist_ok=True)
         f_flat_tramlines.savefig(config.working_directory+'reduced_data/'+config.date+f'/_debug/debug_tramlines{type}.pdf',bbox_inches='tight')
-        if 'ipykernel' in sys.modules: plt.show(f_flat_tramlines)
+        plt.show()
         plt.close(f_flat_tramlines)
         
     if Science:
