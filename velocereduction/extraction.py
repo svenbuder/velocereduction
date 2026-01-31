@@ -921,7 +921,7 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
         # The SimLC position is slightly different for CCD2 and CCD3.
         if LC:
             # Default offsets for LC region
-            offset_begin = 9 + pixel_shifts['ccd_'+str(ccd)][0]
+            offset_begin = 10 + pixel_shifts['ccd_'+str(ccd)][0]
             offset_end = 14 + pixel_shifts['ccd_'+str(ccd)][0]
             # Adjust offsets for CCD3
             if ccd == '3':
