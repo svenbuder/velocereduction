@@ -15,7 +15,7 @@ from . import config
 
 from .utils import polynomial_function, calculate_barycentric_velocity_correction, apply_velocity_shift_to_wavelength_array, fit_voigt_absorption_profile, radial_velocity_from_line_shift, voigt_absorption_profile, wavelength_vac_to_air, wavelength_air_to_vac, lc_peak_gauss, lasercomb_numbers_from_wavelength, lasercomb_wavelength_from_numbers, read_in_wavelength_solution_coefficients_tinney
 
-def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, overwrite=False, debug=False, use_ylim=False):
+def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, overwrite=False, plot_peak_fits = False, rejection = 'auto', debug=False, use_ylim=False):
     """
     Optimises the wavelength solution for a given spectral order using the laser comb data.
     This function first identifies rough peaks with scipy.signal.find_peaks and then fits a Gaussian to these peaks.
@@ -25,6 +25,8 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, ov
         order_name (str):                   The name of the spectral order to optimise the wavelength solution for.
         lc_pixel_values (numpy.ndarray):    The pixel values of the laser comb data for the given spectral order.
         overwrite (bool, optional):         If True, the function will overwrite the existing wavelength solution coefficients.
+        plot_peak_fits (bool, optional):    If True, the function will plot the fitting results for each LC peak
+        rejection:                          Options: auto, none, outliers, km/s, m/s, default: none
         debug (bool, optional):             If True, the function will generate diagnostic plots showing the wavelength solution.
         use_ylim (bool, optional):          If True, the function will set the y-axis limits for the diagnostic plots.
 
@@ -127,18 +129,8 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, ov
                 previous_calibration_coefficients = np.loadtxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_{order_name}_thxe.txt')
 
         central_pixel = int(len(lc_pixel_values)/2)
-
-        if central_pixel == 2064:
-            print('  --> Running for 4Amp case with 2064 pixels.')
-        elif central_pixel == 2048:
-            print('  --> Running for 2Amp case with 2048 pixels.')
-            if order_name[4] == '2':
-                print('  --> Moving central_pixel for LC peak expectation by +3 pixels to 2052 based on offset monitoring for 2Amp readouts of CCD2. This value is not yet validated or has a physical reasoning...')
-                central_pixel = 2051
-        else:
-            raise ValueError('Central_pixel should be 2064 or 2048!')
-
         centred_pixels = np.arange(len(lc_pixel_values))-int(len(lc_pixel_values)/2)
+
         wavelength = polynomial_function(centred_pixels,*previous_calibration_coefficients)*10
 
         # Let's figure out, where we expect LC peaks at this wavelength
@@ -185,15 +177,15 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, ov
                     detection = 'No'
                     marker = 'o'
 
-                # if debug:
-                #     f2, ax_new = plt.subplots()
-                #     ax_new.plot(
-                #         lc_pixels_in_window,
-                #         lc_pixel_values_in_window, label = 'LC measurement'
-                #     )
-                #     ax_new.axvline(lc_peak_pixel, label = 'Expected peak position')
-                #     ax_new.scatter(lc_pixels_in_window[highest_value],lc_pixel_values_in_window[highest_value], marker = marker, label = detection)
-                #     ax_new.set_title('LC peak '+str(int(lc_numbers[lc_peak_index]))+' at '+str(np.round(lc_peak_wavelength,3))+' Å')
+                if plot_peak_fits:
+                    f2, ax_new = plt.subplots()
+                    ax_new.plot(
+                        lc_pixels_in_window,
+                        lc_pixel_values_in_window, label = 'LC measurement'
+                    )
+                    ax_new.axvline(lc_peak_pixel, label = 'Expected peak position')
+                    ax_new.scatter(lc_pixels_in_window[highest_value],lc_pixel_values_in_window[highest_value], marker = marker, label = detection)
+                    ax_new.set_title('LC peak '+str(int(lc_numbers[lc_peak_index]))+' at '+str(np.round(lc_peak_wavelength,3))+' Å')
 
                 try:
                     popt, pcov = curve_fit(
@@ -207,18 +199,19 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, ov
                         # peak offset must be positive and should be less than 500
                         bounds=([lc_peak_pixel-4,0.35,0.5,0],[lc_peak_pixel+4,2.0,2e6,500])
                     )
-                    # if debug:
-                    #     ax_new.plot(
-                    #         lc_pixels_in_window,
-                    #         lc_peak_gauss(lc_pixels_in_window,*popt)
-                    #     )
+                    if plot_peak_fits:
+                        ax_new.plot(
+                            lc_pixels_in_window,
+                            lc_peak_gauss(lc_pixels_in_window,*popt)
+                        )
+                        ax_new.axvline(popt[0], color = 'C3', ls = 'dashed', label = 'Peak fit')
                 except:
                     popt = [np.nan,np.nan,np.nan,np.nan]
 
-                # if debug:
-                #     ax_new.legend()
-                #     if 'ipykernel' in sys.modules: plt.show(f2)
-                #     plt.close(f2)
+                if plot_peak_fits:
+                    ax_new.legend()
+                    if 'ipykernel' in sys.modules: plt.show(f2)
+                    plt.close(f2)
 
                 lc_fit_peak_position.append(lc_peak_pixel)
                 lc_fit_peak_offsets.append(lc_peak_pixel - popt[0])
@@ -492,23 +485,40 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, ov
 
         rms_velocity_x_sigma_outlier = np.where(rms_sigma | rms_500ms)[0]
 
-        if len(rms_sigma) - len(rms_velocity_x_sigma_outlier) < 20:
-            if debug: print('   --> Too many outliers to delete them. Relaxing outliers to 2km/s!')
+        if rejection == 'none':
+            rms_velocity_x_sigma_outlier = []
+        elif rejection == 'left100':
+            rms_velocity_x_sigma_outlier = np.arange(100)
+        elif rejection == 'left50':
+            rms_velocity_x_sigma_outlier = np.arange(50)
+        elif rejection == 'right50':
+            rms_velocity_x_sigma_outlier = np.arange(len(rms_sigma)-50,len(rms_sigma))
+        elif rejection == 'right100':
+            rms_velocity_x_sigma_outlier = np.arange(len(rms_sigma)-100,len(rms_sigma))
+        elif rejection == 'm/s':
+            rms_velocity_x_sigma_outlier = np.where(rms_sigma | rms_500ms)[0]
+        elif rejection == 'km/s':
             rms_2000ms = 299792458.0 * np.abs(wavelength_residuals/(lc_wavelengths_to_fit)) > 2000.0
             rms_velocity_x_sigma_outlier = np.where(rms_sigma | rms_2000ms)[0]
+        elif rejection == 'outliers':
+            rms_velocity_x_sigma_outlier = np.where(rms_sigma)[0]
+        else:
             if len(rms_sigma) - len(rms_velocity_x_sigma_outlier) < 20:
-                if debug: print('   --> Still too many outliers to delete them. Relaxing outliers to 3-sigma outliers only!')
-                rms_velocity_x_sigma_outlier = np.where(rms_sigma)[0]
+                if debug: print('   --> Too many outliers to delete them. Relaxing outliers to 2km/s!')
+                rms_2000ms = 299792458.0 * np.abs(wavelength_residuals/(lc_wavelengths_to_fit)) > 2000.0
+                rms_velocity_x_sigma_outlier = np.where(rms_sigma | rms_2000ms)[0]
                 if len(rms_sigma) - len(rms_velocity_x_sigma_outlier) < 20:
-                    if debug: print('   --> Still too many outliers to delete them. Using all data point!')
-                    rms_velocity_x_sigma_outlier = []
-            
+                    if debug: print('   --> Still too many outliers to delete them. Relaxing outliers to 3-sigma outliers only!')
+                    rms_velocity_x_sigma_outlier = np.where(rms_sigma)[0]
+                    if len(rms_sigma) - len(rms_velocity_x_sigma_outlier) < 20:
+                        if debug: print('   --> Still too many outliers to delete them. Using all data point!')
+                        rms_velocity_x_sigma_outlier = []
+                
         if debug: print('   --> Peaks: Of '+str(lc_fit_nr_expected)+', '+str(lc_fit_outside_window)+' were outside window, '+str(lc_fit_failed)+' failed, '+str(lc_fit_bad_quality)+' bad quality, and '+str(len(rms_velocity_x_sigma_outlier))+' RMS outliers. Nr peaks for fit: '+str(len(lc_pixels_to_fit)))
 
         if len(rms_velocity_x_sigma_outlier) > 0:
 
             outlier_pixels = lc_pixels_to_fit[rms_velocity_x_sigma_outlier]+central_pixel
-            outlier_wavelengths = lc_wavelengths_to_fit[rms_velocity_x_sigma_outlier]
 
             lc_pixels_to_fit = np.delete(lc_pixels_to_fit, rms_velocity_x_sigma_outlier)
             lc_wavelengths_to_fit = np.delete(lc_wavelengths_to_fit, rms_velocity_x_sigma_outlier)
@@ -586,12 +596,12 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, ov
             wavelength_tinney = polynomial_function(np.arange(len(lc_pixel_values))-2450-3,*coeffs_tinney[order_name][:-1])*10
             if order_name[4] == '2': wavelength_tinney = wavelength_air_to_vac(wavelength_tinney)
 
-            # gs[0].plot(
-            #     np.arange(len(lc_pixel_values)),
-            #     wavelength_tinney -
-            #     polynomial_function(np.arange(len(lc_pixel_values))-central_pixel,*coeffs_lc)*10,
-            #     label = 'Tinney Wavelength Solution'
-            # )
+            gs[1].plot(
+                np.arange(len(lc_pixel_values)),
+                wavelength_tinney -
+                polynomial_function(np.arange(len(lc_pixel_values))-central_pixel,*coeffs_lc)*10,
+                label = 'Tinney Wavelength Solution'
+            )
 
             # ThXe Wavelegnth Solution
             coeffs_thxe = np.loadtxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_{order_name}_thxe.txt')

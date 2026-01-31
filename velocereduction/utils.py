@@ -559,6 +559,8 @@ def read_in_wavelength_solution_coefficients_tinney():
     Reads wavelength solution coefficients by C. Tinney from predefined vdarc* files.
 
     Reference pixels (DYO) are defined for Verde and Rosso, and assumed to be 2450 for Azzurro.
+    
+    For consistency, the function is reevaluated for reference pixel 2048
 
     Returns:
         dict: A dictionary containing wavelength solution coefficients for each CCD and spectral order.
@@ -579,17 +581,27 @@ def read_in_wavelength_solution_coefficients_tinney():
         for line in vdarc_text:
             if 'START' in line:
                 order = line[6:]
-                has_DYO = False
+                DYO = None
             elif 'COEFFS' in line:
                 coeffs = np.array(line[7:].split(' '),dtype=float)
             elif 'DY0' in line:
-                coeffs = np.concatenate((coeffs, [int(line[4:])]))
-                has_DYO = True
+                DYO = int(line[4:])
             elif 'STOP' in line:
-                if not has_DYO:
-                    wavelength_solution_coefficients_tinney['ccd_'+str(ccd)+'_order_'+order] = np.concatenate((coeffs, [2450]))
-                else:
-                    wavelength_solution_coefficients_tinney['ccd_'+str(ccd)+'_order_'+order] = coeffs
+                if DYO is None:
+                    DYO = 2450
+                
+                # Reformat coefficients to go from Tinney reference pixel (DYO) to 2048
+                x = np.arange(0, 4096)
+                dx_old = x - DYO
+                lam = np.zeros_like(x,dtype=float)
+                for i, coeff in enumerate(coeffs):
+                    lam += coeff * dx_old**i
+                dx_new = x - 2048
+                coeffs_wrt_2048 = np.polyfit(dx_new, lam, len(coeffs)-1)[::-1]  # reverse to get d0..d5
+
+                # np.savetxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_ccd_{ccd}_order_{order}_tinney.txt',coeffs_wrt_2048)
+
+                wavelength_solution_coefficients_tinney['ccd_'+str(ccd)+'_order_'+order] = np.concatenate((coeffs_wrt_2048, [DYO]))
 
     return(wavelength_solution_coefficients_tinney)
 
