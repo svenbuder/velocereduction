@@ -76,6 +76,7 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, ov
     lc_range['ccd_3_order_68'] = [90,4090]
     lc_range['ccd_3_order_67'] = [100,4090]
     lc_range['ccd_3_order_66'] = [100,3730]
+    lc_range['ccd_3_order_65'] = [100,3730] # for test purposes!
     lc_range['ccd_2_order_134'] = [1590,3850]
     lc_range['ccd_2_order_133'] = [1398,3850]
     lc_range['ccd_2_order_132'] = [1420,3850]
@@ -591,9 +592,9 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, ov
                 label = 'LC Wavelength Solution'
             )
 
-            # Tinney Wavelength Solution
+            # Tinney Wavelength Solution - now shifted from Tinney reference pixel (mostly 2450) to central pixel (2048)
             coeffs_tinney = read_in_wavelength_solution_coefficients_tinney()
-            wavelength_tinney = polynomial_function(np.arange(len(lc_pixel_values))-2450-3,*coeffs_tinney[order_name][:-1])*10
+            wavelength_tinney = polynomial_function(np.arange(len(lc_pixel_values))-central_pixel,*coeffs_tinney[order_name][:-1])*10
             if order_name[4] == '2': wavelength_tinney = wavelength_air_to_vac(wavelength_tinney)
 
             gs[1].plot(

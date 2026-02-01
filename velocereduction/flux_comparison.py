@@ -147,8 +147,9 @@ def normalise_veloce_flux_via_smoothed_ratio_to_korg_flux(veloce_wavelength, vel
         )
         ax.set_xlabel(r'Wavelength $\lambda_\mathrm{vac}~/~\mathrm{\AA}$')
         ax.set_ylabel('Flux Ratio\n'+r'$f_\mathrm{Veloce}/f_\mathrm{Korg}$')
-        ax.set_ylim(0.5,1.5)
+        ax.set_ylim(np.nanpercentile(flux_ratio, 5), np.nanpercentile(flux_ratio,95))
         ax.legend(ncol=4, loc = 'upper center')
+        plt.tight_layout()
         if 'ipykernel' in sys.modules: plt.show()
         plt.close()
 
@@ -395,9 +396,8 @@ def fit_wavelength_solution_with_korg_spectrum(order, veloce_fits_file, radial_v
         args=(veloce_science_flux, barycentric_velocity, radial_velocity, korg_wavelength_vac, korg_flux, normalisation_buffers, telluric_line_wavelengths, telluric_line_fluxes, debug)
     )
 
-    if debug:
-        print('\n    --> We started with these initial coefficients:   ',[f"{number:.5e}" for number in initial_wavelength_coefficients])
-        print('    --> Coefficients with minimum Sum(Abs(Residuals)):',[f"{number:.5e}" for number in wavelength_coefficients_minimum.x])
+    print('\n    --> We started with these initial coefficients:   ',[f"{number:.5e}" for number in initial_wavelength_coefficients])
+    print('    --> Coefficients with minimum Sum(Abs(Residuals)):',[f"{number:.5e}" for number in wavelength_coefficients_minimum.x])
 
     # Once the fitting is finished, plot the Korg and Veloce spectra and how the latter was normalised
     normalised_veloce_science_flux, korg_flux_interpolated, veloce_wavelength_vac_rv_shifted, veloce_wavelength_air_rv_shifted, telluric_flux_interpolated = make_veloce_and_korg_spectrum_compatible(
