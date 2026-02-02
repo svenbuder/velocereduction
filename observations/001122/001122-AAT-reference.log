@@ -1,0 +1,72 @@
+            Observing Log - Veloce vq4.5 Veloce           
+=======================================================================================================================
+Run: AAT/YYYYB/A/YYA/RR UTDate: DD/Mon/YYYY  Observers: Buder
+Chip: E2V_Rosso, E2V_Verde,E2V_Azzurro Gain=1.0 e/adu  Windowing:Full    Cols:4224   Rows:4176  Binning:1rx1c
+Telescope Focus (mm):49.08    Last Used GuideMark X:268.00  Y:253.40 
+LCTruncBlue(dB):-15    LCTruncRed(dB):-13    Fraction of Night Useful (%):100    
+Summary: This nightlog includes the entries for the reference night (001122), created from observations on 240219 with 2Amp
+=======================================================================================================================
+Run   Object           Midtime       Exp    SN/pix   See  Simul     OSrms_Q1-4        Ph     OS_Q1-4          Comments
+=======================================================================================================================
+0001  3 SimThLong        08:13:30 m  180.0     0    0          ThXe   3.2,3.2,3.2,3.1  1.00      1015,1015,1011,1011 N/A to limit storage
+0001  2 SimThLong        08:13:30 m  180.0     1    5          ThXe   2.6,2.6,2.6,2.6  1.00      992,992,996,997 N/A to limit storage
+0001  1 SimThLong        08:13:30 m  180.0     0    0          ThXe   2.6,2.6,2.6,2.6  1.00      995,995,995,996 Median of 10 runs from 240219.
+0002  3 SimThLong        08:37:14 m   60.0     0    0          ThXe   3.2,3.2,3.1,3.1  1.00      1014,1014,1011,1011 N/A to limit storage
+0002  2 SimThLong        08:37:14 m   60.0     0    0          ThXe   2.6,2.6,2.6,2.6  1.00      992,992,996,996 Median of 9 runs from 240219.
+0002  1 SimThLong        08:37:14 m   60.0     0    2          ThXe   2.6,2.6,2.6,2.6  1.00      995,995,995,996 N/A to limit storage
+0003  3 SimTh            08:51:37 m   15.0     0    0          ThXe   3.1,3.1,3.0,3.0  1.00      1014,1014,1011,1011 Median of 10 runs from 240219.
+0003  2 SimTh            08:51:37 m   15.0     1    4          ThXe   2.6,2.6,2.5,2.5  1.00      992,992,996,995 N/A to limit storage
+0003  1 SimTh            08:51:37 m   15.0     0    0          ThXe   2.5,2.5,2.5,2.5  1.00      995,995,995,995 N/A to limit storage
+0004  3 ARC-ThAr         07:45:06 m  180.0   165  168          ThXe   BAD,3.4,3.4,9.2  1.00      1006,1016,1011,999 N/A to limit storage
+0004  2 ARC-ThAr         07:45:06 m  180.0   212  215                 2.7,2.8,2.7,2.7  1.00      992,992,996,996 N/A to limit storage
+0004  1 ARC-ThAr         07:45:06 m  180.0    98  104                 2.6,2.6,2.7,2.7  1.00      996,996,996,996 Median of 12 runs from 240219.
+0005  3 ARC-ThAr         07:28:53 m   60.0    88   94          ThXe   3.3,3.3,3.1,3.3  1.00      1015,1015,1011,1011 N/A to limit storage
+0005  2 ARC-ThAr         07:28:53 m   60.0   116  120                 2.7,2.7,2.6,2.6  1.00      992,992,996,996 Median of 12 runs from 240219.
+0005  1 ARC-ThAr         07:28:53 m   60.0    48   56                 2.6,2.6,2.6,2.6  1.00      996,996,996,996 N/A to limit storage
+0006  3 ARC-ThAr         07:17:03 m   15.0    31   40                 3.2,3.2,3.1,3.1  1.00      1015,1015,1011,1011 Median of 16 runs from 240219. 
+0006  2 ARC-ThAr         07:17:03 m   15.0    54   62                 2.6,2.6,2.6,2.6  1.00      994,993,997,997 N/A to limit storage
+0006  1 ARC-ThAr         07:17:03 m   15.0     9   19                 2.6,2.6,2.6,2.6  1.00      996,996,996,997 N/A to limit storage
+0007  3 SimLC            19:10:49 m   15.0     0    0       LC        3.2,3.2,3.1,3.1  1.00      1014,1014,1011,1011 Median of 21 runs from 240219.
+0007  2 SimLC            19:10:49 m   15.0     0    0       LC        2.7,2.6,2.6,2.6  1.00      992,992,996,996 Median of 21 runs from 240219.
+0007  1 SimLC            19:10:49 m   15.0     1    5                 2.6,2.6,2.6,2.6  1.00      996,996,996,996 N/A to limit storage
+0008  3 FlatField-Quartz 06:52:43 m   60.0                            BAD BAD BAD BAD            BAD BAD BAD BAD N/A to limit storage
+0008  2 FlatField-Quartz 06:52:43 m   60.0   595  596                 5.0,4.9,5.4,4.8  1.00      1001,1000,998,998  N/A to limit storage
+0008  1 FlatField-Quartz 06:52:43 m   60.0  1316 1316                 3.2,3.1,3.4,3.4  1.00      996,996,996,996 Median of 14 runs from 240219.
+0009  3 FlatField-Quartz 06:22:15 m    1.0  1839 1840                 4.0,3.9,3.6,4.1  1.00      1017,1017,1012,1013 N/A to limit storage
+0009  2 FlatField-Quartz 06:22:15 m    1.0   659  660                 3.0,3.1,3.0,2.9  1.00      993,992,997,996 Median of 14 runs from 240219.
+0009  1 FlatField-Quartz 06:22:15 m    1.0   165  168                 2.6,2.6,2.6,2.6  1.00      996,996,996,996 N/A to limit storage
+0010  3 FlatField-Quartz 06:07:44 m    0.1   894  895                 3.6,3.4,3.3,3.5  1.00      1015,1015,1012,1012 Median of 14 runs from 240219.
+0010  2 FlatField-Quartz 06:07:44 m    0.1   212  215                 2.7,2.8,2.7,2.7  1.00      994,993,999,999 N/A to limit storage
+0010  1 FlatField-Quartz 06:07:44 m    0.1    46   55                 2.6,2.6,2.6,2.6  1.00      997,996,997,997 N/A to limit storage
+0011  3 DarkFrame        23:01:36 m 1800.0     0    0                 3.0,3.0,2.9,2.9  1.00      1013,1013,1010,1010 Median of 3 runs from 240219.
+0011  2 DarkFrame        23:01:36 m 1800.0     0    0                 2.6,2.6,2.5,2.5  1.00      991,991,994,994 Median of 3 runs from 240219.
+0011  1 DarkFrame        23:01:36 m 1800.0     0    0                 2.5,2.5,2.5,2.5  1.00      995,995,995,995 Median of 3 runs from 240219.
+0012  3 DarkFrame        23:01:36 m  900.0     0    0                 3.0,3.0,2.9,2.9  1.00      1013,1013,1010,1010 Median of 3 runs from 240219.
+0012  2 DarkFrame        23:01:36 m  900.0     0    0                 2.6,2.6,2.5,2.5  1.00      991,991,994,994 Median of 3 runs from 240219.
+0012  1 DarkFrame        23:01:36 m  900.0     0    0                 2.5,2.5,2.5,2.5  1.00      995,995,995,995 Median of 3 runs from 240219.
+0013  3 DarkFrame        23:01:36 m  600.0     0    0                 3.0,3.0,2.9,2.9  1.00      1013,1013,1010,1010 Median of 3 runs from 240219.
+0013  2 DarkFrame        23:01:36 m  600.0     0    0                 2.6,2.6,2.5,2.5  1.00      991,991,994,994 Median of 3 runs from 240219.
+0013  1 DarkFrame        23:01:36 m  600.0     0    0                 2.5,2.5,2.5,2.5  1.00      995,995,995,995 Median of 3 runs from 240219.
+0113  3 HIP56343         15:41:28 p  180.0   774  775  2.8"           3.5,3.4,3.3,3.4  1.00      1015,1015,1011,1012 GBS ksi Hya; S18 RV standard -4.5990+-0.0002
+0113  2 HIP56343         15:41:28 p  180.0   329  331  2.9"           2.8,2.9,2.8,2.7  1.00      992,992,996,996 GBS ksi Hya; S18 RV standard -4.5990+-0.0002
+0113  1 HIP56343         15:41:28 p  180.0   140  145  4.1"           2.7,2.7,2.7,2.7  1.00      995,996,996,995 GBS ksi Hya; S18 RV standard -4.5990+-0.0002
+0114  3 HIP56343         15:47:21 p  240.0   888  888  2.8"           3.5,3.4,3.3,3.5  1.00      1015,1015,1011,1012 GBS ksi Hya; S18 RV standard -4.5990+-0.0002
+0114  2 HIP56343         15:47:21 p  240.0   374  375  3.1"           2.8,2.9,2.8,2.7  1.00      992,992,996,996 GBS ksi Hya; S18 RV standard -4.5990+-0.0002
+0114  1 HIP56343         15:47:21 p  240.0   159  163  3.2"           2.7,2.7,2.6,2.7  1.00      995,996,996,995 GBS ksi Hya; S18 RV standard -4.5990+-0.0002
+0117  3 HIP57757         15:55:36 p  180.0   566  567  3.0"           3.4,3.3,3.2,3.4  1.19      1015,1014,1011,1011 GBS bet Vir; S18 RV Standard 4.455+-0.0005
+0117  2 HIP57757         15:55:36 p  180.0   286  288  3.6"           2.8,2.9,2.7,2.7  1.19      992,992,996,996 GBS bet Vir; S18 RV Standard 4.455+-0.0005
+0117  1 HIP57757         15:55:36 p  180.0   119  124  3.4"           2.7,2.6,2.6,2.7  1.19      996,996,996,996 GBS bet Vir; S18 RV Standard 4.455+-0.0005
+0118  3 HIP57757         16:02:18 p  300.0   824  824  2.6"           3.5,3.4,3.3,3.5  1.19      1015,1015,1011,1012 GBS bet Vir; S18 RV Standard 4.455+-0.0005
+0118  2 HIP57757         16:02:18 p  300.0   429  430  3.0"           2.9,3.0,2.8,2.7  1.19      992,992,996,996 GBS bet Vir; S18 RV Standard 4.455+-0.0005
+0118  1 HIP57757         16:02:18 p  300.0   187  190  3.4"           2.6,2.6,2.7,2.7  1.19      995,995,995,995 GBS bet Vir; S18 RV Standard 4.455+-0.0005
+0150  3 HIP69673         18:48:47 m    2.0   600  601  2.2"           3.4,3.3,3.2,3.4  1.58      1014,1014,1011,1012 GBS Arcturus; S18 RV Standard -5.229+-0.0002
+0150  2 HIP69673         18:48:47 m    2.0   169  172  1.6"           2.7,2.7,2.7,2.6  1.58      993,992,996,996 GBS Arcturus; S18 RV Standard -5.229+-0.0002
+0150  1 HIP69673         18:48:47 m    2.0    40   49  0.8"           2.6,2.6,2.6,2.6  1.58      996,996,996,996 GBS Arcturus; S18 RV Standard -5.229+-0.0002
+0151  3 HIP69673         18:51:26 m    7.0  1134 1134  1.9"           3.5,3.5,3.4,3.6  1.58      1015,1015,1011,1012 GBS Arcturus; S18 RV Standard -5.229+-0.0002
+0151  2 HIP69673         18:51:26 m    7.0   356  358  2.3"           2.8,2.9,2.8,2.7  1.58      993,992,996,996 GBS Arcturus; S18 RV Standard -5.229+-0.0002
+0151  1 HIP69673         18:51:26 m    7.0   110  115  1.1"           2.6,2.7,2.6,2.6  1.58      996,996,996,996 GBS Arcturus; S18 RV Standard -5.229+-0.0002
+0154  3 127972           18:57:01 p   60.0   534  535  2.2"           3.4,3.3,3.2,3.4  1.02      1014,1014,1011,1012 Bstar for telluric lines
+0154  2 127972           18:57:01 p   60.0   407  408  2.5"           2.9,3.0,2.8,2.8  1.02      992,992,997,997 Bstar for telluric lines
+0154  1 127972           18:57:01 p   60.0   240  242  2.8"           2.7,2.7,2.7,2.7  1.02      996,995,995,996 Bstar for telluric lines
+=======================================================================================================================
+00:11:22 This is a fake nightlog to be able to read in this reference night with the same routine as all other nights.
