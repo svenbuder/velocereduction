@@ -63,19 +63,15 @@ def parse_arguments():
 def get_script_input():
     if 'ipykernel' in sys.modules:
         
-        # Assume default values if inside Jupyter
-        jupyter_date = "001122"
+        jupyter_date = "001122" # Reference night
         
         # 2Amp example
-#         jupyter_date = "240219"
+        # jupyter_date = "240219"
         
         # 4Amp example
-#         jupyter_date = "231121"
+        # jupyter_date = "231121"
 
-        # CV dates
-        jupyter_date = "250604"
-        jupyter_date = "250706"
-        jupyter_date = "250707"
+        # jupyter_date = "250706" # significant dX (-8.8) and dY (+2.8) in some CCDs wrt reference night
 
         jupyter_working_directory = "../"
         print("Running in a Jupyter notebook. Using predefined values")
@@ -105,7 +101,7 @@ print(f"Date: {config.date}, Working Directory: {config.working_directory}")
 
 # Extract the Calibration and Science data from the night log
 
-each_science_run_separately = True # Set this True, if you want to reduce the runs of the same object separately
+each_science_run_separately = False # Set this True, if you want to reduce the runs of the same object separately
 
 calibration_runs, science_runs = VR.utils.identify_calibration_and_science_runs(
     config.date,
@@ -119,6 +115,20 @@ calibration_runs, science_runs = VR.utils.identify_calibration_and_science_runs(
 # In[ ]:
 
 
+# Estimate the pixel shifts in x and y for each CCD with respect to the reference frames
+if config.date == "001122":
+    ccd_pixel_shifts_wrt_reference = {'ccd_1': (0.0, 0.0), 'ccd_2': (0.0, 0.0), 'ccd_3': (0.0, 0.0)}
+elif config.date == "250706":
+    ccd_pixel_shifts_wrt_reference = {'ccd_1': (-6.14, +1.12), 'ccd_2': (-8.68, +2.65), 'ccd_3': (+2.62, +0.06)} # <-- Correct shift!
+else:
+    ccd_pixel_shifts_wrt_reference = VR.extraction.estimate_ccd_pixel_shifts_wrt_reference(calibration_runs)
+
+print(ccd_pixel_shifts_wrt_reference)
+
+
+# In[ ]:
+
+
 # Extract Master Flat
 print('\nExtracting Master Flat')
 master_flat, master_flat_images = VR.extraction.extract_orders(
@@ -126,12 +136,11 @@ master_flat, master_flat_images = VR.extraction.extract_orders(
     ccd2_runs = calibration_runs['Flat_1.0'],
     ccd3_runs = calibration_runs['Flat_0.1'],
     Flat = True,
-    update_tramlines_based_on_flat = True, # Would update and overwrite
-    # ./VeloceReduction/tramline_information/tramline_begin_end_ccd_*_oder_*.txt
+    update_tramlines_based_on_flat = False, # Refit saved in reduced_data/YYMMDD/_tramline_information/
+    pixel_shifts = ccd_pixel_shifts_wrt_reference,
     debug_overscan = False,
     debug_rows = False, # Plotting the distribution of counts of a tramline in every 500th row
-    debug_tramlines = True # Would create a tramlines trace PDF under
-    # reduced_data/YYMMDD/debug/debug_tramlines_flat.pdf
+    debug_tramlines = False # Plots saved  at reduced_data/YYMMDD/_tramline_information/
 )
 
 # Extract Master ThXe
@@ -142,8 +151,8 @@ master_thxe = VR.extraction.extract_orders(
     ccd3_runs = calibration_runs['FibTh_15.0'],
     ThXe = True,
     master_flat_images = master_flat_images,
-    debug_tramlines = True # Would create a tramlines trace PDF under
-    # reduced_data/YYMMDD/debug/debug_tramlines_thxe.pdf
+    pixel_shifts = ccd_pixel_shifts_wrt_reference,
+    debug_tramlines = False # Plots saved  at reduced_data/YYMMDD/_tramline_information/
 )
 
 # Extract Master LC
@@ -155,12 +164,11 @@ if len(calibration_runs['SimLC']) > 0:
         ccd3_runs = calibration_runs['SimLC'],
         LC = True,
         master_flat_images = master_flat_images,
-        debug_tramlines = True # Would create a tramlines trace PDF under
-        # reduced_data/YYMMDD/debug/debug_tramlines_lc.pdf
+        debug_tramlines = False # Plots saved  at reduced_data/YYMMDD/_tramline_information/
     )
 else:
-    print('\nNo SimLC observed for this night; Skipping Master LC calibration and setting all values 1.0')
-    master_lc = master_thxe.copy(); master_lc[:] = 1.0
+    print('\nNo SimLC observed for this night; Skipping Master LC calibration and setting all values 0.0')
+    master_lc = master_thxe.copy(); master_lc[:] = 0.0
 
 # Extract Darks
 master_darks = dict()
@@ -201,9 +209,7 @@ for science_object in list(science_runs.keys()):
         Science=True,
         master_darks = master_darks, # These are needed to subtract the dark current
         master_flat_images = master_flat_images, # These are needed for flat-field correction
-        debug_tramlines = True, # Would create a tramlines trace PDF under
-        # reduced_data/YYMMDD/debug/debug_tramlines_{metadata['OBJECT']}.pdf
-        debug_overscan=False
+        debug_tramlines = False # Plots saved  at reduced_data/YYMMDD/_tramline_information/
     )
 
     # Find the closest BStar calibration
@@ -236,7 +242,7 @@ for science_object in list(science_runs.keys()):
 
     hdul = fits.HDUList([primary_hdu])
 
-    # Extract order ranges and coefficients
+    # Figure out which extensions have been extracted into the arrays
     order_ranges, order_beginning_coeffs, order_ending_coeffs = VR.extraction.read_in_order_tramlines()
 
     # Loop over your extension names and corresponding data arrays
@@ -270,50 +276,86 @@ for science_object in list(science_runs.keys()):
 #         print('\n  --> Failed to extract '+science_object)
 
 
-# ## Wavelength calibration
-
 # In[ ]:
 
 
-for science_object in list(science_runs.keys()):
+for science_object in list(science_runs.keys())[2:3]:
 #     try:
     VR.calibration.calibrate_wavelength(
         science_object,
         optimise_lc_solution=False,
         correct_barycentric_velocity=True,
         create_overview_pdf=True,
-        fit_voigt_for_rv = False
+        fit_voigt_for_rv = True
     )
 #         print('  -> Succesfully calibrated wavelength with diagnostic plots for '+science_object+'\n')
 #     except:
 #         print('  -> Failed to calibrate wavelength for '+science_object+'\n')
 
 
-# ## Comparison with synthetic spectra
+# ## Wavelength calibration scripts for master wavelength calibration
+
+# ### LC calibration with peak fitting
 
 # In[ ]:
 
 
-# for science_object in list(science_runs.keys()):
-    
+# For LC optimisation
+
+# for science_object in list(science_runs.keys())[:1]:
+#     print(science_object)
+#     file = fits.open('../reduced_data/'+config.date+'/'+science_object+'/veloce_spectra_'+science_object+'_'+config.date+'.fits')
+#     # VR.calibration.calibrate_wavelength(science_object, optimise_lc_solution = True, fit_voigt_for_rv = False, debug = True)
+#     for order_index in range(1,len(file)):
+#         order_name = file[order_index].header['EXTNAME'].lower()
+#         if (
+#             order_name == 'ccd_2_order_136'
+#             # ((order_name[4] == '3'))
+#             # (order_name == 'ccd_3_order_77')
+#             # ((order_name[4] == '3') & (order_name != 'ccd_3_order_65')) |
+#             # # Let's use the last 2 digits to avoid warnings, because not all of CCD3 are > 100 (but all of CCD2).
+#             # ((order_name[4] == '2') & (int(order_name[-2:]) >= 3) & (int(order_name[-2:]) <= 34))
+#         ):
+#             # try:
+#             coeffs_lc = VR.calibration.optimise_wavelength_solution_with_laser_comb(
+#                 order_name = order_name,
+#                 lc_pixel_values = file[order_name].data['LC'],
+#                 overwrite = True,
+#                 plot_peak_fits = False,
+#                 rejection = 'm/s', # options: auto, none, outliers, left100, right100, km/s, m/s
+#                 debug = True
+#             )
+#             # except:
+#             #     pass
+
+
+# ### Calibration with synthetic spectra of RV standard HIP56343 for 001122
+
+# In[ ]:
+
+
+# for science_object in list(science_runs.keys())[:1]:
 #     print('\nCalibrating wavelength for '+science_object+' with given radial velocity and synthetic Korg spectrum')
-    
 #     with fits.open(config.working_directory+'reduced_data/'+config.date+'/'+science_object+'/veloce_spectra_'+science_object+'_'+config.date+'.fits', mode='update') as veloce_fits_file:
-        
 #         korg_spectra = VR.flux_comparison.read_available_korg_syntheses()
-        
 #         # Find the closest match based on (possibly available) literature TEFF/LOGG/FE_H
-#         closest_korg_spectrum = VR.utils.find_closest_korg_spectrum(
+#         closest_korg_spectrum = VR.flux_comparison.find_closest_korg_spectrum(
 #             available_korg_spectra = korg_spectra,
 #             fits_header = veloce_fits_file[0].header,
 #         )
-
+#         closest_korg_spectrum = 'arcturus'
 #         # Find the best RV or raise ValueError of none available.
-#         vrad_for_calibration = VR.utils.find_best_radial_velocity_from_fits_header(fits_header = veloce_fits_file[0].header)
-
+#         # vrad_for_calibration = VR.utils.find_best_radial_velocity_from_fits_header(fits_header = veloce_fits_file[0].header)
+#         vrad_for_calibration = -4.5990
 #         # Let's test this for a few orders (or simply set order_selection = None to use all valid ones)
-#         orders_to_calibrate = ['ccd_3_order_94','ccd_3_order_89']
-
+#         # orders_to_calibrate = ['ccd_1_order_139']
+#         orders_to_calibrate = [
+#             'ccd_1_order_163', 
+#             'ccd_1_order_164', 
+#             'ccd_1_order_165', 
+#             'ccd_1_order_166', 
+#             'ccd_1_order_167'
+#             ]
 #         VR.flux_comparison.calculate_wavelength_coefficients_with_korg_synthesis(
 #             veloce_fits_file,
 #             korg_wavelength_vac = korg_spectra['wavelength_vac'],
@@ -344,10 +386,4 @@ print('Memory before starting the reduction was:')
 print(starting_memory)
 print('Memory after running the reduction is:')
 print(VR.utils.get_memory_usage())
-
-
-# In[ ]:
-
-
-
 
