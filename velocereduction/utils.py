@@ -597,6 +597,7 @@ def read_in_wavelength_solution_coefficients_tinney():
                 for i, coeff in enumerate(coeffs):
                     lam += coeff * dx_old**i
                 dx_new = x - 2048
+
                 coeffs_wrt_2048 = np.polyfit(dx_new, lam, len(coeffs)-1)[::-1]  # reverse to get d0..d5
 
                 # np.savetxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_ccd_{ccd}_order_{order}_tinney.txt',coeffs_wrt_2048)

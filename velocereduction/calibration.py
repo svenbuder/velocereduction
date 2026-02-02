@@ -195,7 +195,7 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, ov
                         lc_pixel_values_in_window,
                         p0 = [lc_peak_pixel, 1, np.nanmax(lc_pixel_values_in_window), 0],
                         # bounds:
-                        # peak sigma must be between 0.35 and 2.0
+                        # peak sigma must be between 0.3 and 2.0
                         # peak amplitude must be at least 0.5 and up to 2e6
                         # peak offset must be positive and should be less than 500
                         bounds=([lc_peak_pixel-4,0.35,0.5,0],[lc_peak_pixel+4,2.0,2e6,500])
@@ -719,7 +719,9 @@ def calibrate_single_order(file, order, barycentric_velocity=None, optimise_lc_s
     # Optimise the LC solution based on the refitted peaks of the laser comb, if enabled
     if optimise_lc_solution:
         if (
-            ((order_name[4] == '3') & (order_name != 'ccd_3_order_65')) |
+            # We can use all orders of CCD3
+            (order_name[4] == '3') |
+            # and the orders of CCD2 order 103-134 (135-150 do not have enough LC peaks!)
             # Let's use the last 2 digits to avoid warnings, because not all of CCD3 are > 100 (but all of CCD2).
             ((order_name[4] == '2') & (int(order_name[-2:]) >= 3) & (int(order_name[-2:]) <= 34))
         ):
