@@ -16,6 +16,9 @@ from scipy.interpolate import interp1d
 from scipy.ndimage import gaussian_filter1d
 from scipy.optimize import curve_fit
 
+# scikit-image package
+from skimage.registration import phase_cross_correlation
+
 # Matplotlib package
 import matplotlib.pyplot as plt
 
@@ -44,6 +47,34 @@ simbad_magnitudes_query.add_votable_fields('B')
 simbad_magnitudes_query.add_votable_fields('V')
 simbad_magnitudes_query.add_votable_fields('G')
 simbad_magnitudes_query.add_votable_fields('R')
+
+def phase_correlation_shift(reference_image, moving_image, upsample_factor = 100):
+    """
+    Calculate the occured shift between two images.
+    Uses scikit-image package's skimage.registration.phase_cross_correlation.
+
+    Parameters:
+        reference_image:    reference array
+        moving_image:       second array with same shape as reference array
+        upsample_factor:    100 == 0.01 pixel scaling; factors of 10–200 typical; higher = slower, more precise
+
+    Returns:
+        dx:    Occured shift in x-direction
+        dy:    Occured shift in y-direction
+        error: Error of skimage.registration.phase_cross_correlation
+    """
+    # reference_image, moving_image: 2D numpy arrays of reference and new image
+    shift, error, phasediff = phase_cross_correlation(
+        reference_image,
+        moving_image,
+        upsample_factor=upsample_factor,
+        normalization="phase" # robust to intensity scaling
+    )
+    # shift == shift in y and x required to register moving image with reference_image
+    # Use negative to see how much images shifted from reference to moving one.
+    dy, dx = -shift
+
+    return(dx, dy, error)
 
 def apply_velocity_shift_to_wavelength_array(velocity_in_kms, wavelength_array):
     """
@@ -304,7 +335,7 @@ def read_veloce_fits_image_and_metadata(file_path):
 
     return(full_image, metadata)
 
-def identify_calibration_and_science_runs(date, raw_data_dir, each_science_run_separately = False):
+def identify_calibration_and_science_runs(date, raw_data_dir, each_science_run_separately = False, print_information = True):
     """
     Parses a log file in a specified directory to categorize and list calibration and science runs based on 
     the observation data. This function is tailored to handle the file structure and content specific to 
@@ -332,10 +363,10 @@ def identify_calibration_and_science_runs(date, raw_data_dir, each_science_run_s
 
     """
     
-    print('\n  =================================================')
-    print('  ||\n  ||  --> Identifying calibration and science runs now\n  ||')
+    if print_information: print('\n  =================================================')
+    if print_information: print('  ||\n  ||  --> Identifying calibration and science runs now\n  ||')
 
-    raw_file_path = raw_data_dir+'/'+date+'/'
+    raw_file_path = raw_data_dir+'/'+date
 
     log_file_path = glob.glob(raw_file_path+'*.log')
     
@@ -390,10 +421,10 @@ def identify_calibration_and_science_runs(date, raw_data_dir, each_science_run_s
             # read_noise = line[utc_colon-25+70:utc_colon-25+85].strip()
             # airmass = line[utc_colon-25+87:utc_colon-25+91].strip()
             overscan = line[utc_colon-25+95:].split()[0]
-            comments = line[utc_colon-25+100+len(overscan):]
-            if len(comments) != 0:
-                if run_object != 'FlatField-Quartz':
-                    print('  ||\n  ||  --> Warning for '+run_object+' (run '+run+'): '+comments)
+            comments = line[utc_colon-25+96+len(overscan):]
+            if len(comments) > 1:
+                if (run_object != 'FlatField-Quartz') & print_information:
+                    print('  ||  --> Warning for '+run_object+' (run '+run+'): '+comments)
 
             # Read in type of observation from CCD3 info (since Rosso should always be available)
             if ccd == '3':
@@ -437,23 +468,23 @@ def identify_calibration_and_science_runs(date, raw_data_dir, each_science_run_s
 
     # Print all DarkFrame exposures, if any
     dark_frames = [key for key in calibration_runs['Darks'].keys()]
-    if len(dark_frames) > 0:
-        print('  ||\n  || DarkFrame observations: '+', '.join(dark_frames))
+    if (len(dark_frames) > 0):
+        if print_information: print('  ||\n  || DarkFrame observations: '+', '.join(dark_frames))
     else:
-        print('  ||\n  || No DarkFrame observations identified.')
+        if print_information: print('  ||\n  || No DarkFrame observations identified.')
                         
     if len(calibration_runs['Bstar']) > 0:
-        print('  ||\n  || Bstar observations happened at: '+', '.join(calibration_runs['Bstar'].keys()))
+        if print_information: print('  ||\n  || Bstar observations happened at: '+', '.join(calibration_runs['Bstar'].keys()))
     else:
-        print('  ||\n  || No Bstar observations identified.')
+        if print_information: print('  ||\n  || No Bstar observations identified.')
 
-    print('  ||\n  || The following science observations were identified: '+', '.join(list(science_runs.keys())))
+    if print_information: print('  ||\n  || The following science observations were identified: '+', '.join(list(science_runs.keys())))
 
     if len(science_runs) > 0:
         directory_path = Path(config.working_directory+'reduced_data/'+config.date)
         directory_path.mkdir(parents=True, exist_ok=True)
-        print('  ||\n  || Will save reduced data into directory '+str(directory_path))
-        print('  ||\n  =================================================\n')
+        if print_information: print('  ||\n  || Will save reduced data into directory '+str(directory_path))
+        if print_information: print('  ||\n  =================================================\n')
 
     return(calibration_runs, science_runs)
 
@@ -528,6 +559,8 @@ def read_in_wavelength_solution_coefficients_tinney():
     Reads wavelength solution coefficients by C. Tinney from predefined vdarc* files.
 
     Reference pixels (DYO) are defined for Verde and Rosso, and assumed to be 2450 for Azzurro.
+    
+    For consistency, the function is reevaluated for reference pixel 2048
 
     Returns:
         dict: A dictionary containing wavelength solution coefficients for each CCD and spectral order.
@@ -548,17 +581,28 @@ def read_in_wavelength_solution_coefficients_tinney():
         for line in vdarc_text:
             if 'START' in line:
                 order = line[6:]
-                has_DYO = False
+                DYO = None
             elif 'COEFFS' in line:
                 coeffs = np.array(line[7:].split(' '),dtype=float)
             elif 'DY0' in line:
-                coeffs = np.concatenate((coeffs, [int(line[4:])]))
-                has_DYO = True
+                DYO = int(line[4:])
             elif 'STOP' in line:
-                if not has_DYO:
-                    wavelength_solution_coefficients_tinney['ccd_'+str(ccd)+'_order_'+order] = np.concatenate((coeffs, [2450]))
-                else:
-                    wavelength_solution_coefficients_tinney['ccd_'+str(ccd)+'_order_'+order] = coeffs
+                if DYO is None:
+                    DYO = 2450
+                
+                # Reformat coefficients to go from Tinney reference pixel (DYO) to 2048
+                x = np.arange(0, 4096)
+                dx_old = x - DYO
+                lam = np.zeros_like(x,dtype=float)
+                for i, coeff in enumerate(coeffs):
+                    lam += coeff * dx_old**i
+                dx_new = x - 2048
+
+                coeffs_wrt_2048 = np.polyfit(dx_new, lam, len(coeffs)-1)[::-1]  # reverse to get d0..d5
+
+                # np.savetxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_ccd_{ccd}_order_{order}_tinney.txt',coeffs_wrt_2048)
+
+                wavelength_solution_coefficients_tinney['ccd_'+str(ccd)+'_order_'+order] = np.concatenate((coeffs_wrt_2048, [DYO]))
 
     return(wavelength_solution_coefficients_tinney)
 
@@ -1002,89 +1046,3 @@ def find_best_radial_velocity_from_fits_header(fits_header):
     else: raise ValueError('No valid option for VRAD avaialble. Aborting calibration via synthesis.')
 
     return(vrad_for_calibration)
-
-def find_closest_korg_spectrum(available_korg_spectra,fits_header):
-    """
-    Find the closest Korg spectrum based on the object's properties and literature values.
-
-    Parameters:
-        available_korg_spectra (dict): A dictionary containing the available Korg spectra with their names as keys.
-        fits_header (astropy.io.fits.header.Header): The FITS header of the 0th extension of Veloce spectra containing the object information.
-
-    Returns:
-        str: The name of the closest Korg spectrum to be used for calibration.
-    """
-
-    print('    --> Available Korg Spectra: '+', '.join(list(available_korg_spectra.keys())[2:]))
-
-    # If the star is radial velocity standard 18 Sco, let's use the 18 Sco spectrum.
-    if fits_header['OBJECT'] == 'HIP79672':
-        closest_korg_spectrum = '18sco'
-        print('  --> Object is 18Sco. Using 18Sco spectrum.')
-    # Let's check if we have a literature TEFF/LOGG/FE_H available
-    elif 'TEFF_LIT' in fits_header.keys() and 'LOGG_LIT' in fits_header.keys() and 'FE_H_LIT' in fits_header.keys():
-        print('    --> Literature values for TEFF/LOGG/FE_H are: '+str(fits_header['TEFF_LIT'])+'/'+str(fits_header['LOGG_LIT'])+'/'+str(fits_header['FE_H_LIT']))
-        # If the star is a giant with TEFF < 5000 and LOGG < 3.5, use 'arcturus'
-        if fits_header['TEFF_LIT'] < 5000 and fits_header['LOGG_LIT'] < 3.5:
-            if fits_header['FE_H_LIT'] < -0.25:
-                closest_korg_spectrum = 'arcturus'
-                print('    --> Object is a metal-poor giant. Using Arcturus spectrum.')
-                return(closest_korg_spectrum)
-            else:
-                closest_korg_spectrum = 'hip28011'
-                print('    --> Object is a metal-richer giant. Using HIP28011 spectrum.')
-                return(closest_korg_spectrum)
-        elif fits_header['TEFF_LIT'] < 5000 and fits_header['LOGG_LIT'] >= 3.5:
-            closest_korg_spectrum = '61cyga'
-            print('    --> Object is a cool dwarf. Using 61 Cyg A spectrum.')
-            return(closest_korg_spectrum)
-        elif fits_header['FE_H_LIT'] < -0.25:
-            closest_korg_spectrum = 'hd22879'
-            print('    --> Object is metal-poor dwarf. Using HD22879 spectrum.')
-            return(closest_korg_spectrum)
-        else:
-            closest_korg_spectrum = 'sun'
-            print('    --> Object is a dwarf. Using Sun spectrum.')
-            return(closest_korg_spectrum)
-
-    # If we have no stellar parameters, let's use the absolute magnitude (if available).
-    plx_value = fits_header.get('PLX', None)
-    if plx_value is not None and plx_value != 'None':
-        if fits_header['PLX'] > 0:
-
-            print('    --> No stellar parameters, but parallax is '+str(fits_header['PLX'])+' mas.')
-
-            if 'G' in fits_header.keys():
-                absolute_mag = fits_header['G'] + 5 * np.log10(fits_header['PLX']/10)
-                print('    --> Object has no stellar parameters measured, but absolute M_G is '+"{:.1f}".format(absolute_mag))
-            elif 'V' in fits_header.keys():
-                absolute_mag = fits_header['V'] + 5 * np.log10(fits_header['PLX']/10)
-                print('    --> Object has no stellar parameters measured, but absolute M_V is '+"{:.1f}".format(absolute_mag))
-            else:
-                print('    --> Object has no stellar parameters measured, nor any magnitudes (although parallax available). Using Sun spectrum by default.')
-                closest_korg_spectrum = 'sun'
-                return(closest_korg_spectrum)
-
-            # Let's try to estimate a color. Assume color = 0.5 if none available
-            if 'V' in fits_header.keys() and 'R' in fits_header.keys(): color = fits_header['V'] - fits_header['R']
-            elif 'V' in fits_header.keys() and 'R' in fits_header.keys(): color = fits_header['V'] - fits_header['R']
-            else:
-                color = 0.5
-            
-            if absolute_mag < 8 and color > 1:
-                closest_korg_spectrum = 'hip28011'
-                print('    --> Object is likely giant based on magnitude (< 8 mag) and color  (> 1 mag). Using HIP28011 spectrum.')
-            elif absolute_mag >= 8 and color > 1:
-                closest_korg_spectrum = '61cyga'
-                print('    --> Object is likely cool dwarf based on magnitude (> 8 mag) and color (> 1 mag). Using 61 Cyg A spectrum.')
-            else:
-                closest_korg_spectrum = 'sun'
-                print('    --> Object is likely dwarf based on color. Using Sun spectrum.')
-        else:
-            closest_korg_spectrum = 'sun'
-            print('    --> Object has no stellar parameters nor absolute magnitude (parallax measurement is negative). Using Sun spectrum by default.')
-    else:
-        closest_korg_spectrum = 'sun'
-        print('    --> Object has neither stellar parameters nor parallax measurement. Using Sun spectrum by default.')
-
-    return(closest_korg_spectrum)
