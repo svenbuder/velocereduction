@@ -170,7 +170,10 @@ def test_find_closest_korg_spectrum():
 
 # Run the test function
 if __name__ == "__main__":
+    
+    print('\n  START Testing: VR.flux_comparison.py')
+    
     test_calculate_wavelength_coefficients_with_korg_synthesis()
-
     test_find_closest_korg_spectrum()
 
+    print('\n  DONE Testing: VR.flux_comparison.py')
