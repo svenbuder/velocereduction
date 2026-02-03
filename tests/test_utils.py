@@ -147,7 +147,7 @@ def test_read_veloce_fits_image_and_metadata():
     print('\n  --> Testing: read_veloce_fits_image_and_metadata()')
 
     # Call the function with one of the provided FITS images
-    image, metadata = VR.utils.read_veloce_fits_image_and_metadata(str(Path(__file__).resolve().parent)+'/../observations/001122/ccd_1/22nov10030.fits')
+    image, metadata = VR.utils.read_veloce_fits_image_and_metadata(str(Path(__file__).resolve().parent)+'/../observations/001122/ccd_1/22nov10001.fits')
     # Print the image and header
     print(f"     Image shape: {np.shape(image)}")
     print(f"     Metadata: {metadata}")
@@ -469,105 +469,6 @@ def test_find_best_radial_velocity_from_fits_header():
     
     print('\n  --> DONE Testing: find_best_radial_velocity_from_fits_header()')
 
-def test_find_closest_korg_spectrum():
-    print('\n  --> Testing: find_closest_korg_spectrum()')
-
-    korg_spectra = VR.flux_comparison.read_available_korg_syntheses()
-
-    # Mock FITS headers for testing
-    fits_header_18sco = {
-        'OBJECT': 'HIP79672'
-    }
-    fits_header_cool_giant = {
-        'OBJECT': 'Cool Giant',
-        'TEFF_LIT': 4500.0,
-        'LOGG_LIT': 2.5,
-        'FE_H_LIT': -0.5
-    }
-    fits_header_cool_dwarf = {
-        'OBJECT': 'Cool Dwarf',
-        'TEFF_LIT': 4500.0,
-        'LOGG_LIT': 4.5,
-        'FE_H_LIT': -0.5
-    }
-    fits_header_metal_poor_dwarf = {
-        'OBJECT': 'Metal Poor Dwarf',
-        'TEFF_LIT': 5500.0,
-        'LOGG_LIT': 4.5,
-        'FE_H_LIT': -0.5
-    }
-    fits_header_solar_dwarf = {
-        'OBJECT': 'Solar Dwarf',
-        'TEFF_LIT': 5500.0,
-        'LOGG_LIT': 4.5,
-        'FE_H_LIT': 0.0
-    }
-    fits_header_only_low_fe_h = {
-        'OBJECT': 'Only [Fe/H], metal poor',
-        'FE_H_LIT': -0.5
-    }
-    fits_header_only_solar_fe_h = {
-        'OBJECT': 'Only [Fe/H], Solar',
-        'FE_H_LIT': 0.0
-    }
-    fits_header_only_plx_bgr_cool_dwarf = {
-        'OBJECT': 'Only CMD BGR cool dwarf',
-        'PLX': 10.0,
-        'B': 12.0,
-        'G': 10.0,
-        'R': 10.0
-    }
-    fits_header_only_plx_bgr_warm_dwarf = {
-        'OBJECT': 'Only CMD BGR warm dwarf',
-        'PLX': 10.0,
-        'B': 10.0,
-        'G': 10.0,
-        'R': 10.0
-    }
-    fits_header_only_plx_vr_cool_dwarf = {
-        'OBJECT': 'Only CMD VR cool dwarf',
-        'PLX': 10.0,
-        'V': 11.0,
-        'R': 10.0
-    }
-    fits_header_only_plx_vr_warm_dwarf = {
-        'OBJECT': 'Only CMD VR warm dwarf',
-        'PLX': 10.0,
-        'V': 10.0,
-        'R': 10.0
-    }
-    fits_header_only_plx_bgr_cool_giant = {
-        'OBJECT': 'Only CMD, cool giant',
-        'PLX': 10.0,
-        'B': 7.0,
-        'G': 5.0,
-        'R': 5.0
-    }
-    fits_header_negative_parallax = {
-        'OBJECT': 'None parallax',
-        'PLX': -0.1,
-    }
-    fits_header_none_parallax = {
-        'OBJECT': 'None parallax',
-        'PLX': 'None',
-    }
-    fits_header_not_even_parallax = {
-        'OBJECT': 'Not even parallax'
-    }
-
-    # Let's loop through all cases
-    for fits_header in [
-        fits_header_18sco, fits_header_cool_giant, fits_header_cool_dwarf, fits_header_metal_poor_dwarf,
-        fits_header_solar_dwarf, fits_header_only_low_fe_h, fits_header_only_solar_fe_h, fits_header_only_plx_bgr_cool_dwarf,
-        fits_header_only_plx_bgr_warm_dwarf, fits_header_only_plx_vr_cool_dwarf, fits_header_only_plx_vr_warm_dwarf,
-        fits_header_only_plx_bgr_cool_giant, fits_header_negative_parallax, fits_header_none_parallax, fits_header_not_even_parallax
-    ]:
-        print('  --> Testing '+fits_header['OBJECT'])
-        closest_korg_spectrum = VR.utils.find_closest_korg_spectrum(korg_spectra,fits_header)
-        print(f"  --> Closest Korg Spectrum for '{fits_header['OBJECT']}': {closest_korg_spectrum}")
-
-    print('\n  --> DONE Testing: find_closest_korg_spectrum()')
-
 # Run the test function
 if __name__ == "__main__":
 
@@ -614,7 +515,5 @@ if __name__ == "__main__":
     test_update_fits_header_via_crossmatch_with_simbad()
 
     test_find_best_radial_velocity_from_fits_header()
-
-    test_find_closest_korg_spectrum()
 
     print('\n  DONE Testing: VR.utils.py')

@@ -6,7 +6,7 @@ def test_substract_overscan():
     print('\n  --> Testing: substract_overscan()')
 
     # Load the image to test
-    test_file = str(Path(__file__).resolve().parent)+'/../observations/001122/ccd_1/22nov10030.fits'
+    test_file = str(Path(__file__).resolve().parent)+'/../observations/001122/ccd_1/22nov10001.fits'
 
     full_image, metadata = VR.utils.read_veloce_fits_image_and_metadata(test_file)
 
@@ -60,7 +60,7 @@ def test_get_master_dark():
     VR.config.date = '001122'
     VR.config.working_directory = str(Path(__file__).resolve().parent)+'/../'
 
-    runs = ['0224']
+    runs = ['0011']
 
     print('      with archival=False')
     master_dark = VR.extraction.get_master_dark(runs)
@@ -79,9 +79,9 @@ def test_get_tellurics_from_bstar():
     VR.config.working_directory = str(Path(__file__).resolve().parent)+'/../'
 
     calibration_runs = {
-        'Flat_60.0': ['0030'],
-        'Flat_1.0': ['0016'],
-        'Flat_0.1': ['0009'],
+        'Flat_60.0': ['0008'],
+        'Flat_1.0': ['0009'],
+        'Flat_0.1': ['0010'],
         'Bstar': {'18:57:01': ['127972', '0154', '18:57:01']}
     }
 
@@ -112,9 +112,9 @@ def test_extract_orders_Flat():
     VR.config.working_directory = str(Path(__file__).resolve().parent)+'/../'
 
     calibration_runs = {
-        'Flat_60.0': ['0030'],
-        'Flat_1.0': ['0016'],
-        'Flat_0.1': ['0009']
+        'Flat_60.0': ['0008'],
+        'Flat_1.0': ['0009'],
+        'Flat_0.1': ['0010']
     }
 
     print('\n      --> Testing with update_tramlines_based_on_flat=True & debug_rows=True')
@@ -174,9 +174,9 @@ def test_extract_orders_ThXe():
     VR.config.working_directory = str(Path(__file__).resolve().parent)+'/../'
 
     calibration_runs = {
-        'FibTh_180.0': ['0047'],
-        'FibTh_60.0': ['0042'],
-        'FibTh_15.0': ['0037']
+        'FibTh_180.0': ['0004'],
+        'FibTh_60.0': ['0005'],
+        'FibTh_15.0': ['0006']
     }
 
     print('\n     --> Testing with debug_tramlines=True')
@@ -197,9 +197,9 @@ def test_extract_orders_LC():
     VR.config.working_directory = str(Path(__file__).resolve().parent)+'/../'
 
     calibration_runs = {
-        'SimLC': ['0159'],
-        'SimLC': ['0159'],
-        'SimLC': ['0159']
+        'SimLC': ['0007'],
+        'SimLC': ['0007'],
+        'SimLC': ['0007']
     }
 
     print('\n     --> Testing with debug_tramlines=True')
@@ -256,9 +256,9 @@ def test_extract_orders_ValueErrors():
     VR.config.working_directory = str(Path(__file__).resolve().parent)+'/../'
 
     calibration_runs = {
-        'FibTh_180.0': ['0047'],
-        'FibTh_60.0': ['0042'],
-        'FibTh_15.0': ['0037']
+        'FibTh_180.0': ['0004'],
+        'FibTh_60.0': ['0005'],
+        'FibTh_15.0': ['0006']
     }
 
     print('     --> Testing ValueError with neither Flat nor LC nor Bstar nor Science nor ThXe')
