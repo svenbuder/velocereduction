@@ -38,6 +38,7 @@ def test_optimise_wavelength_solution_with_laser_comb():
 
 # Run the test function
 if __name__ == "__main__":
-    test_calibrate_wavelength()
-    test_fit_thxe_polynomial_coefficients()
-    test_optimise_wavelength_solution_with_laser_comb()
+    pass
+    # test_calibrate_wavelength()
+    # test_fit_thxe_polynomial_coefficients()
+    # test_optimise_wavelength_solution_with_laser_comb()

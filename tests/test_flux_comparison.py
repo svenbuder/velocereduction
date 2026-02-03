@@ -17,7 +17,7 @@ def test_calculate_wavelength_coefficients_with_korg_synthesis():
     with fits.open(VR.config.working_directory+'reduced_data/'+VR.config.date+'/'+science_object+'/veloce_spectra_'+science_object+'_'+VR.config.date+'.fits', mode='update') as veloce_fits_file:
 
         # Find the closest match based on (possibly available) literature TEFF/LOGG/FE_H
-        closest_korg_spectrum = VR.utils.find_closest_korg_spectrum(
+        closest_korg_spectrum = VR.flux_comparison.find_closest_korg_spectrum(
             available_korg_spectra = korg_spectra,
             fits_header = veloce_fits_file[0].header,
         )
@@ -163,7 +163,7 @@ def test_find_closest_korg_spectrum():
         fits_header_only_plx_bgr_cool_giant, fits_header_negative_parallax, fits_header_none_parallax, fits_header_not_even_parallax
     ]:
         print('  --> Testing '+fits_header['OBJECT'])
-        closest_korg_spectrum = VR.utils.find_closest_korg_spectrum(korg_spectra,fits_header)
+        closest_korg_spectrum = VR.flux_comparison.find_closest_korg_spectrum(korg_spectra,fits_header)
         print(f"  --> Closest Korg Spectrum for '{fits_header['OBJECT']}': {closest_korg_spectrum}")
 
     print('\n  --> DONE Testing: find_closest_korg_spectrum()')

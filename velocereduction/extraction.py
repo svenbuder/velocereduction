@@ -907,7 +907,7 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
         # Prepare to the flux from each tramlines in a row; give NaN values to regions without flux
         order_counts = np.zeros(np.shape(images['ccd_'+str(ccd)])[1]); order_counts[:] = np.nan
         if Science:
-            order_noise = np.zeros(np.shape(images_noise['ccd_'+str(ccd)])[1]); order_noise[:] = np.nan
+            order_noise = np.zeros(np.shape(images['ccd_'+str(ccd)])[1]); order_noise[:] = np.nan
 
         # We will never have flux in LC mode on CCD1, so we can just assume 0 counts and continue after the orders of CCD1.
         if LC & (ccd == '1'):

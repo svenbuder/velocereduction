@@ -286,22 +286,22 @@ def test_extract_orders_ValueErrors():
 # Run the test function
 if __name__ == "__main__":
 
-    test_substract_overscan()
+    # test_substract_overscan()
 
-    test_read_in_order_tramlines_tinney()
+    # test_read_in_order_tramlines_tinney()
 
-    test_read_in_order_tramlines()
+    # test_read_in_order_tramlines()
 
-    test_get_master_dark()
+    # test_get_master_dark()
 
-    test_get_tellurics_from_bstar()
+    # test_get_tellurics_from_bstar()
 
-    test_extract_orders_Flat()
+    # test_extract_orders_Flat()
 
-    test_extract_orders_ThXe()
+    # test_extract_orders_ThXe()
 
-    test_extract_orders_LC()
+    # test_extract_orders_LC()
 
     test_extract_order_Science()
 
-    test_extract_orders_ValueErrors()
+    # test_extract_orders_ValueErrors()
