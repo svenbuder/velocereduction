@@ -38,6 +38,11 @@ def test_optimise_wavelength_solution_with_laser_comb():
 
 # Run the test function
 if __name__ == "__main__":
+    
+    print('\n  START Testing: VR.calibration.py')
+
     test_calibrate_wavelength()
     test_fit_thxe_polynomial_coefficients()
     test_optimise_wavelength_solution_with_laser_comb()
+
+    print('\n  DONE Testing: VR.calibration.py')

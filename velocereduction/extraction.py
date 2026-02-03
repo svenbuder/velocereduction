@@ -723,9 +723,13 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
                     use_this_image = False
 
             # Apply flat-field correction
-            if (not Flat) & (master_flat_images is not None):
+            if not Flat:
 
-                F = master_flat_images['ccd_'+str(ccd)]
+                # Use unit Flat if no master_flat provided
+                if master_flat_images is None:
+                    F = np.ones(np.shape(trimmed_image),dtype=float)
+                else:
+                    F = master_flat_images['ccd_'+str(ccd)]
                 S = trimmed_image.astype(np.float64)
 
                 # Calculate noise for the Science frames:
@@ -736,7 +740,7 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
                     rn = np.max([os_rms[q] for q in os_rms.keys()])
                     V_S = S + rn**2
 
-                    # Flat-field correct the variance
+                    # Flat-field correct the science image variance
                     images_noise['ccd_'+str(ccd)].append(V_S / (F**2))
 
                 # Flat-field correct the image
@@ -907,7 +911,7 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
         # Prepare to the flux from each tramlines in a row; give NaN values to regions without flux
         order_counts = np.zeros(np.shape(images['ccd_'+str(ccd)])[1]); order_counts[:] = np.nan
         if Science:
-            order_noise = np.zeros(np.shape(images_noise['ccd_'+str(ccd)])[1]); order_noise[:] = np.nan
+            order_noise = np.zeros(np.shape(images['ccd_'+str(ccd)])[1]); order_noise[:] = np.nan
 
         # We will never have flux in LC mode on CCD1, so we can just assume 0 counts and continue after the orders of CCD1.
         if LC & (ccd == '1'):

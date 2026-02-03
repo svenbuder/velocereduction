@@ -9,6 +9,7 @@ setup(
         "scipy",
         "matplotlib",
         "astroquery>=0.4.8",
+        "scikit-image",
         "pytest",
         "pytest-cov",
     ],
