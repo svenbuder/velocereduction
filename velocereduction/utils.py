@@ -29,24 +29,24 @@ from astropy.coordinates import SkyCoord, EarthLocation
 import astropy.units as u
 SSO = EarthLocation.of_site('Siding Spring Observatory')
 
-# Astroquery package
-from astroquery.simbad import Simbad
-# Astroquery just for identifier
-simbad_simple = Simbad()
-# Astroquery for different identifiers, radial velocity, and parallax
-simbad_ids_vrad_plx_query = Simbad()
-simbad_ids_vrad_plx_query.add_votable_fields('ids')
-simbad_ids_vrad_plx_query.add_votable_fields('velocity')
-simbad_ids_vrad_plx_query.add_votable_fields('parallax')
-# Astroquery for Fe/H and magnitudes
-simbad_fe_h_query = Simbad()
-simbad_fe_h_query.add_votable_fields('mesfe_h')
-# Astroquery for B, V, G, R magnitudes
-simbad_magnitudes_query = Simbad()
-simbad_magnitudes_query.add_votable_fields('B')
-simbad_magnitudes_query.add_votable_fields('V')
-simbad_magnitudes_query.add_votable_fields('G')
-simbad_magnitudes_query.add_votable_fields('R')
+# # Astroquery package
+# from astroquery.simbad import Simbad
+# # Astroquery just for identifier
+# simbad_simple = Simbad()
+# # Astroquery for different identifiers, radial velocity, and parallax
+# simbad_ids_vrad_plx_query = Simbad()
+# simbad_ids_vrad_plx_query.add_votable_fields('ids')
+# simbad_ids_vrad_plx_query.add_votable_fields('velocity')
+# simbad_ids_vrad_plx_query.add_votable_fields('parallax')
+# # Astroquery for Fe/H and magnitudes
+# simbad_fe_h_query = Simbad()
+# simbad_fe_h_query.add_votable_fields('mesfe_h')
+# # Astroquery for B, V, G, R magnitudes
+# simbad_magnitudes_query = Simbad()
+# simbad_magnitudes_query.add_votable_fields('B')
+# simbad_magnitudes_query.add_votable_fields('V')
+# simbad_magnitudes_query.add_votable_fields('G')
+# simbad_magnitudes_query.add_votable_fields('R')
 
 def phase_correlation_shift(reference_image, moving_image, upsample_factor = 100):
     """
@@ -558,9 +558,10 @@ def read_in_wavelength_solution_coefficients_tinney():
     """
     Reads wavelength solution coefficients by C. Tinney from predefined vdarc* files.
 
+    In original files, Azzurro and Verde are in air and Rosso in vacuum.
     Reference pixels (DYO) are defined for Verde and Rosso, and assumed to be 2450 for Azzurro.
     
-    For consistency, the function is reevaluated for reference pixel 2048
+    For consistency, the function is converted to vacuum and reevaluated for reference pixel 2048
 
     Returns:
         dict: A dictionary containing wavelength solution coefficients for each CCD and spectral order.
@@ -570,10 +571,12 @@ def read_in_wavelength_solution_coefficients_tinney():
     
     wavelength_solution_coefficients_tinney = dict()
 
+    pixel_array = np.arange(4096)-2048
+
     for ccd in [1,2,3]:
-        if ccd == 1: vdarc_file = Path(__file__).resolve().parent / 'veloce_reference_data' / 'vdarc_azzurro_230915.txt'
-        if ccd == 2: vdarc_file = Path(__file__).resolve().parent / 'veloce_reference_data' / 'vdarc_verde_230920.txt'
-        if ccd == 3: vdarc_file = Path(__file__).resolve().parent / 'veloce_reference_data' / 'vdarc_rosso_230919.txt'
+        if ccd == 1: vdarc_file = Path(__file__).resolve().parent / 'veloce_reference_data' / 'vdarc_azzurro_230915.txt' # in air
+        if ccd == 2: vdarc_file = Path(__file__).resolve().parent / 'veloce_reference_data' / 'vdarc_verde_230920.txt' # in air
+        if ccd == 3: vdarc_file = Path(__file__).resolve().parent / 'veloce_reference_data' / 'vdarc_rosso_230919.txt' # in vacuum
 
         with open(vdarc_file, "r") as vdarc:
             vdarc_text = vdarc.read().split('\n')
@@ -600,9 +603,25 @@ def read_in_wavelength_solution_coefficients_tinney():
 
                 coeffs_wrt_2048 = np.polyfit(dx_new, lam, len(coeffs)-1)[::-1]  # reverse to get d0..d5
 
-                # np.savetxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_ccd_{ccd}_order_{order}_tinney.txt',coeffs_wrt_2048)
-
                 wavelength_solution_coefficients_tinney['ccd_'+str(ccd)+'_order_'+order] = np.concatenate((coeffs_wrt_2048, [DYO]))
+                
+                # convert native air of CCDs 1 and 2 to vacuum (to be consistent with CCD3 and LC etc.)    
+                if ccd in [1,2]:
+                    wavelengths_native_tinney = polynomial_function(pixel_array, *coeffs_wrt_2048)*10
+                    wavelengths_vacuum = wavelength_air_to_vac(wavelengths_native_tinney)
+
+                    thxe_coefficients_vacuum, _ = curve_fit(
+                        polynomial_function,
+                        pixel_array,
+                        wavelengths_vacuum/10.,
+                        p0=coeffs_wrt_2048
+                    )
+                    wavelength_solution_coefficients_tinney['ccd_'+str(ccd)+'_order_'+order] = np.concatenate((thxe_coefficients_vacuum, [DYO]))
+                else:
+                    thxe_coefficients_vacuum = coeffs_wrt_2048
+
+                # In case the ThXe reference files have to be overwritten, uncomment the line below.
+                # np.savetxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / 'wavelength_coefficients_'+'ccd_'+str(ccd)+'_order_'+order+'_thxe.txt',thxe_coefficients_vacuum)
 
     return(wavelength_solution_coefficients_tinney)
 
