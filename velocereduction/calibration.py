@@ -592,11 +592,9 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, ov
                 label = 'LC Wavelength Solution'
             )
 
-            # Tinney Wavelength Solution - now shifted from Tinney reference pixel (mostly 2450) to central pixel (2048)
+            # Tinney Wavelength Solution - shifted from its native DYO to 2048 and ensuring CCD1+2 are in vacuum
             coeffs_tinney = read_in_wavelength_solution_coefficients_tinney()
             wavelength_tinney = polynomial_function(np.arange(len(lc_pixel_values))-central_pixel,*coeffs_tinney[order_name][:-1])*10
-            if order_name[4] == '2': wavelength_tinney = wavelength_air_to_vac(wavelength_tinney)
-
             gs[1].plot(
                 np.arange(len(lc_pixel_values)),
                 wavelength_tinney -
@@ -1171,7 +1169,7 @@ def fit_thxe_polynomial_coefficients(debug=False):
         # Fit a polynomial function to pixel and wavelength data
         thxe_coefficients, _ = curve_fit(
             polynomial_function,
-            thxe_pixels_and_wavelengths[:,0] - 2064,
+            thxe_pixels_and_wavelengths[:,0] - 2048,
             thxe_pixels_and_wavelengths[:,1],
             p0=initial_wavelength_coefficients,
             bounds = bounds
