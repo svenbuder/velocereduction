@@ -8,6 +8,9 @@ from scipy.signal import find_peaks
 from scipy.integrate import quad
 from astropy.io import fits
 
+# from astropy.table import Table
+# import pickle
+
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
@@ -1179,3 +1182,89 @@ def fit_thxe_polynomial_coefficients(debug=False):
 
         # Save the fitted polynomial coefficients to a text file
         np.savetxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_{order}_thxe.txt', thxe_coefficients)
+
+# def compare_wavelength_solutions():
+#     """
+#     Read in Th NIST linelist and ThAr Atlas from Murphy et al. (2007) and compare with available wavelength solutions (tinney, thxe, lc, korg?)
+#     """
+
+#     # ThAr atlas from Murphy et al. (2007)
+#     dtype = [
+#         ("wavenumber", float),
+#         ("wave_air", float),
+#         ("log10_intensity", float),
+#         ("element", "U10"),
+#         ("ion", "U10"),
+#         ("source", "U2"),
+#     ]
+#     thar_lines = Table(np.genfromtxt(
+#         Path(__file__).resolve().parent / 'veloce_reference_data' / 'thar_UVES_MM090311.dat',
+#         dtype=dtype,
+#         comments="#",
+#         autostrip=True
+#     ))
+#     thar_lines['wave_vac'] = wavelength_air_to_vac(thar_lines['wave_air'])
+
+#     delta_wavelength = 0.05
+#     thar_lines_fine = dict()
+#     thar_lines_fine['wave_vac'] = np.arange(thar_lines['wave_vac'][0], thar_lines['wave_vac'][-1]+delta_wavelength, delta_wavelength)
+#     thar_lines_fine['wave_air'] = wavelength_vac_to_air(thar_lines_fine['wave_vac'])
+#     thar_lines_fine['intensity'] = np.zeros(len(thar_lines_fine['wave_vac']))
+#     for index in range(len(thar_lines_fine['wave_vac'])):
+#         thar_line_in_range = np.where((thar_lines['wave_vac']-0.5*delta_wavelength < thar_lines_fine['wave_vac'][index]) & (thar_lines_fine['wave_vac'][index] < thar_lines['wave_vac']+0.5*delta_wavelength))[0]
+#         if len(thar_line_in_range) > 0:
+#             thar_lines_fine['intensity'][index] = np.mean(10**thar_lines['log10_intensity'][thar_line_in_range])
+
+#     nist_th_file = Path(__file__).resolve().parent / 'veloce_reference_data' / 'th_linelist_NIST.pickle'
+#     with open(nist_th_file, 'rb') as f:
+#         atomic_data_dict = pickle.load(f)
+#     th_lines = dict()
+#     th_lines['wave_air']  = atomic_data_dict['linelist']['obs_wl_air(nm)']*10
+#     th_lines['wave_vac']  = wavelength_air_to_vac(atomic_data_dict['linelist']['obs_wl_air(nm)']*10)
+#     th_lines['intensity'] = atomic_data_dict['linelist']['intens']
+
+#     delta_wavelength = 0.05
+#     th_lines_fine = dict()
+#     th_lines_fine['wave_vac'] = np.arange(th_lines['wave_vac'][0], th_lines['wave_vac'][-1]+delta_wavelength, delta_wavelength)
+#     th_lines_fine['wave_air'] = wavelength_vac_to_air(th_lines_fine['wave_vac'])
+#     th_lines_fine['intensity'] = np.zeros(len(th_lines_fine['wave_vac']))
+#     for index in range(len(th_lines_fine['wave_vac'])):
+#         th_line_in_range = np.where((th_lines['wave_vac']-0.5*delta_wavelength < th_lines_fine['wave_vac'][index]) & (th_lines_fine['wave_vac'][index] < th_lines['wave_vac']+0.5*delta_wavelength))[0]
+#         if len(th_line_in_range) > 0:
+#             th_lines_fine['intensity'][index] = np.mean(th_lines['intensity'][th_line_in_range])
+
+#     # Plot ThXe with solutions for 
+#     coeffs_tinney = read_in_wavelength_solution_coefficients_tinney()
+#     with fits.open(Path(__file__).resolve().parent / 'reduced_data/001122/HIP56343_0113/veloce_spectra_HIP56343_0113_001122.fits') as file:
+#         for index in range(1,len(file)):
+#             order_name = file[index].header['EXTNAME'].lower()
+
+#             pixel_array = np.arange(4096)-2048
+
+#             wavelength_solutions = dict()
+#             wavelength_solutions['tinney'] = polynomial_function(pixel_array, *coeffs_tinney[order_name][:-1])*10
+
+#             for source in ['thxe','lc','korg']:
+#                 try:
+#                     coefficients_source = np.loadtxt(Path(__file__).resolve().parent / 'velocereduction' / 'wavelength_coefficients' / 'wavelength_coefficients_'+order_name+'_'+source+'.txt')
+#                     wavelength_solutions[source] = polynomial_function(pixel_array, *coefficients_source)*10
+#                 except:
+#                     pass
+
+#             f, ax = plt.subplots(1,1,figsize=(20,5))
+            
+#             th_lines_in_order = (th_lines_fine['wave_vac'] > wavelength_solutions['tinney'][0]) & (th_lines_fine['wave_vac'] < wavelength_solutions['tinney'][-1])
+#             thar_lines_in_order = (thar_lines_fine['wave_vac'] > wavelength_solutions['tinney'][0]) & (thar_lines_fine['wave_vac'] < wavelength_solutions['tinney'][-1])
+
+#             ax.plot(th_lines_fine['wave_vac'][th_lines_in_order]/10, -th_lines_fine['intensity'][th_lines_in_order] / np.max(th_lines_fine['intensity'][th_lines_in_order]), lw = 0.5, label = 'Flipped Th NIST')    
+#             ax.plot(thar_lines_fine['wave_vac'][thar_lines_in_order]/10, -thar_lines_fine['intensity'][thar_lines_in_order] / np.max(thar_lines_fine['intensity'][thar_lines_in_order]) - 0.1, lw = 0.5, label = 'Flipped ThAr Murphy - 0.25')    
+#             for source_index, source in enumerate(wavelength_solutions.keys()):
+#                 ax.plot(wavelength_solutions[source]/10, file[index].data['thxe'] / np.max(file[index].data['thxe']) + 0.1*source_index, lw = 0.5, label = 'Wavelength '+source)
+#                 ax.set_title(order_name+' from '+source, fontsize=15)
+#                 ax.set_xlabel('Wavelength $\lambda_\mathrm{vac}~/~\mathrm{\AA}$',fontsize=15)
+#                 ax.set_ylabel('Norm. Intensity', fontsize=15)
+#                 ax.legend(loc = 'upper left')
+                
+#             plt.tight_layout()
+#             plt.show()
+#             plt.close()
