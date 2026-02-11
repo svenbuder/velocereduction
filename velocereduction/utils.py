@@ -724,10 +724,10 @@ def monitor_vrad_for_repeat_observations(date, repeated_observations):
 
             if len(finite_vrad) > 1:
 
-                # Limit to finite values
-                utmjd = utmjd[finite_vrad]
-                vrad = vrad[finite_vrad]
-                e_vrad = e_vrad[finite_vrad]
+                # Limit to finite float values (aka not 'None')
+                utmjd = np.array(utmjd[finite_vrad], dtype=float)
+                vrad = np.array(vrad[finite_vrad], dtype=float)
+                e_vrad = np.array(e_vrad[finite_vrad], dtype=float)
 
                 # Plot the RV measurements
                 f, ax = plt.subplots()
