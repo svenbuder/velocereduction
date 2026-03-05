@@ -433,13 +433,17 @@ def identify_calibration_and_science_runs(date, raw_data_dir, each_science_run_s
                 elif run_object == 'BiasFrame':
                     calibration_runs['Bias'].append(run)
                 elif run_object == 'FlatField-Quartz':
-                    calibration_runs['Flat_'+exposure_time].append(run)
+                    if 'Flat_'+exposure_time in calibration_runs.keys():
+                        calibration_runs['Flat_'+exposure_time].append(run)
                 elif run_object == 'ARC-ThAr':
-                    calibration_runs['FibTh_'+exposure_time].append(run)
+                    if 'FibTh_'+exposure_time in calibration_runs.keys():
+                        calibration_runs['FibTh_'+exposure_time].append(run)
                 elif run_object == 'SimThLong':
-                    calibration_runs['SimTh_'+exposure_time].append(run)
+                    if 'SimTh_'+exposure_time in calibration_runs.keys():
+                        calibration_runs['SimTh_'+exposure_time].append(run)
                 elif run_object == 'SimTh':
-                    calibration_runs['SimTh_'+exposure_time].append(run)
+                    if 'SimTh_'+exposure_time in calibration_runs.keys():
+                        calibration_runs['SimTh_'+exposure_time].append(run)
                 elif run_object == 'Acquire':
                     pass
                 elif run_object == 'DarkFrame':
