@@ -190,11 +190,11 @@ def estimate_ccd_pixel_shifts_wrt_reference(calibration_runs):
         pixel_shift_x = []
         pixel_shift_y = []
 
+        # Which calibrations of the reference night will we actually use?
         if ccd == 1:
             calibrations_to_compare = [
                 ['SimTh_180.0','0001'],
                 # ['FibTh_180.0','0004']
-                
             ]
         elif ccd == 2:
             calibrations_to_compare = [
@@ -545,7 +545,31 @@ def get_tellurics_from_bstar(bstar_information, master_flat_images, debug=False)
     telluric_flux_in_orders = convert_bstar_to_telluric(bstar_flux_in_orders, debug=debug)
 
     return(telluric_flux_in_orders, metadata['UTMJD'])
-    
+
+def shift_polynomial_xy(coeffs, dx=0.0, dy=0.0):
+    """
+    Shift a polynomial x(y) by CCD offsets:
+        x_new(y) = x_old(y - dy) + dx
+
+    Parameters
+    ----------
+    coeffs : array-like
+        Polynomial coefficients in ascending order:
+        [a0, a1, a2, ...] for a0 + a1*y + a2*y**2 + ...
+    dx : float
+        Shift in x direction.
+    dy : float
+        Shift in y direction.
+
+    Returns
+    -------
+    np.ndarray
+        Shifted coefficients in ascending order.
+    """
+    p = np.polynomial.Polynomial(coeffs)         # p(y)
+    y_shifted = np.polynomial.Polynomial([-dy, 1.0])   # (y - dy)
+    p_new = p(y_shifted) + dx      # p(y - dy) + dx
+    return np.array(p_new.coef, dtype=float)
 
 def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlines_based_on_flat = False, LC = False, Bstar = False, Science = False, ThXe = False, master_darks = None, master_flat_images = None, pixel_shifts = None, exposure_time_threshold_darks = 300, use_tinney_ranges = False, debug_tramlines = False, debug_rows = False, debug_overscan=False):
     """
@@ -607,24 +631,25 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
             pixel_shifts['ccd_'+str(ccd)] = (0.0,0.0)
 
     # Apply significant pixel shifts to tramline x-constant and expected y-position
-    pixels_for_tramline_extraction = dict()
     for ccd in [1,2,3]:
-        pixels_for_tramline_extraction['ccd_'+str(ccd)] = np.arange(4096,dtype=float)
+        dx, dy = pixel_shifts[f'ccd_{ccd}']
 
-        # X-position
-        if np.abs(pixel_shifts['ccd_'+str(ccd)][0]) > 0.1:
+        if np.hypot(dx, dy) > 0.1:
             if Flat:
-                print(f'  --> Applying pixel shift dX={pixel_shifts["ccd_"+str(ccd)][0]:+.2f} for tramline positions for CCD'+str(ccd)+' (and will do so for all extractions!)')
+                print(
+                    f'  --> Applying pixel shift dX={dx:+.2f}, dY={dy:+.2f} '
+                    f'for tramline positions for CCD{ccd} '
+                    f'(and will do so for all extractions!)'
+                )
+
             for order in list(order_beginning_coeffs):
                 if order[4] == str(ccd):
-                    order_beginning_coeffs[order][0] += pixel_shifts['ccd_'+str(ccd)][0]
-                    order_ending_coeffs[order][0]    += pixel_shifts['ccd_'+str(ccd)][0]
-
-        # Y-position
-        if np.abs(pixel_shifts['ccd_'+str(ccd)][1]) > 0.1:
-            if Flat:
-                print(f'  --> Applying pixel shift dY={pixel_shifts["ccd_"+str(ccd)][1]:+.2f} for tramline positions for CCD'+str(ccd)+' (and will do so for all extractions!)')
-            pixels_for_tramline_extraction['ccd_'+str(ccd)] += pixel_shifts['ccd_'+str(ccd)][1]
+                    order_beginning_coeffs[order] = shift_polynomial_xy(
+                        order_beginning_coeffs[order], dx=dx, dy=dy
+                    )
+                    order_ending_coeffs[order] = shift_polynomial_xy(
+                        order_ending_coeffs[order], dx=dx, dy=dy
+                    )
 
     # Extract Images from CCDs 1-3
     images = dict()
@@ -793,7 +818,7 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
                             order_ranges = order_ranges,
                             order_beginning_coeffs = order_beginning_coeffs,
                             order_ending_coeffs = order_ending_coeffs,
-                            order_pixels = pixels_for_tramline_extraction['ccd_'+str(ccd)],
+                            order_pixels = np.arange(4096,dtype=float),
                             overwrite = False,
                             debug = debug_rows
                         )
@@ -854,8 +879,8 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
 
                 # Limit to width around center for visualisation with height of *width_around_center* pixels and populate a 2D array for imshow
                 width_around_center = 70
-                order_xrange_begin = np.array(polynomial_function(pixels_for_tramline_extraction['ccd_'+str(ccd)],*order_beginning_coeffs[order])-1)
-                order_xrange_end   = np.array(polynomial_function(pixels_for_tramline_extraction['ccd_'+str(ccd)],*order_ending_coeffs[order])+1)
+                order_xrange_begin = np.array(polynomial_function(np.arange(4096,dtype=float),*order_beginning_coeffs[order])-1)
+                order_xrange_end   = np.array(polynomial_function(np.arange(4096,dtype=float),*order_ending_coeffs[order])+1)
 
                 # If we are using the LC, use the few pixels around the LC position
                 if LC:
@@ -868,8 +893,8 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
                     if ccd == '3':
                         offset_begin = 8 + pixel_shifts['ccd_'+str(ccd)][0]
                         offset_end = 12 + pixel_shifts['ccd_'+str(ccd)][0]
-                    order_xrange_begin = np.array(polynomial_function(pixels_for_tramline_extraction['ccd_'+str(ccd)],*order_ending_coeffs[order])+offset_begin)
-                    order_xrange_end   = np.array(polynomial_function(pixels_for_tramline_extraction['ccd_'+str(ccd)],*order_ending_coeffs[order])+offset_end)
+                    order_xrange_begin = np.array(polynomial_function(np.arange(4096,dtype=float),*order_ending_coeffs[order])+offset_begin)
+                    order_xrange_end   = np.array(polynomial_function(np.arange(4096,dtype=float),*order_ending_coeffs[order])+offset_end)
                 
                 order_xrange_center = np.array((order_xrange_begin + order_xrange_end) / 2,dtype=int)
                 debug_order_range_begin = (order_xrange_center - width_around_center // 2).clip(min=0,max=4096)
@@ -919,8 +944,8 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
             counts_in_orders.append(order_counts)
             continue
 
-        order_xrange_begin = np.array(polynomial_function(pixels_for_tramline_extraction['ccd_'+str(ccd)],*order_beginning_coeffs[order])-1,dtype=int)
-        order_xrange_end   = np.array(polynomial_function(pixels_for_tramline_extraction['ccd_'+str(ccd)],*order_ending_coeffs[order])+1,dtype=int)
+        order_xrange_begin = np.array(polynomial_function(np.arange(4096,dtype=float),*order_beginning_coeffs[order])-1,dtype=int)
+        order_xrange_end   = np.array(polynomial_function(np.arange(4096,dtype=float),*order_ending_coeffs[order])+1,dtype=int)
 
         # The SimLC position is slightly different for CCD2 and CCD3.
         if LC:
@@ -931,8 +956,8 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
             if ccd == '3':
                 offset_begin = 8 + pixel_shifts['ccd_'+str(ccd)][0]
                 offset_end = 12 + pixel_shifts['ccd_'+str(ccd)][0]
-            order_xrange_begin = np.array(polynomial_function(pixels_for_tramline_extraction['ccd_'+str(ccd)],*order_ending_coeffs[order])+offset_begin,dtype=int)
-            order_xrange_end   = np.array(polynomial_function(pixels_for_tramline_extraction['ccd_'+str(ccd)],*order_ending_coeffs[order])+offset_end,dtype=int)
+            order_xrange_begin = np.array(polynomial_function(np.arange(4096,dtype=float),*order_ending_coeffs[order])+offset_begin,dtype=int)
+            order_xrange_end   = np.array(polynomial_function(np.arange(4096,dtype=float),*order_ending_coeffs[order])+offset_end,dtype=int)
 
         if debug_tramlines | (update_tramlines_based_on_flat & Flat):
             if order == list(order_beginning_coeffs.keys())[0]:

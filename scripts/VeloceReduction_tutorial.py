@@ -73,6 +73,10 @@ def get_script_input():
 
         # jupyter_date = "250706" # significant dX (-8.8) and dY (+2.8) in some CCDs wrt reference night
 
+        # jupyter_date = "231221"
+
+        # jupyter_date = "250217"
+
         jupyter_working_directory = "../"
         print("Running in a Jupyter notebook. Using predefined values")
         args = argparse.Namespace(date=jupyter_date, working_directory=jupyter_working_directory)
@@ -118,8 +122,6 @@ calibration_runs, science_runs = VR.utils.identify_calibration_and_science_runs(
 # Estimate the pixel shifts in x and y for each CCD with respect to the reference frames
 if config.date == "001122":
     ccd_pixel_shifts_wrt_reference = {'ccd_1': (0.0, 0.0), 'ccd_2': (0.0, 0.0), 'ccd_3': (0.0, 0.0)}
-elif config.date == "250706":
-    ccd_pixel_shifts_wrt_reference = {'ccd_1': (-6.14, +1.12), 'ccd_2': (-8.68, +2.65), 'ccd_3': (+2.62, +0.06)} # <-- Correct shift!
 else:
     ccd_pixel_shifts_wrt_reference = VR.extraction.estimate_ccd_pixel_shifts_wrt_reference(calibration_runs)
 
@@ -164,6 +166,7 @@ if len(calibration_runs['SimLC']) > 0:
         ccd3_runs = calibration_runs['SimLC'],
         LC = True,
         master_flat_images = master_flat_images,
+        pixel_shifts = ccd_pixel_shifts_wrt_reference,
         debug_tramlines = False # Plots saved  at reduced_data/YYMMDD/_tramline_information/
     )
 else:
@@ -209,6 +212,7 @@ for science_object in list(science_runs.keys()):
             Science=True,
             master_darks = master_darks, # These are needed to subtract the dark current
             master_flat_images = master_flat_images, # These are needed for flat-field correction
+            pixel_shifts = ccd_pixel_shifts_wrt_reference,
             debug_tramlines = False # Plots saved  at reduced_data/YYMMDD/_tramline_information/
         )
 
@@ -283,6 +287,7 @@ for science_object in list(science_runs.keys()):
     try:
         VR.calibration.calibrate_wavelength(
             science_object,
+            pixel_shifts = ccd_pixel_shifts_wrt_reference,
             optimise_lc_solution=False,
             correct_barycentric_velocity=True,
             create_overview_pdf=False,
@@ -291,6 +296,42 @@ for science_object in list(science_runs.keys()):
         print('  -> Succesfully calibrated wavelength with diagnostic plots for '+science_object+'\n')
     except:
         print('  -> Failed to calibrate wavelength for '+science_object+'\n')
+
+
+# ### Optimise wavelength solution with SimLC
+
+# In[ ]:
+
+
+# # Try to optimise SimLC solution for each order
+# order_ranges, _, _ = VR.extraction.read_in_order_tramlines()
+# order_names = list(order_ranges.keys())
+
+# fitted_simlc_wavelength_solution_and_rms_velocity = dict()
+
+# for order_index, order_name in enumerate(order_names):
+
+#     simlc_coeffs = [np.nan,np.nan,np.nan,np.nan,np.nan,np.nan]
+#     simlc_rms_velocity = -1.0
+
+#     if (
+#             # We can use all orders of CCD3
+#             (order_name[4] == '3') |
+#             # and the orders of CCD2 order 103-134 (135-150 do not have enough LC peaks!)
+#             # Let's use the last 2 digits to avoid warnings, because not all of CCD3 are > 100 (but all of CCD2).
+#             ((order_name[4] == '2') & (int(order_name[-2:]) >= 3) & (int(order_name[-2:]) <= 34))
+#         ):
+
+#         print('Optimising wavelength solution with SimLC for '+order_name)
+
+#         simlc_coeffs, _, simlc_rms_velocity = VR.calibration.optimise_wavelength_solution_with_laser_comb(
+#             order_name = order_name,
+#             lc_pixel_values = master_lc[order_index,:],
+#             # rejection = 'auto',
+#             # debug=True,
+#         )
+#     fitted_simlc_wavelength_solution_and_rms_velocity[order_name] = np.concatenate((simlc_coeffs,[simlc_rms_velocity]))
+# fitted_simlc_wavelength_solution_and_rms_velocity
 
 
 # ### LC calibration with peak fitting
@@ -344,11 +385,12 @@ for science_object in list(science_runs.keys()):
 #         # Let's test this for a few orders (or simply set order_selection = None to use all valid ones)
 #         # orders_to_calibrate = ['ccd_1_order_139']
 #         orders_to_calibrate = [
-#             'ccd_1_order_163', 
-#             'ccd_1_order_164', 
-#             'ccd_1_order_165', 
-#             'ccd_1_order_166', 
-#             'ccd_1_order_167'
+#             # 'ccd_1_order_163', 
+#             # 'ccd_1_order_164', 
+#             # 'ccd_1_order_165', 
+#             # 'ccd_1_order_166', 
+#             # 'ccd_1_order_167'
+#             'ccd_3_order_73'
 #             ]
 #         VR.flux_comparison.calculate_wavelength_coefficients_with_korg_synthesis(
 #             veloce_fits_file,

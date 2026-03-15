@@ -18,7 +18,7 @@ from . import config
 
 from .utils import polynomial_function, calculate_barycentric_velocity_correction, apply_velocity_shift_to_wavelength_array, fit_voigt_absorption_profile, radial_velocity_from_line_shift, voigt_absorption_profile, wavelength_vac_to_air, wavelength_air_to_vac, lc_peak_gauss, lasercomb_numbers_from_wavelength, lasercomb_wavelength_from_numbers, read_in_wavelength_solution_coefficients_tinney
 
-def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, overwrite=False, plot_peak_fits = False, rejection = 'auto', debug=False, use_ylim=False):
+def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, pixel_shifts=None, overwrite=False, plot_peak_fits = False, rejection = 'auto', debug=False, use_ylim=False):
     """
     Optimises the wavelength solution for a given spectral order using the laser comb data.
     This function first identifies rough peaks with scipy.signal.find_peaks and then fits a Gaussian to these peaks.
@@ -27,6 +27,7 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, ov
     Parameters:
         order_name (str):                   The name of the spectral order to optimise the wavelength solution for.
         lc_pixel_values (numpy.ndarray):    The pixel values of the laser comb data for the given spectral order.
+        pixel_shifts (dict, optional):          Dictionary with x- and y-pixel shifts for CCDs 1-3
         overwrite (bool, optional):         If True, the function will overwrite the existing wavelength solution coefficients.
         plot_peak_fits (bool, optional):    If True, the function will plot the fitting results for each LC peak
         rejection:                          Options: auto, none, outliers, km/s, m/s, default: none
@@ -134,6 +135,12 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, ov
 
         central_pixel = int(len(lc_pixel_values)/2)
         centred_pixels = np.arange(len(lc_pixel_values))-int(len(lc_pixel_values)/2)
+
+        # Shifts centre pixel if pixel_shift is not None
+        if pixel_shifts is not None:
+            # pixel_shifts = {'ccd_1': (0.0, 0.0), 'ccd_2': (0.0, 0.0), 'ccd_3': (0.0, 0.0)}
+            y_shift = pixel_shifts['ccd_'+order_name[4]][1] # extraxt y-pixel shift of relevant CCD for this order.
+            centred_pixels += y_shift
 
         wavelength = polynomial_function(centred_pixels,*previous_calibration_coefficients)*10
 
@@ -645,7 +652,7 @@ def add_wavelength_solution_to_fits_header(file, order, lc_thxe_or_korg, referen
     if rms_wavelength is not None:
         file[order].header['HIERARCH WAVE_RMS_'+lc_thxe_or_korg+'_MS'] = rms_velocity
 
-def calibrate_single_order(file, order, barycentric_velocity=None, optimise_lc_solution=True, debug=False):
+def calibrate_single_order(file, order, pixel_shifts=None, barycentric_velocity=None, optimise_lc_solution=True, debug=False):
     """
     Calibrates a single spectral order by fitting a polynomial to the pixel-to-wavelength relationship 
     and optionally applying a barycentric velocity correction. The calibration updates the wavelength 
@@ -656,6 +663,7 @@ def calibrate_single_order(file, order, barycentric_velocity=None, optimise_lc_s
                                                 The spectral data of each order should be accessible via indexing.
         order (int):                            The index of the order within the FITS file to calibrate. This specifies which HDU in the
                                                 FITS file is being calibrated.
+        pixel_shifts (dict, optional):          Dictionary with x- and y-pixel shifts for CCDs 1-3
         barycentric_velocity (float, optional): The barycentric radial velocity (in km/s) to correct for
                                                 the Doppler shift due to Earth's motion. If provided, this velocity
                                                 is used to adjust the calculated wavelengths for the motion of the Earth.
@@ -687,10 +695,15 @@ def calibrate_single_order(file, order, barycentric_velocity=None, optimise_lc_s
 
     order_name = file[order].header['EXTNAME'].lower()
 
-    # Because of the different number of pixels for the 2Amp and 4Amp readout, we have to adjust the centre pixel
-    # This is usually 2048 for 4Amp readout and 2064 for 2Amp readout.
+    # Identify the central pixel of the order
     order_centre_pixel = int(len(file[order].data['WAVE_AIR'])/2)
     
+    # Shifts centre pixel if pixel_shift is not None
+    if pixel_shifts is not None:
+        # pixel_shifts = {'ccd_1': (0.0, 0.0), 'ccd_2': (0.0, 0.0), 'ccd_3': (0.0, 0.0)}
+        y_shift = pixel_shifts['ccd_'+order_name[4]][1] # extraxt y-pixel shift of relevant CCD for this order.
+        order_centre_pixel += y_shift
+
     # Use the initial pixel <-> wavelength information per order to fit a polynomial function to it.
 
     # Use wavelength coefficients according to the following preference:
@@ -859,7 +872,7 @@ def plot_wavelength_calibrated_order_data(order, science_object, file, overview_
     overview_pdf.savefig()
     plt.close()
 
-def calibrate_wavelength(science_object, optimise_lc_solution=True, correct_barycentric_velocity=True, fit_voigt_for_rv=True, create_overview_pdf=False, debug=False):
+def calibrate_wavelength(science_object, pixel_shifts = None, optimise_lc_solution=True, correct_barycentric_velocity=True, fit_voigt_for_rv=True, create_overview_pdf=False, debug=False):
     """
     Calibrates the wavelength data for a given science object by applying a series of corrections and enhancements.
     This includes barycentric velocity correction, radial velocity estimation via Voigt profile fitting, and
@@ -868,6 +881,7 @@ def calibrate_wavelength(science_object, optimise_lc_solution=True, correct_bary
     Parameters:
         science_object (str):                       The identifier for the science object. This is used to locate the corresponding
                                                     FITS file and to label outputs appropriately.
+        pixel_shifts (dict):                        Dictionary with x- and y-pixel shifts for CCDs 1-3
         optimise_lc_solution (bool):                If True, optimise the wavelength solution based on the refitted peaks of the laser comb.
         correct_barycentric_velocity (bool):        If True, apply a correction for the barycentric velocity to the
                                                     wavelength data based on header information.
@@ -921,7 +935,7 @@ def calibrate_wavelength(science_object, optimise_lc_solution=True, correct_bary
 
         # Now loop through the FITS file extensions aka Veloce orders to apply the wavelength calibration
         for order in range(1,len(file)):
-            calibrate_single_order(file, order, barycentric_velocity=barycentric_velocity, optimise_lc_solution=optimise_lc_solution, debug=debug)
+            calibrate_single_order(file, order, pixel_shifts=pixel_shifts, barycentric_velocity=barycentric_velocity, optimise_lc_solution=optimise_lc_solution, debug=debug)
 
         # If requested, fit a Voigt profile to the Halpha and CaII triplet lines to estimate the radial velocity
         if fit_voigt_for_rv:
