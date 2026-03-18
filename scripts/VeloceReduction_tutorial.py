@@ -120,11 +120,7 @@ calibration_runs, science_runs = VR.utils.identify_calibration_and_science_runs(
 
 
 # Estimate the pixel shifts in x and y for each CCD with respect to the reference frames
-if config.date == "001122":
-    ccd_pixel_shifts_wrt_reference = {'ccd_1': (0.0, 0.0), 'ccd_2': (0.0, 0.0), 'ccd_3': (0.0, 0.0)}
-else:
-    ccd_pixel_shifts_wrt_reference = VR.extraction.estimate_ccd_pixel_shifts_wrt_reference(calibration_runs)
-
+ccd_pixel_shifts_wrt_reference = VR.extraction.estimate_ccd_pixel_shifts_wrt_reference(config.date, calibration_runs)
 print(ccd_pixel_shifts_wrt_reference)
 
 
