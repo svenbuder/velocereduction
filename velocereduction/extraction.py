@@ -172,54 +172,101 @@ def substract_overscan(full_image, metadata, debug_overscan = False):
         
     return(trimmed_image, overscan_median, overscan_rms, metadata['READOUT'])
 
-def estimate_ccd_pixel_shifts_wrt_reference(date, calibration_runs):
+def estimate_ccd_pixel_shifts_wrt_reference(date, calibration_runs, max_deviation_from_reference=0.5):
     """
     Estimate pixel shifts in x and y directions with respect to reference frames (from 001122).
+
     The following reference frames are used:
     - CCD1: SimTh_180.0
-    - CCD2: SimTh_60.0  and SimLC
-    - CCD3: SimTh_15.0  and SimLC
+    - CCD2: SimTh_60.0 and SimLC
+    - CCD3: SimTh_15.0 and SimLC
 
-    Neglecting FibTh frames, because while SimTh and SimLC shifts were similar, FibTh differed.
+    Neglecting FibTh frames, because while SimTh and SimLC shifts were similar,
+    FibTh differed.
+
+    Parameters
+    ----------
+    date : str
+        Date in YYMMDD format.
+    calibration_runs : dict
+        Dictionary containing calibration runs for each calibration type.
+    max_deviation_from_reference : float, optional
+        Maximum allowed deviation in pixels from the reference shift.
+        If exceeded, the corresponding x or y shift is replaced by the reference value.
+
+    Returns
+    -------
+    pixel_shifts_wrt_reference : dict
+        Dictionary like:
+        {
+            'ccd_1': (dx, dy),
+            'ccd_2': (dx, dy),
+            'ccd_3': (dx, dy)
+        }
     """
     pixel_shifts_wrt_reference = {}
 
     if date == '001122':
-        ccd_pixel_shifts_wrt_reference = {'ccd_1': (0.0, 0.0), 'ccd_2': (0.0, 0.0), 'ccd_3': (0.0, 0.0)}
+        pixel_shifts_wrt_reference = {
+            'ccd_1': (0.0, 0.0),
+            'ccd_2': (0.0, 0.0),
+            'ccd_3': (0.0, 0.0)
+        }
         print('  --> Reference night. Using default (0,0)')
-        return(pixel_shifts_wrt_reference)
-    
-    # identify the reference night
+        return pixel_shifts_wrt_reference
+
+    # Identify the relevant reference shift regime
     if int(date) < 231120:
         # We actually have no reference before 20 Nov 2023.
-        # So the best we can do is trust the actual estimate is working
+        # So the best we can do is trust the actual estimate is working.
         reference_ccd_shifts = None
     elif int(date) <= 240518:
-        # 20 Nov 2023 - 18 May 2024:
-        # 18 May: Thermal cycle of spectroagraph
-        reference_ccd_shifts = {'ccd_1': (0.00,0.00), 'ccd_2': (0.00, 0.00), 'ccd_3': (0.01, -0.01)}
+        # 20 Nov 2023 - 18 May 2024
+        # 18 May: Thermal cycle of spectrograph
+        reference_ccd_shifts = {
+            'ccd_1': (0.00, 0.00),
+            'ccd_2': (0.00, 0.00),
+            'ccd_3': (0.01, -0.01)
+        }
     elif int(date) <= 241106:
         # 19 May 2024 - 6 Nov 2024
         # 1-6 November 2024: Warm up, Pump and Bake, Cooldown
-        reference_ccd_shifts = {'ccd_1': (-0.89,7.02), 'ccd_2': (-3.86,3.10), 'ccd_3': (3.08,1.80)}
-    elif int(date) <= 241202:
-        # 7 Nov 2024 - 2 Dec 2024:
-        # 10 Nov - 2 Dec 2024: Warm up, Pump and Bake, Cooldown
-        reference_ccd_shifts = {'ccd_1': (-0.74, 8.13), 'ccd_2': (-3.58,4.06), 'ccd_3': (3.09,2.91)}
+        reference_ccd_shifts = {
+            'ccd_1': (-0.89, 7.02),
+            'ccd_2': (-3.86, 3.10),
+            'ccd_3': (3.08, 1.80)
+        }
     elif int(date) <= 250507:
-        # 3 Dec 2024 - 7 May 2025
+        # 7 Nov 2024 - 7 May 2025
         # 7 May 2025: Cryostat Ring Boards replacement
-        reference_ccd_shifts = {'ccd_1': (-6.15, 1.11), 'ccd_2': (-8.75,2.80), 'ccd_3': (2.51,0.22)}
+        reference_ccd_shifts = {
+            'ccd_1': (-0.74, 8.13),
+            'ccd_2': (-3.58, 4.06),
+            'ccd_3': (3.09, 2.91)
+        }
+    elif int(date) <= 250823:
+        # 8 May 2025 - 23 Aug 2025
+        # 23 Aug 2025 chosen because no observations between 15 Jul 2025 and 1 Oct 2025 available, but small drift happened within this time.
+        reference_ccd_shifts = {
+            'ccd_1': (-6.15, 1.11),
+            'ccd_2': (-8.75, 2.80),
+            'ccd_3': (2.51, 0.22)
+        }
     elif int(date) <= 260303:
-        # 8 May 2025 - 3 Mar 2026:
+        # 24 Aug 2025 - 3 Mar 2026
         # Last science run so far
-        reference_ccd_shifts = {'ccd_1': (-6.08, 1.41), 'ccd_2': (-8.76,2.88), 'ccd_3': (2.72,0.34)}
+        reference_ccd_shifts = {
+            'ccd_1': (-6.08, 1.41),
+            'ccd_2': (-8.76, 2.88),
+            'ccd_3': (2.72, 0.34)
+        }
     else:
         # Again we have no good reference to compare to, so fingers crossed the shift estimate works.
-        reference_ccd_shifts  = None
+        reference_ccd_shifts = None
 
-    for ccd in [1,2,3]:
-        print('  --> Estimating pixel shifts for CCD', ccd)
+    for ccd in [1, 2, 3]:
+        ccd_key = f'ccd_{ccd}'
+        print(f'  --> Estimating pixel shifts for CCD{ccd}')
 
         pixel_shift_x = []
         pixel_shift_y = []
@@ -227,85 +274,123 @@ def estimate_ccd_pixel_shifts_wrt_reference(date, calibration_runs):
         # Which calibrations of the reference night will we actually use?
         if ccd == 1:
             calibrations_to_compare = [
-                ['SimTh_180.0','0001'],
+                ['SimTh_180.0', '0001'],
                 # ['FibTh_180.0','0004']
             ]
         elif ccd == 2:
             calibrations_to_compare = [
-                ['SimTh_60.0','0002'],
+                ['SimTh_60.0', '0002'],
                 # ['FibTh_60.0','0005'],
-                ['SimLC','0007']
+                ['SimLC', '0007']
             ]
         elif ccd == 3:
             calibrations_to_compare = [
-                ['SimTh_15.0','0003'],
+                ['SimTh_15.0', '0003'],
                 # ['FibTh_15.0','0006'],
-                ['SimLC','0007']
+                ['SimLC', '0007']
             ]
-        
+
         for calibration_type, reference_run in calibrations_to_compare:
-            if len(calibration_runs[calibration_type]) == 0:
+            if calibration_type not in calibration_runs or len(calibration_runs[calibration_type]) == 0:
                 print(f"  --> No calibration runs found for {calibration_type} on CCD{ccd}. Skipping shift estimate for this type.")
-            else:
-                # a) Reference frame
-                full_image, metadata = read_veloce_fits_image_and_metadata(
-                    config.working_directory+
-                    'observations/001122/ccd_'+str(ccd)+'/22nov'+str(ccd)+reference_run+'.fits'
+                continue
+
+            # a) Reference frame
+            full_image, metadata = read_veloce_fits_image_and_metadata(
+                config.working_directory +
+                f'observations/001122/ccd_{ccd}/22nov{ccd}{reference_run}.fits'
+            )
+            reference_image, _, _, _ = substract_overscan(full_image, metadata, debug_overscan=False)
+
+            # b) Median of frames of the night
+            images = []
+            for run in calibration_runs[calibration_type]:
+                frame_path = (
+                    config.working_directory +
+                    f'observations/{config.date}/ccd_{ccd}/'
+                    f'{config.date[-2:]}{match_month_to_date(config.date)}{ccd}{run}.fits'
                 )
-                reference_image, _, _, _ = substract_overscan(full_image, metadata, debug_overscan=False)
+                image, metadata = read_veloce_fits_image_and_metadata(frame_path)
+                trimmed_image, _, _, _ = substract_overscan(image, metadata, debug_overscan=False)
+                images.append(trimmed_image)
 
-                # b) Median of frames of the night
-                images = []
-                for run in calibration_runs[calibration_type]:
-                    frame_path = config.working_directory+'observations/'+config.date+'/ccd_'+str(ccd)+'/'+config.date[-2:]+match_month_to_date(config.date)+str(ccd)+run+'.fits'
-                    image, metadata = read_veloce_fits_image_and_metadata(frame_path)
-                    trimmed_image, _, _, _ = substract_overscan(image, metadata, debug_overscan=False)
-                    images.append(trimmed_image)
-                median_image = np.median(np.array(images), axis=0)
+            median_image = np.median(np.array(images), axis=0)
 
-                # c) Estimate shifts
-                dx, dy, error = phase_correlation_shift(reference_image, median_image)
-                print(f"  --> Shift CCD{ccd} (from {calibration_type}):", dx, dy, error)
-                pixel_shift_x.append(dx)
-                pixel_shift_y.append(dy)
+            # c) Estimate shifts
+            dx, dy, error = phase_correlation_shift(reference_image, median_image)
+            print(f"  --> Shift CCD{ccd} (from {calibration_type}): dx={dx:+.2f}, dy={dy:+.2f}, error={error}")
+            pixel_shift_x.append(dx)
+            pixel_shift_y.append(dy)
 
+        # Combine x estimates
         if len(pixel_shift_x) > 0:
-            pixel_shift_x_mean = np.mean(np.array(pixel_shift_x))
+            pixel_shift_x_mean = float(np.mean(pixel_shift_x))
             if len(pixel_shift_x) > 1:
-                pixel_shift_x_std  = np.std(np.array(pixel_shift_x))
+                pixel_shift_x_std = float(np.std(pixel_shift_x))
                 if pixel_shift_x_std > 0.1:
-                    print(f'  --> dX estimated to be {pixel_shift_x_mean} +/- {pixel_shift_x_std} pixels for CCD{ccd}. Large scatter! Using only SimTh (or first available calibration).')
-                    pixel_shift_x_mean = pixel_shift_x[0]
+                    print(f'  --> dX estimated to be {pixel_shift_x_mean:+.2f} +/- {pixel_shift_x_std:.2f} pixels for CCD{ccd}. Large scatter! Using only first available calibration.')
+                    pixel_shift_x_mean = float(pixel_shift_x[0])
                     pixel_shift_x_std = np.nan
             else:
                 pixel_shift_x_std = np.nan
         else:
-            pixel_shift_x_mean = 0.0
+            if reference_ccd_shifts is not None:
+                pixel_shift_x_mean = reference_ccd_shifts[ccd_key][0]
+                print(f'  --> Could not estimate pixel shift in X for CCD{ccd}. Using reference value {pixel_shift_x_mean:+.2f}')
+            else:
+                pixel_shift_x_mean = 0.0
+                print(f'  --> Could not estimate pixel shift in X for CCD{ccd}. Setting to 0.0')
             pixel_shift_x_std = np.nan
-            print('  --> Could not estimate pixel shift in X for CCD{ccd}. Setting to 0.0')
 
+        # Combine y estimates
         if len(pixel_shift_y) > 0:
-            pixel_shift_y_mean = np.mean(np.array(pixel_shift_y))
+            pixel_shift_y_mean = float(np.mean(pixel_shift_y))
             if len(pixel_shift_y) > 1:
-                pixel_shift_y_std  = np.std(np.array(pixel_shift_y))
+                pixel_shift_y_std = float(np.std(pixel_shift_y))
                 if pixel_shift_y_std > 0.1:
-                    print(f'  --> dY estimated to be {pixel_shift_y_mean} +/- {pixel_shift_y_std} pixels for CCD{ccd}. Large scatter! Using only SimTh (or first available calibration).')
-                    pixel_shift_y_mean = pixel_shift_y_mean[0]
+                    print(f'  --> dY estimated to be {pixel_shift_y_mean:+.2f} +/- {pixel_shift_y_std:.2f} pixels for CCD{ccd}. Large scatter! Using only first available calibration.')
+                    pixel_shift_y_mean = float(pixel_shift_y[0])
                     pixel_shift_y_std = np.nan
             else:
                 pixel_shift_y_std = np.nan
         else:
-            pixel_shift_y_mean = 0.0
+            if reference_ccd_shifts is not None:
+                pixel_shift_y_mean = reference_ccd_shifts[ccd_key][1]
+                print(f'  --> Could not estimate pixel shift in Y for CCD{ccd}. Using reference value {pixel_shift_y_mean:+.2f}')
+            else:
+                pixel_shift_y_mean = 0.0
+                print(f'  --> Could not estimate pixel shift in Y for CCD{ccd}. Setting to 0.0')
             pixel_shift_y_std = np.nan
-            print('  --> Could not estimate pixel shift in Y for CCD{ccd}. Setting to 0.0')
 
-    
-        pixel_shifts_wrt_reference['ccd_'+str(ccd)] = (np.round(pixel_shift_x_mean,2), np.round(pixel_shift_y_mean,2))
+        # Compare against reference and clip back if deviation is too large
+        if reference_ccd_shifts is not None:
+            ref_dx, ref_dy = reference_ccd_shifts[ccd_key]
+
+            if np.abs(pixel_shift_x_mean - ref_dx) > max_deviation_from_reference:
+                print(
+                    f'  --> WARNING: CCD{ccd} dX={pixel_shift_x_mean:+.2f} differs by '
+                    f'{np.abs(pixel_shift_x_mean - ref_dx):.2f} px from reference {ref_dx:+.2f}. '
+                    f'Using reference value instead.'
+                )
+                pixel_shift_x_mean = ref_dx
+
+            if np.abs(pixel_shift_y_mean - ref_dy) > max_deviation_from_reference:
+                print(
+                    f'  --> WARNING: CCD{ccd} dY={pixel_shift_y_mean:+.2f} differs by '
+                    f'{np.abs(pixel_shift_y_mean - ref_dy):.2f} px from reference {ref_dy:+.2f}. '
+                    f'Using reference value instead.'
+                )
+                pixel_shift_y_mean = ref_dy
+
+        pixel_shifts_wrt_reference[ccd_key] = (
+            np.round(pixel_shift_x_mean, 2),
+            np.round(pixel_shift_y_mean, 2)
+        )
 
         print(f'  --> Recommended shift estimate for CCD{ccd}:')
         print(f'      dX {pixel_shift_x_mean:+.2f} +/- {pixel_shift_x_std:.2f} and dY {pixel_shift_y_mean:+.2f} +/- {pixel_shift_y_std:.2f}')
 
-    return(pixel_shifts_wrt_reference)
+    return pixel_shifts_wrt_reference
 
 def read_in_order_tramlines_tinney():
     """
