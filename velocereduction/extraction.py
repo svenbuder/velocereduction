@@ -172,7 +172,7 @@ def substract_overscan(full_image, metadata, debug_overscan = False):
         
     return(trimmed_image, overscan_median, overscan_rms, metadata['READOUT'])
 
-def estimate_ccd_pixel_shifts_wrt_reference(calibration_runs):
+def estimate_ccd_pixel_shifts_wrt_reference(date, calibration_runs):
     """
     Estimate pixel shifts in x and y directions with respect to reference frames (from 001122).
     The following reference frames are used:
@@ -183,6 +183,40 @@ def estimate_ccd_pixel_shifts_wrt_reference(calibration_runs):
     Neglecting FibTh frames, because while SimTh and SimLC shifts were similar, FibTh differed.
     """
     pixel_shifts_wrt_reference = {}
+
+    if date == '001122':
+        ccd_pixel_shifts_wrt_reference = {'ccd_1': (0.0, 0.0), 'ccd_2': (0.0, 0.0), 'ccd_3': (0.0, 0.0)}
+        print('  --> Reference night. Using default (0,0)')
+        return(pixel_shifts_wrt_reference)
+    
+    # identify the reference night
+    if int(date) < 231120:
+        # We actually have no reference before 20 Nov 2023.
+        # So the best we can do is trust the actual estimate is working
+        reference_ccd_shifts = None
+    elif int(date) <= 240518:
+        # 20 Nov 2023 - 18 May 2024:
+        # 18 May: Thermal cycle of spectroagraph
+        reference_ccd_shifts = {'ccd_1': (0.00,0.00), 'ccd_2': (0.00, 0.00), 'ccd_3': (0.01, -0.01)}
+    elif int(date) <= 241106:
+        # 19 May 2024 - 6 Nov 2024
+        # 1-6 November 2024: Warm up, Pump and Bake, Cooldown
+        reference_ccd_shifts = {'ccd_1': (-0.89,7.02), 'ccd_2': (-3.86,3.10), 'ccd_3': (3.08,1.80)}
+    elif int(date) <= 241202:
+        # 7 Nov 2024 - 2 Dec 2024:
+        # 10 Nov - 2 Dec 2024: Warm up, Pump and Bake, Cooldown
+        reference_ccd_shifts = {'ccd_1': (-0.74, 8.13), 'ccd_2': (-3.58,4.06), 'ccd_3': (3.09,2.91)}
+    elif int(date) <= 250507:
+        # 3 Dec 2024 - 7 May 2025
+        # 7 May 2025: Cryostat Ring Boards replacement
+        reference_ccd_shifts = {'ccd_1': (-6.15, 1.11), 'ccd_2': (-8.75,2.80), 'ccd_3': (2.51,0.22)}
+    elif int(date) <= 260303:
+        # 8 May 2025 - 3 Mar 2026:
+        # Last science run so far
+        reference_ccd_shifts = {'ccd_1': (-6.08, 1.41), 'ccd_2': (-8.76,2.88), 'ccd_3': (2.72,0.34)}
+    else:
+        # Again we have no good reference to compare to, so fingers crossed the shift estimate works.
+        reference_ccd_shifts  = None
 
     for ccd in [1,2,3]:
         print('  --> Estimating pixel shifts for CCD', ccd)
@@ -239,8 +273,10 @@ def estimate_ccd_pixel_shifts_wrt_reference(calibration_runs):
             pixel_shift_x_mean = np.mean(np.array(pixel_shift_x))
             if len(pixel_shift_x) > 1:
                 pixel_shift_x_std  = np.std(np.array(pixel_shift_x))
-                if pixel_shift_x_std > 0.5:
-                    print(f'  --> dX estimated to be {pixel_shift_x_mean} +/- {pixel_shift_x_std} pixels for CCD{ccd}. Large scatter!')
+                if pixel_shift_x_std > 0.1:
+                    print(f'  --> dX estimated to be {pixel_shift_x_mean} +/- {pixel_shift_x_std} pixels for CCD{ccd}. Large scatter! Using only SimTh (or first available calibration).')
+                    pixel_shift_x_mean = pixel_shift_x[0]
+                    pixel_shift_x_std = np.nan
             else:
                 pixel_shift_x_std = np.nan
         else:
@@ -252,14 +288,18 @@ def estimate_ccd_pixel_shifts_wrt_reference(calibration_runs):
             pixel_shift_y_mean = np.mean(np.array(pixel_shift_y))
             if len(pixel_shift_y) > 1:
                 pixel_shift_y_std  = np.std(np.array(pixel_shift_y))
-                if pixel_shift_y_std > 0.5:
-                    print(f'  --> dY estimated to be {pixel_shift_y_mean} +/- {pixel_shift_y_std} pixels for CCD{ccd}. Large scatter!')
+                if pixel_shift_y_std > 0.1:
+                    print(f'  --> dY estimated to be {pixel_shift_y_mean} +/- {pixel_shift_y_std} pixels for CCD{ccd}. Large scatter! Using only SimTh (or first available calibration).')
+                    pixel_shift_y_mean = pixel_shift_y_mean[0]
+                    pixel_shift_y_std = np.nan
             else:
                 pixel_shift_y_std = np.nan
         else:
             pixel_shift_y_mean = 0.0
             pixel_shift_y_std = np.nan
             print('  --> Could not estimate pixel shift in Y for CCD{ccd}. Setting to 0.0')
+
+    
         pixel_shifts_wrt_reference['ccd_'+str(ccd)] = (np.round(pixel_shift_x_mean,2), np.round(pixel_shift_y_mean,2))
 
         print(f'  --> Recommended shift estimate for CCD{ccd}:')
