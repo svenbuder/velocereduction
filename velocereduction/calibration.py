@@ -156,6 +156,7 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, pi
         lc_pixel_arange = np.arange(len(lc_pixel_values))
         
         lc_pixels_to_fit = []
+        lc_pixels_offset = []
         lc_wavelengths_to_fit = []
         lc_fwhms = []
 
@@ -166,7 +167,7 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, pi
 
         lc_fit_peak_position = []
         lc_fit_peak_offsets = []
-        lc_fit_peak_sigmas = []
+        lc_fit_peak_fwhm = []
 
         for lc_peak_index in range(len(lc_peak_pixel_expectations)):
             lc_peak_wavelength = lc_wavelengths[lc_peak_index]
@@ -203,12 +204,12 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, pi
                         lc_peak_gauss,
                         lc_pixels_in_window,
                         lc_pixel_values_in_window,
-                        p0 = [lc_peak_pixel, 1, np.nanmax(lc_pixel_values_in_window), 0],
+                        p0 = [lc_peak_pixel, 1, np.nanmax(lc_pixel_values_in_window)],
                         # bounds:
-                        # peak sigma must be between 0.3 and 2.0
+                        # peak sigma must be between 0.3 and 1.7
                         # peak amplitude must be at least 0.5 and up to 2e6
                         # peak offset must be positive and should be less than 500
-                        bounds=([lc_peak_pixel-4,0.35,0.5,0],[lc_peak_pixel+4,2.0,2e6,500])
+                        bounds=([lc_peak_pixel-4,0.3,0.5],[lc_peak_pixel+4,1.7,2e6])
                     )
                     if plot_peak_fits:
                         ax_new.plot(
@@ -217,7 +218,7 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, pi
                         )
                         ax_new.axvline(popt[0], color = 'C3', ls = 'dashed', label = 'Peak fit')
                 except:
-                    popt = [np.nan,np.nan,np.nan,np.nan]
+                    popt = [np.nan,np.nan,np.nan]
 
                 if plot_peak_fits:
                     ax_new.legend()
@@ -226,20 +227,22 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, pi
 
                 lc_fit_peak_position.append(lc_peak_pixel)
                 lc_fit_peak_offsets.append(lc_peak_pixel - popt[0])
-                lc_fit_peak_sigmas.append(popt[1])
+                lc_fit_peak_fwhm.append(2*np.sqrt(2*np.log(2))*popt[1])
 
                 # Quality control:
                 if (
                     # peak position must be less than 3 pixels off from expected position
                     (np.abs(lc_peak_pixel - popt[0]) < 4) &
-                    # peak sigma must be between 0.35 and 2.0
-                    ((popt[1] > 0.35) & (popt[1] < 2.0)) &
-                    # ratio of peak amplitude to offset must be at least 2
-                    ((popt[2] / popt[3] > 2))
+                    # peak sigma must be between 0.4 and 1.5
+                    ((popt[1] > 0.4) & (popt[1] < 1.5)) &
+                    # peak amplitude must be above 5th percentile
+                    (popt[2] > np.abs(np.nanpercentile(lc_pixel_values, q=5)))
                 ):
                     lc_pixels_to_fit.append(popt[0])
+                    lc_pixels_offset.append(lc_peak_pixel - popt[0])
                     lc_wavelengths_to_fit.append(lc_peak_wavelength)
                     lc_fwhms.append(2*np.sqrt(2*np.log(2))*popt[1])
+
                 else:
                     lc_fit_bad_quality += 1
                     # if debug: print('      --> Peak quality for '+str(lc_peak_pixel)+' at position '+str(lc_peak_wavelength)+' Å below criteria: '+str(np.round(np.abs(lc_peak_pixel - popt[0]),2))+' Pixel shift  / Sigma. '+str(np.round(popt[1],1))+' / Ampl. Ratio '+str(np.round(popt[2] / popt[3],1))+' = '+str(popt[2])+'/'+str(popt[3]))
@@ -251,216 +254,10 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, pi
                 lc_fit_outside_window += 1
                 # if debug: print('LC peak '+str(int(lc_numbers[lc_peak_index]))+' at '+str(np.round(lc_peak_wavelength,3))+' Å not in window!')
 
-        if debug:
-            f2, (ax_new1, ax_new2) = plt.subplots(2,1)
-            ax_new1.scatter(
-                lc_fit_peak_position,
-                lc_fit_peak_offsets
-            )
-            ax_new1.set_xlabel('Pixel')
-            ax_new1.set_ylabel('Offsets')
-            ax_new2.scatter(
-                lc_fit_peak_position,
-                lc_fit_peak_sigmas
-            )
-            ax_new2.set_xlabel('Pixel')
-            ax_new2.set_ylabel('Sigma')
-            if 'ipykernel' in sys.modules: plt.show(f2)
-            plt.close(f2)
-
-
         lc_pixels_to_fit = np.array(lc_pixels_to_fit) - central_pixel
+        lc_pixels_offset = np.array(lc_pixels_offset)
         lc_wavelengths_to_fit = np.array(lc_wavelengths_to_fit)
         lc_fwhms = np.array(lc_fwhms)
-
-        """
-        # The following code has previously been used to find_peaks across an order
-        # and then fine-tune them with Gaussian fits.
-        # This was not as robust against missing peaks though!
-        # The version above should be more robust as it is using expected peaks
-
-        # Identify the range for which we will fit the peaks
-        lc_beginning, lc_ending = lc_range[order_name]
-        # previous defaults have been: lc_beginning = 500, lc_ending = 3700
-        in_panel = np.arange(lc_beginning,lc_ending+1)
-        close_to_in_panel = np.arange(lc_beginning-100,np.min([lc_ending+100,4127]))
-
-        # Adjust the peak distance, acknowledging that the distance differs based on wavelength
-        # and order. We use the following separations:
-        # 6-8 pxiels for the CCD3
-        # 5-6 pixels for the red part of CCD2
-        # 4-6 pixels for bluest part of CCD2
-        if order_name[4] == '3':
-            peak_distance1 = 6
-            peak_distance2 = 8
-        elif int(order_name[-3:]) > 118:
-            peak_distance1 = 4
-            peak_distance2 = 6
-        else:
-            peak_distance1 = 5
-            peak_distance2 = 6
-        # Use the midpoint for a better application of find_peaks (since it can only take 1 integer as distance)
-        lc_value_in_panel_midpoint = len(lc_pixel_values[in_panel]) // 2
-        lc_values_half1 = lc_pixel_values[in_panel][:lc_value_in_panel_midpoint]  # First half
-        lc_values_half2 = lc_pixel_values[in_panel][lc_value_in_panel_midpoint:]
-
-        # Adjust the expected peak height and dominance - this is not yet robust, and only established for 1 LC exposure...
-        if order_name in ['ccd_3_order_80','ccd_3_order_81','ccd_3_order_90','ccd_3_order_92','ccd_3_order_88','ccd_2_order_126']:
-            peak_height = 10
-            peak_prominence = 10
-        elif order_name in [
-            'ccd_3_order_86',
-            'ccd_2_order_104','ccd_2_order_105',
-            'ccd_2_order_112','ccd_2_order_113','ccd_2_order_114','ccd_2_order_115','ccd_2_order_116'
-        ]:
-            peak_height = 5
-            peak_prominence = 5
-        elif order_name in ['ccd_3_order_87','ccd_3_order_91']:
-            peak_height = 1
-            peak_prominence = 3
-
-        elif order_name in ['ccd_2_order_106','ccd_2_order_107','ccd_2_order_108','ccd_2_order_109','ccd_2_order_117']:
-            peak_height = 2
-            peak_prominence = 2
-        else:
-            peak_height = 20
-            peak_prominence = 20
-
-        # Fit the peaks for the left and right half of the order and concatenate them to "peaks"
-        peaks1, peak_metadata1 = find_peaks(
-            lc_values_half1,
-            height = peak_height,
-            prominence = peak_prominence,
-            distance = peak_distance1
-        )
-        peaks2, peak_metadat2 = find_peaks(
-            lc_values_half2,
-            height = peak_height,
-            prominence = peak_prominence,
-            distance = peak_distance2
-        )
-        peaks = np.concatenate((peaks1,peaks2+lc_value_in_panel_midpoint))
-
-        # Identify gaps (>1.5 median_peak_distance) that are not within the first 50 and last 600 pixels and fill these gaps
-        max_right_buffer = 600
-        if order_name == 'ccd_2_order_111': max_right_buffer = 50
-        median_peak_distance = np.median(np.diff(peaks))
-        
-        position_of_too_large_gap_between_peaks = np.where((np.diff(peaks) > 1.5*median_peak_distance) & (peaks[:-1] > 20) & (peaks[:-1] < lc_ending - max_right_buffer))[0]
-        
-        if len(position_of_too_large_gap_between_peaks) > 0:
-
-            # Initialize the new peaks list from existing peaks
-            new_peaks = list(peaks)
-            new_peaks_added = []
-
-            # Insert new peaks in the positions of the large gaps and overwrite peaks
-            for index in reversed(position_of_too_large_gap_between_peaks):
-                start_peak = peaks[index]
-                end_peak = peaks[index + 1]
-                try:
-                    neighbour_distance = abs(peaks[index + 2] - end_peak)
-                except:
-                    neighbour_distance = abs(peaks[index - 1] - start_peak)
-
-                # Enforce additional robustness of significant enough gap at specific location
-                # Distance at gap is better than median distance, since the pixel distance increases across the order.
-                if end_peak - start_peak > 1.5*neighbour_distance:
-                    new_peak_position = (start_peak + end_peak) // 2
-                    new_peaks.insert(index + 1, new_peak_position)
-                    new_peaks_added.append(new_peak_position)
-            peaks = new_peaks
-
-            if debug:
-                if len(new_peaks_added) > 0: print('      --> Found '+str(len(new_peaks_added))+' gaps: ', new_peaks_added)
-                else: print('      --> Found 0 gaps')
-
-        # Plot the laser rough comb peaks if we want to debug
-        if debug:
-            f, ax = plt.subplots(1,1,figsize=(15,5))
-            ax.set_title(order_name)
-            ax.plot(
-                wavelength[close_to_in_panel],
-                lc_pixel_values[close_to_in_panel],
-                lw = 0.5
-            )
-            ax.set_ylim(0,1.1*np.percentile(lc_pixel_values[np.isfinite(lc_pixel_values)],q=99))
-
-            for peak in peaks:
-                ax.axvline(wavelength[in_panel][peak], c = 'C3', lw=0.5, ls='dashed')
-            plt.tight_layout()
-            if 'ipykernel' in sys.modules: plt.show()
-            plt.close()
-
-        # Now that we have the integer peak positions, let's fit more precise Gaussians.
-        # Use the rough integer peaks, if the Gaussian fit fails (likely for weak peaks)
-        fine_peaks = []
-        for peak in peaks:
-
-            # Find the pixels that are +- 0.5*peak_distance away from the peak
-            pixels_around_peak = np.arange(
-                np.max([0,peak - int(np.ceil(peak_distance1/2))]),
-                np.min([len(lc_pixel_values[in_panel]),peak + int(np.ceil(peak_distance1/2))+1])
-            )
-            pixel_values_around_peak = lc_pixel_values[in_panel][pixels_around_peak]
-            pixel_minmax = list(np.nanpercentile(pixel_values_around_peak,q=[1,99]))
-
-            try:
-                popt, pcov = curve_fit(
-                    lc_peak_gauss,
-                    pixels_around_peak,
-                    pixel_values_around_peak,
-                    p0 = [peak, 1, pixel_minmax[1]-pixel_minmax[0], pixel_minmax[0]]
-                )
-
-                # Make sure the Gaussian is not too far off!
-                # Use initial peak integer otherwise
-                if abs(peak - popt[0] > 1):
-                    fine_peaks.append(peak)
-                else:
-                    fine_peaks.append(popt[0])
-            except:
-                if debug: print('      --> Failed fit for finer peak '+str(peak)+' at position '+str(peak+lc_beginning)+'. Using rough peak.')
-                fine_peaks.append(peak)
-        fine_peaks = np.array(fine_peaks)
-
-            # #Plot the Gaussian fits for each peak if we want to debug
-            # if debug:
-            #     f, ax = plt.subplots(1,1)
-            #     ax.scatter(
-            #         pixels_around_peak,
-            #         pixel_values_around_peak,
-            #         s = 20
-            #     )
-            #     ax.plot(
-            #         np.linspace(pixels_around_peak[0],pixels_around_peak[-1],50),
-            #         lc_peak_gauss(np.linspace(pixels_around_peak[0],pixels_around_peak[-1],50), *popt),
-            #         c = 'C1'
-            #     )
-            #     plt.tight_layout()
-            #     plt.show()
-            #     plt.close()
-
-        # Now that we have the fine peaks, let's fit a polynomial to the pixel and wavelength data
-        # For this, we first have to determine the laser comb numbers and wavelengths
-        lc_number_upper = np.floor(lasercomb_numbers_from_wavelength(wavelength[in_panel][0]))
-        lc_number_lower = np.ceil(lasercomb_numbers_from_wavelength(wavelength[in_panel][-1]))
-        lc_wavelengths = lasercomb_wavelength_from_numbers(np.arange(lc_number_lower, lc_number_upper+1))[::-1]
-
-        # In some cases, the number of peaks and modes differ. In this case, we only use the first n peaks and modes.
-        if debug:
-            print('    --> Peaks found: ',len(peaks))
-            print('    --> Modes found: ',len(lc_wavelengths))
-        if len(peaks) != len(lc_wavelengths):
-            use_peaks_and_modes = np.min([len(peaks),len(lc_wavelengths)])
-            if debug: print('    --> Only using first '+str(use_peaks_and_modes)+' entries')
-        else:
-            use_peaks_and_modes = len(peaks)
-
-        # Fit a polynomial function to pixel and wavelength data
-        lc_pixels_to_fit = lc_beginning + fine_peaks[:use_peaks_and_modes] - central_pixel
-        lc_wavelengths_to_fit = lc_wavelengths[:use_peaks_and_modes]
-        """
 
         coeffs_lc, _ = curve_fit(
             polynomial_function,
@@ -469,26 +266,77 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, pi
             p0=previous_calibration_coefficients
         )
 
+        lc_dlambda_dx = (
+            polynomial_function(lc_pixels_to_fit + 1, *coeffs_lc)
+            - polynomial_function(lc_pixels_to_fit - 1, *coeffs_lc)
+        ) * 10.0 / 2.0
+
+        fwhm_lambda = lc_fwhms * lc_dlambda_dx
+        lc_resolution_to_fit = lc_wavelengths_to_fit / fwhm_lambda
+
         # Calculate the RMS wavelength and velocity
         wavelength_residuals = (lc_wavelengths_to_fit - (polynomial_function(lc_pixels_to_fit,*coeffs_lc)*10)) # Aangstroem
         rms_wavelength = np.std(wavelength_residuals)
         rms_velocity = 299792.46 * np.std(wavelength_residuals/(lc_wavelengths_to_fit))
 
         if debug:
-            f, gs = plt.subplots(3,1,figsize=(15,7))
-            f.suptitle(order_name,fontsize=15)
+            f2, gs = plt.subplots(6,1,figsize=(11.69,8.27),sharex=True)
+            f2.suptitle('Laser Comb Wavelength Solution Fit CCD '+order_name[4]+' Order '+order_name[12:],fontsize=12)
 
-            gs[0].plot(
+            ax = gs[0]
+            ax.plot(
                 lc_pixel_values, lw = 0.5, label = 'LC Counts'
             )
-            gs[0].set_ylabel('LC counts')
-            gs[0].set_ylim(0,2*np.nanpercentile(lc_pixel_values,q=90))
+            ax.set_ylabel('LC counts')
+            ax.set_ylim(0,2*np.nanpercentile(lc_pixel_values,q=90))
             for lc_peak_pixel_expectation in lc_peak_pixel_expectations:
                 if lc_peak_pixel_expectation == lc_peak_pixel_expectations[0]:
                     label = 'Peak expectation previous solution'
                 else:
                     label = '_nolegend_'
-                gs[0].axvline(lc_peak_pixel_expectation, ls = 'dashed', lw = 0.5, color = 'C3', label = label)
+                ax.axvline(lc_peak_pixel_expectation, ls = 'dashed', lw = 0.5, color = 'C3', label = label)
+
+            ax = gs[1]
+            ax.scatter(
+                lc_fit_peak_position,
+                lc_fit_peak_offsets,
+                s = 5,
+                label = 'Found'
+            )
+            ax.scatter(
+                lc_pixels_to_fit + central_pixel,
+                lc_pixels_offset,
+                s = 5,
+                label = 'Used'
+            )
+            ax.set_ylabel('Offsets')
+            ax.legend(ncol=2)
+
+            ax = gs[2]
+            ax.scatter(
+                lc_fit_peak_position,
+                lc_fit_peak_fwhm,
+                s = 5,
+                label = 'Found'
+            )
+            ax.scatter(
+                lc_pixels_to_fit + central_pixel,
+                lc_fwhms,
+                s = 5,
+                label = 'Used'
+            )
+            ax.set_ylabel('FWHM')
+            ax.legend(ncol=2)
+
+            ax = gs[3]
+            ax.scatter(
+                lc_pixels_to_fit + central_pixel,
+                lc_resolution_to_fit,
+                s = 5,
+                label = 'Used'
+            )
+            ax.set_ylabel('Resolution')
+            ax.legend()
 
         # Calculate X-sigma RMS velocity outliers, clip them, and refit the wavelength solution
         rms_sigma = 3 < 299792.46 * np.abs(wavelength_residuals/(lc_wavelengths_to_fit)) / rms_velocity
@@ -544,13 +392,15 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, pi
             rms_velocity = 299792458. * np.std(wavelength_residuals/lc_wavelengths_to_fit)
 
             if debug:
-                gs[1].scatter(
+                ax = gs[4]
+                ax.scatter(
                     outlier_pixels,
                     np.zeros(len(outlier_pixels)),
                     s = 5, c = 'C3',
                     label = str(len(rms_velocity_x_sigma_outlier))+' RMS velocity outlier(s) 3sigma or 500m/s'
                 )
-                gs[2].scatter(
+                ax = gs[5]
+                ax.scatter(
                     outlier_pixels,
                     np.zeros(len(outlier_pixels)),
                     s = 5, c = 'C3',
@@ -575,28 +425,31 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, pi
             rms_wavelength = np.std(wavelength_residual_aangstroem)
             rms_velocity = np.std(wavelength_residual_ms)
 
-            gs[1].set_ylabel('Residual Å')
-            gs[1].scatter(
+            ax = gs[4]
+            ax.set_ylabel('Residual Å')
+            ax.scatter(
                 lc_pixels_to_fit+central_pixel,
                 wavelength_residual_aangstroem,
                 s = 1,
                 label = 'LC Peaks, RMS = '+str(np.round(rms_wavelength,4))+' Å or '+str(np.round(rms_velocity))+' m/s'
             )
-            gs[1].plot(
+            ax = gs[5]
+            ax.plot(
                 np.arange(len(lc_pixel_values)),
                 np.zeros(len(lc_pixel_values)),
                 label = 'LC Wavelength Solution'
             )
 
-            gs[2].set_xlabel('Pixels')
-            gs[2].set_ylabel('Residual m/s')
-            gs[2].scatter(
+            ax = gs[5]
+            ax.set_xlabel('Pixels')
+            ax.set_ylabel('Residual m/s')
+            ax.scatter(
                 lc_pixels_to_fit+central_pixel,
                 wavelength_residual_ms,
                 s = 1,
                 label = 'LC Peaks, RMS = '+str(np.round(rms_wavelength,4))+' Å or '+str(np.round(rms_velocity))+' m/s'
             )
-            gs[2].plot(
+            ax.plot(
                 np.arange(len(lc_pixel_values)),
                 np.zeros(len(lc_pixel_values)),
                 label = 'LC Wavelength Solution'
@@ -605,7 +458,8 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, pi
             # Tinney Wavelength Solution - shifted from its native DYO to 2048 and ensuring CCD1+2 are in vacuum
             coeffs_tinney = read_in_wavelength_solution_coefficients_tinney()
             wavelength_tinney = polynomial_function(np.arange(len(lc_pixel_values))-central_pixel,*coeffs_tinney[order_name][:-1])*10
-            gs[1].plot(
+            ax=gs[4]
+            ax.plot(
                 np.arange(len(lc_pixel_values)),
                 wavelength_tinney -
                 polynomial_function(np.arange(len(lc_pixel_values))-central_pixel,*coeffs_lc)*10,
@@ -614,7 +468,8 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, pi
 
             # ThXe Wavelegnth Solution
             coeffs_thxe = np.loadtxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_{order_name}_thxe.txt')
-            gs[1].plot(
+            ax=gs[4]
+            ax.plot(
                 np.arange(len(lc_pixel_values)),
                 polynomial_function(np.arange(len(lc_pixel_values))-central_pixel,*coeffs_thxe)*10 - 
                 polynomial_function(np.arange(len(lc_pixel_values))-central_pixel,*coeffs_lc)*10,
@@ -623,9 +478,11 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, pi
 
             if use_ylim: gs[0].set_ylim(-0.5,0.5)
             for ax in gs:
-                ax.legend(ncol=5)
+                ax.legend(ncol=4, fontsize=8, loc='upper center')
             plt.tight_layout()
             if 'ipykernel' in sys.modules: plt.show()
+            Path(config.working_directory+'reduced_data/'+config.date+'/_wavelength_solutions').mkdir(parents=True, exist_ok=True)
+            f2.savefig(config.working_directory+'reduced_data/'+config.date+f'/_wavelength_solutions/wavelength_solution_lc_{order_name}.pdf',bbox_inches='tight')
             plt.close()
 
         return(coeffs_lc, rms_wavelength, rms_velocity)
