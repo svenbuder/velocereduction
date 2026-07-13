@@ -195,7 +195,7 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, pi
                         lc_pixels_in_window,
                         lc_pixel_values_in_window, label = 'LC measurement'
                     )
-                    ax_new.axvline(lc_peak_pixel, label = 'Expected peak position')
+                    ax_new.axvline(lc_peak_pixel, label = 'Expected peak position', ls='dashed')
                     ax_new.scatter(lc_pixels_in_window[highest_value],lc_pixel_values_in_window[highest_value], marker = marker, label = detection)
                     ax_new.set_title('LC peak '+str(int(lc_numbers[lc_peak_index]))+' at '+str(np.round(lc_peak_wavelength,3))+' Å')
 
@@ -216,7 +216,7 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, pi
                             lc_pixels_in_window,
                             lc_peak_gauss(lc_pixels_in_window,*popt)
                         )
-                        ax_new.axvline(popt[0], color = 'C3', ls = 'dashed', label = 'Peak fit')
+                        ax_new.axvline(popt[0], color = 'C3', ls = 'dashed', label = 'Peak fit FWHM: '+str(np.round(2*np.sqrt(2*np.log(2))*popt[1],2)))
                 except:
                     popt = [np.nan,np.nan,np.nan]
 
@@ -267,12 +267,20 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, pi
         )
 
         lc_dlambda_dx = (
-            polynomial_function(lc_pixels_to_fit + 1, *coeffs_lc)
-            - polynomial_function(lc_pixels_to_fit - 1, *coeffs_lc)
-        ) * 10.0 / 2.0
-
+            polynomial_function(lc_pixels_to_fit + 0.5, *coeffs_lc)
+            - polynomial_function(lc_pixels_to_fit - 0.5, *coeffs_lc)
+        ) * 10.0
+        
         fwhm_lambda = lc_fwhms * lc_dlambda_dx
         lc_resolution_to_fit = lc_wavelengths_to_fit / fwhm_lambda
+
+        # Fit a polynomial to the resolution as a function of pixel position
+        lc_resolution_coeffs, _ = curve_fit(
+            polynomial_function,
+            lc_pixels_to_fit,
+            lc_resolution_to_fit,
+            p0=[70000., 0, 0, 0]
+        )
 
         # Calculate the RMS wavelength and velocity
         wavelength_residuals = (lc_wavelengths_to_fit - (polynomial_function(lc_pixels_to_fit,*coeffs_lc)*10)) # Aangstroem
@@ -326,6 +334,8 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, pi
                 label = 'Used'
             )
             ax.set_ylabel('FWHM')
+            ylim = ax.get_ylim()
+            ax.set_ylim(0,ylim[1])
             ax.legend(ncol=2)
 
             ax = gs[3]
@@ -334,6 +344,12 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, pi
                 lc_resolution_to_fit,
                 s = 5,
                 label = 'Used'
+            )
+            ax.plot(
+                lc_pixels_to_fit + central_pixel,
+                polynomial_function(lc_pixels_to_fit,*lc_resolution_coeffs),
+                label = 'Fit',
+                c = 'C1'
             )
             ax.set_ylabel('Resolution')
             ax.legend()
@@ -485,7 +501,7 @@ def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, pi
             f2.savefig(config.working_directory+'reduced_data/'+config.date+f'/_wavelength_solutions/wavelength_solution_lc_{order_name}.pdf',bbox_inches='tight')
             plt.close()
 
-        return(coeffs_lc, rms_wavelength, rms_velocity)
+        return(coeffs_lc, rms_wavelength, rms_velocity, lc_resolution_coeffs)
     
 def add_wavelength_solution_to_fits_header(file, order, lc_thxe_or_korg, reference_pixel, wavelength_coefficients, rms_wavelength = None, rms_velocity = None):
     """
