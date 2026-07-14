@@ -396,6 +396,7 @@ def identify_calibration_and_science_runs(date, raw_data_dir, each_science_run_s
 
 
     # Process each line in the log file to extract and categorize runs
+    warnings_printed = []
     for line in log_file_text:
 
         # Identify runs via their numeric value
@@ -421,10 +422,13 @@ def identify_calibration_and_science_runs(date, raw_data_dir, each_science_run_s
             # read_noise = line[utc_colon-25+70:utc_colon-25+85].strip()
             # airmass = line[utc_colon-25+87:utc_colon-25+91].strip()
             overscan = line[utc_colon-25+95:].split()[0]
-            comments = line[utc_colon-25+96+len(overscan):]
-            if len(comments) > 1:
+            if len(line[utc_colon-2:]) > 92:
+                comments = line[utc_colon-2+92:]
                 if (run_object != 'FlatField-Quartz') & print_information:
-                    print('  ||  --> Warning for '+run_object+' (run '+run+'): '+comments)
+                    new_warning = '  ||  --> Warning for '+run_object+' (run '+run+'): '+comments
+                    if new_warning not in warnings_printed:
+                        print(new_warning)
+                        warnings_printed.append(new_warning)
 
             # Read in type of observation from CCD3 info (since Rosso should always be available)
             if ccd == '3':
@@ -445,6 +449,8 @@ def identify_calibration_and_science_runs(date, raw_data_dir, each_science_run_s
                     if 'SimTh_'+exposure_time in calibration_runs.keys():
                         calibration_runs['SimTh_'+exposure_time].append(run)
                 elif run_object == 'Acquire':
+                    pass
+                elif run_object.lower() == 'pause':
                     pass
                 elif run_object == 'DarkFrame':
                     if exposure_time in calibration_runs['Darks'].keys():
