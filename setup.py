@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="velocereduction",
-    version="0.5.4",
+    version="0.6.1",
     install_requires=[
         "numpy",
         "astropy",
