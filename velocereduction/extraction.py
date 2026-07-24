@@ -5,7 +5,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
 from scipy.optimize import curve_fit
-from scipy.ndimage import median_filter
+from scipy.ndimage import median_filter, gaussian_filter
 
 from . import config
 from .utils import read_veloce_fits_image_and_metadata, match_month_to_date, polynomial_function, calculate_barycentric_velocity_correction, phase_correlation_shift
@@ -671,6 +671,109 @@ def get_tellurics_from_bstar(bstar_information, master_flat_images, debug=False)
 
     return(telluric_flux_in_orders, metadata['UTMJD'])
 
+def nan_gaussian_filter(image, sigma):
+    """
+    Gaussian smoothing that ignores NaN values.
+    """
+    image = np.asarray(image, dtype=float)
+
+    valid = np.isfinite(image)
+    values = np.where(valid, image, 0.0)
+    weights = valid.astype(float)
+
+    smooth_values = gaussian_filter(
+        values,
+        sigma=sigma,
+        mode="reflect",
+    )
+    smooth_weights = gaussian_filter(
+        weights,
+        sigma=sigma,
+        mode="reflect",
+    )
+
+    smooth = np.full_like(image, np.nan)
+
+    np.divide(
+        smooth_values,
+        smooth_weights,
+        out=smooth,
+        where=smooth_weights > 1e-6,
+    )
+
+    return smooth
+
+def normalise_echelle_flat(
+    flat,
+    sigma_dispersion=30.0,
+    sigma_cross_dispersion=1.5,
+    illumination_floor=None,
+):
+    """
+    Construct a normalised pixel flat from an echelle flat.
+
+    Assumes:
+        axis 0 = cross-dispersion
+        axis 1 = dispersion
+
+    Returns
+    -------
+    normalised_flat : ndarray
+        Pixel-response flat, approximately unity.
+    smooth_flat : ndarray
+        Smooth illumination model containing the blaze and order profiles.
+    """
+    flat = np.asarray(flat, dtype=float)
+
+    # The smoothing scale is given as:
+    # (cross-dispersion, dispersion)
+    smooth_flat = nan_gaussian_filter(
+        flat,
+        sigma=(
+            sigma_cross_dispersion,
+            sigma_dispersion,
+        ),
+    )
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        normalised_flat = flat / smooth_flat
+
+    # Optionally avoid applying corrections where the flat illumination
+    # is extremely weak. This is not a bad-pixel mask; it simply leaves
+    # unilluminated regions unchanged.
+    if illumination_floor is not None:
+        illuminated = (
+            np.isfinite(smooth_flat)
+            & (
+                smooth_flat
+                > illumination_floor * np.nanmax(smooth_flat)
+            )
+        )
+        normalised_flat[~illuminated] = 1.0
+    else:
+        illuminated = np.isfinite(normalised_flat)
+
+    # Make the typical response exactly unity.
+    usable = (
+        illuminated
+        & np.isfinite(normalised_flat)
+        & (normalised_flat > 0.0)
+    )
+
+    median_response = np.nanmedian(normalised_flat[usable])
+
+    if np.isfinite(median_response) and median_response > 0.0:
+        normalised_flat /= median_response
+
+    # For now, leave invalid values uncorrected.
+    invalid = (
+        ~np.isfinite(normalised_flat)
+        | (normalised_flat <= 0.0)
+    )
+    normalised_flat[invalid] = 1.0
+
+    return normalised_flat, smooth_flat
+
 def shift_polynomial_xy(coeffs, dx=0.0, dy=0.0):
     """
     Shift a polynomial x(y) by CCD offsets:
@@ -779,6 +882,7 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
     # Extract Images from CCDs 1-3
     images = dict()
     images_noise = dict()
+    smooth_flat_images = dict()
     
     # Read in, overscan subtract and append images to array
     for ccd in [1,2,3]:
@@ -863,9 +967,9 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
                 #ax.hist(trimmed_image.flatten(),bins = np.linspace(0,65535,100), histtype='step', ls='dashed', label = 'ThXe '+str(run))
                 nanmed = np.nanpercentile(trimmed_image,99)
                 if ccd == 1:
-                    expectation = 50
+                    expectation = 30
                 elif ccd == 2:
-                    expectation = 200
+                    expectation = 150
                 else:
                     expectation = 500
                 if nanmed < expectation:
@@ -891,10 +995,12 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
                     V_S = S + rn**2
 
                     # Flat-field correct the science image variance
-                    images_noise['ccd_'+str(ccd)].append(V_S / (F**2))
+                    images_noise['ccd_'+str(ccd)].append(V_S)# / (F**2))
 
                 # Flat-field correct the image
-                trimmed_image = S / F
+                trimmed_image = S #/ F
+
+                print('NOT APPLYING FLAT-FIELD CORRECTION AT THE MOMENT!!!')
 
             elif (not Flat) & (ccd == 1):
                 print('     --> Warning: No flat-field correction applied')
@@ -922,12 +1028,16 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
         else: images['ccd_'+str(ccd)] = np.array(np.median(images['ccd_'+str(ccd)],axis=0),dtype=float)
 
         if Flat:
-            # Normalise so that median response = 1
-            images['ccd_'+str(ccd)] /= np.nanmedian(images['ccd_'+str(ccd)])
-            # Ensure that Flat pixels without value are still available as 1.0
-            images['ccd_'+str(ccd)][np.isnan(images['ccd_'+str(ccd)])] = 1.0
-            # Ensure that Flat pixels with negative value or 0.0 exactly are reset to 1.0
-            images['ccd_'+str(ccd)][np.where(images['ccd_'+str(ccd)] <= 0.0)] = 1.0
+
+            normalised_flat, smooth_flat = normalise_echelle_flat(
+                images['ccd_'+str(ccd)],
+                sigma_dispersion=30.0,
+                sigma_cross_dispersion=1.5,
+                illumination_floor=0.01,
+            )
+
+            images['ccd_'+str(ccd)] = normalised_flat
+            smooth_flat_images['ccd_'+str(ccd)] = smooth_flat
 
             # Update tramlines if this was requested
             if update_tramlines_based_on_flat:
@@ -981,7 +1091,7 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
             if np.isnan(vmax):
                 vmax = 1.0
 
-            s = gs[panel_index].imshow(images['ccd_'+str(panel_index+1)],cmap='Oranges_r', norm = LogNorm(vmin=vmin, vmax=vmax))
+            s = gs[panel_index].imshow(images['ccd_'+str(panel_index+1)],cmap='Oranges_r', norm = LogNorm(vmin=vmin, vmax=vmax), interpolation='none')
             cbar_label = r'Log10(Counts)'
 
             gs[panel_index].set_title('CCD '+str(panel_index+1))
@@ -998,7 +1108,7 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
 
             ccd = order[4]
 
-            if (not LC) | (ccd in ['2','3']):
+            if ((not LC) | (ccd in ['2','3'])):
 
                 f_order, ax_order = plt.subplots(figsize=(8,5))
 
@@ -1037,7 +1147,7 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
                     row /= np.nanpercentile(row,90)
                     flat_region_to_show[x_index,:] = row
 
-                s = ax_order.imshow(flat_region_to_show, norm=LogNorm(vmin=np.max([0.0001,np.nanpercentile(flat_region_to_show,50)]), vmax=np.nanpercentile(flat_region_to_show,95)), cmap='Greys_r', aspect='auto', extent=[-width_around_center//2, width_around_center//2, len(order_xrange_center), 0])
+                s = ax_order.imshow(flat_region_to_show, norm=LogNorm(vmin=np.max([0.0001,np.nanpercentile(flat_region_to_show,50)]), vmax=np.nanpercentile(flat_region_to_show,95)), cmap='Greys_r', aspect='auto', extent=[-width_around_center//2, width_around_center//2, len(order_xrange_center), 0], interpolation='none')
                 cbar = plt.colorbar(s, ax=ax_order, extend='both')
                 cbar.set_label('Row-Normalised Counts')
 
@@ -1069,18 +1179,18 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
             counts_in_orders.append(order_counts)
             continue
 
-        order_xrange_begin = np.array(polynomial_function(np.arange(4096,dtype=float),*order_beginning_coeffs[order])-1,dtype=int)
-        order_xrange_end   = np.array(polynomial_function(np.arange(4096,dtype=float),*order_ending_coeffs[order])+1,dtype=int)
+        order_xrange_begin = np.array(polynomial_function(np.arange(4096,dtype=float),*order_beginning_coeffs[order])-2,dtype=int)
+        order_xrange_end   = np.array(polynomial_function(np.arange(4096,dtype=float),*order_ending_coeffs[order])+4,dtype=int)
 
         # The SimLC position is slightly different for CCD2 and CCD3.
         if LC:
             # Default offsets for LC region
-            offset_begin = 10 + pixel_shifts['ccd_'+str(ccd)][0]
-            offset_end = 14 + pixel_shifts['ccd_'+str(ccd)][0]
+            offset_begin = 10 + pixel_shifts['ccd_'+str(ccd)][1]
+            offset_end = 14 + pixel_shifts['ccd_'+str(ccd)][1]
             # Adjust offsets for CCD3
             if ccd == '3':
-                offset_begin = 8 + pixel_shifts['ccd_'+str(ccd)][0]
-                offset_end = 12 + pixel_shifts['ccd_'+str(ccd)][0]
+                offset_begin = 8 + pixel_shifts['ccd_'+str(ccd)][1]
+                offset_end = 12 + pixel_shifts['ccd_'+str(ccd)][1]
             order_xrange_begin = np.array(polynomial_function(np.arange(4096,dtype=float),*order_ending_coeffs[order])+offset_begin,dtype=int)
             order_xrange_end   = np.array(polynomial_function(np.arange(4096,dtype=float),*order_ending_coeffs[order])+offset_end,dtype=int)
 
@@ -1097,8 +1207,41 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
         # Let's loop over the x-pixels (aka rows) of the tramlines
         for x_index, x in enumerate(order_ranges[order]):
 
+            if Science & (order == 'ccd_3_order_91') & (x_index > 1950) & (x_index < 2050):
+
+                f_all, ax_all = plt.subplots(figsize=(8,5))
+                p = ax_all.imshow(images['ccd_'+str(ccd)],cmap='Oranges_r', norm = LogNorm(vmin=np.nanpercentile(images['ccd_'+str(ccd)], 50).clip(min=0.01), vmax=np.nanpercentile(images['ccd_'+str(ccd)], 95).clip(min=1.0)), interpolation='none')
+                cbar = plt.colorbar(p, ax=ax_all, extend='both')
+                f_all.tight_layout()
+                Path(config.working_directory+'reduced_data/'+config.date+'/_tramline_information').mkdir(parents=True, exist_ok=True)
+                f_all.savefig(config.working_directory+'reduced_data/'+config.date+f'/_tramline_information/tramline_{order}_row{x}.pdf',bbox_inches='tight')
+                if 'ipykernel' in sys.modules: plt.show(f_all)
+                plt.close(f_all)
+
+                nr_px_line = len(images['ccd_'+str(ccd)][x,order_xrange_begin[x_index]:order_xrange_end[x_index]])
+                f_line, ax_line = plt.subplots(figsize=(8,5))
+                ax_line.plot(
+                    np.arange(nr_px_line+120)-60, images['ccd_'+str(ccd)][x,order_xrange_begin[x_index]-60:order_xrange_end[x_index]+60], c='C1', lw=0.5, label = 'extended window'
+                )
+                ax_line.plot(
+                    np.arange(nr_px_line), images['ccd_'+str(ccd)][x,order_xrange_begin[x_index]:order_xrange_end[x_index]], c='C0', ls = 'dashed', lw=0.5, label = 'selected pixels'
+                )
+                ax_line.legend()
+                ax_line.set_title(f'CCD {ccd} Order {order[9:]} Tramline Extraction Row {x}')
+                ax_line.set_xlabel('Relative X Pixel (w.r.t. center of tramline)')
+                ax_line.set_ylabel('Counts')
+                f_line.tight_layout()
+                Path(config.working_directory+'reduced_data/'+config.date+'/_tramline_information').mkdir(parents=True, exist_ok=True)
+                if Flat:
+                    f_line.savefig(config.working_directory+'reduced_data/'+config.date+f'/_tramline_information/tramline_flat_{order}_row{x}.pdf',bbox_inches='tight')
+                elif Science:
+                    f_line.savefig(config.working_directory+'reduced_data/'+config.date+f'/_tramline_information/tramline_{metadata["OBJECT"]}_{order}_row{x}.pdf',bbox_inches='tight')
+                if 'ipykernel' in sys.modules: plt.show(f_line)
+                plt.close(f_line)
+
             # For each tramline, find the relevant pixels and then sum across the rows
             counts_in_tramline = np.sum(images['ccd_'+str(ccd)][x,order_xrange_begin[x_index]:order_xrange_end[x_index]], axis=0)
+
             order_counts[order_ranges[order][0] + x_index] = counts_in_tramline
 
             # If we are working with the Science frame, also compute the noise:
@@ -1122,7 +1265,7 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
     elif Bstar:
         return(np.array(counts_in_orders), metadata)
     elif Flat:
-        return(np.array(counts_in_orders), images)
+        return(np.array(counts_in_orders), images, smooth_flat_images)
     else:
         return(np.array(counts_in_orders))
 
@@ -1530,9 +1673,9 @@ def optimise_tramline_polynomial(overscan_subtracted_images, order, order_ranges
         f, ax = plt.subplots(figsize=(15,15))
         ax.set_title('Tramline Extraction for '+order, fontsize=20)
         if order in ['ccd_1_order_167','ccd_1_order_166']:
-            ax.imshow(np.log10(overscan_subtracted_images),cmap='Greys', vmax = np.nanpercentile(np.log10(overscan_subtracted_images.flatten()),68), label = 'Flat Exposure')
+            ax.imshow(np.log10(overscan_subtracted_images),cmap='Greys', vmax = np.nanpercentile(np.log10(overscan_subtracted_images.flatten()),68), label = 'Flat Exposure', interpolation='none')
         else:
-            ax.imshow(np.log10(overscan_subtracted_images),cmap='Greys', label = 'Flat Exposure')
+            ax.imshow(np.log10(overscan_subtracted_images),cmap='Greys', label = 'Flat Exposure', interpolation='none')
         ax.plot(order_xrange_begin-tramline_buffer_left,np.arange(len(order_xrange_begin)),c='C3',lw=0.5, ls = 'dashed', label = 'Initial Tramline Region')
         ax.plot(order_xrange_end-tramline_buffer_right,np.arange(len(order_xrange_begin)),c='C3',lw=0.5, ls = 'dashed', label = '_nolegend_')
         ax.plot(order_xrange_begin,np.arange(len(order_xrange_begin)),c='C3',lw=0.5, label = 'Initial Search Region')
