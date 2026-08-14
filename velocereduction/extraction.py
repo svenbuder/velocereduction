@@ -5,7 +5,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
 from scipy.optimize import curve_fit
-from scipy.ndimage import median_filter, gaussian_filter
+from scipy.ndimage import median_filter, gaussian_filter, gaussian_filter1d
 
 from . import config
 from .utils import read_veloce_fits_image_and_metadata, match_month_to_date, polynomial_function, calculate_barycentric_velocity_correction, phase_correlation_shift
@@ -537,7 +537,7 @@ def read_in_order_tramlines(use_fitted_tramlines = False):
                     if ccd == '1' and order == orders[0]:
                         print(f'  --> Using updated tramline positions.')
                 except:
-                    print(f'  --> Using reference tramlines (No updated tramlines available/wanted).')
+                    print(f'  --> Using reference tramlines (No updated tramlines available for '+order+').')
                     tramline_information = np.loadtxt(Path(__file__).resolve().parent / 'tramline_information' / f'tramlines_begin_end_ccd_{ccd}_order_{order}.txt')
             else:
                 tramline_information = np.loadtxt(Path(__file__).resolve().parent / 'tramline_information' / f'tramlines_begin_end_ccd_{ccd}_order_{order}.txt')
@@ -677,50 +677,11 @@ def get_tellurics_from_bstar(bstar_information, master_flat_images, debug=False)
 
     return(telluric_flux_in_orders, metadata['UTMJD'])
 
-def nan_gaussian_filter(image, sigma):
-    """
-    Gaussian smoothing that ignores NaN values.
-    """
-    image = np.asarray(image, dtype=float)
-
-    valid = np.isfinite(image)
-    values = np.where(valid, image, 0.0)
-    weights = valid.astype(float)
-
-    smooth_values = gaussian_filter(
-        values,
-        sigma=sigma,
-        mode="reflect",
-    )
-    smooth_weights = gaussian_filter(
-        weights,
-        sigma=sigma,
-        mode="reflect",
-    )
-
-    smooth = np.full_like(image, np.nan)
-
-    np.divide(
-        smooth_values,
-        smooth_weights,
-        out=smooth,
-        where=smooth_weights > 1e-6,
-    )
-
-    return smooth
-
-def normalise_echelle_flat(
-    flat,
-    sigma_dispersion=30.0,
-    sigma_cross_dispersion=1.5,
-    illumination_floor=None,
+def smooth_and_normalise_master_flat_image(
+    median_flat
 ):
     """
     Construct a normalised pixel flat from an echelle flat.
-
-    Assumes:
-        axis 0 = cross-dispersion
-        axis 1 = dispersion
 
     Returns
     -------
@@ -729,54 +690,33 @@ def normalise_echelle_flat(
     smooth_flat : ndarray
         Smooth illumination model containing the blaze and order profiles.
     """
-    flat = np.asarray(flat, dtype=float)
 
-    # The smoothing scale is given as:
-    # (cross-dispersion, dispersion)
-    smooth_flat = nan_gaussian_filter(
-        flat,
-        sigma=(
-            sigma_cross_dispersion,
-            sigma_dispersion,
-        ),
+    median_flat = np.asarray(median_flat, dtype=float)
+
+    # smooth along dispersion
+    smooth_flat = gaussian_filter1d(
+        median_flat,
+        sigma=5,
+        axis=0,
+        mode="reflect",
     )
 
     with np.errstate(divide="ignore", invalid="ignore"):
-        normalised_flat = flat / smooth_flat
+        normalised_flat = median_flat / smooth_flat
 
-    # Optionally avoid applying corrections where the flat illumination
-    # is extremely weak. This is not a bad-pixel mask; it simply leaves
-    # unilluminated regions unchanged.
-    if illumination_floor is not None:
-        illuminated = (
-            np.isfinite(smooth_flat)
-            & (
-                smooth_flat
-                > illumination_floor * np.nanmax(smooth_flat)
-            )
-        )
-        normalised_flat[~illuminated] = 1.0
-    else:
-        illuminated = np.isfinite(normalised_flat)
-
-    # Make the typical response exactly unity.
-    usable = (
-        illuminated
-        & np.isfinite(normalised_flat)
-        & (normalised_flat > 0.0)
-    )
-
-    median_response = np.nanmedian(normalised_flat[usable])
-
-    if np.isfinite(median_response) and median_response > 0.0:
-        normalised_flat /= median_response
-
-    # For now, leave invalid values uncorrected.
-    invalid = (
-        ~np.isfinite(normalised_flat)
-        | (normalised_flat <= 0.0)
-    )
-    normalised_flat[invalid] = 1.0
+    f, gs = plt.subplots(1,3, figsize=(15,5), sharex=True, sharey=True)
+    s = gs[0].imshow(median_flat, origin='lower', aspect='equal', cmap='gray', norm=LogNorm(vmin = 1e2, vmax = 2e4))
+    cbar = plt.colorbar(s, ax=gs[0])
+    gs[0].set_title('Raw Flat')
+    s = gs[1].imshow(smooth_flat, origin='lower', aspect='equal', cmap='gray', norm=LogNorm(vmin = 1e2, vmax = 2e4))
+    gs[1].set_title('Smooth Flat')
+    cbar = plt.colorbar(s, ax=gs[1])
+    s = gs[2].imshow(normalised_flat, origin='lower', aspect='equal', cmap='gray', vmin = 0.95, vmax = 1.05)
+    gs[2].set_title('Normalised Flat')
+    cbar = plt.colorbar(s, ax=gs[2])
+    plt.tight_layout()
+    if 'ipykernel' in sys.modules: plt.show()
+    plt.close()
 
     return normalised_flat, smooth_flat
 
@@ -851,9 +791,9 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
     if (Science) & (master_darks is None): print('     --> Warning: Note using any dark subtraction.')
 
     # Read in tramlines.
-    # For Flat: Use reference tramline
-    # Thereafter: Try to use potentially updated tramlines (reverts to reference if not available)
-    if Flat:
+    # For Flat or if not updating tramlines: Use reference tramline
+    # Otherwise: Try to use potentially updated tramlines (reverts to reference if not available)
+    if Flat | ~update_tramlines_based_on_flat:
         order_ranges, order_beginning_coeffs, order_ending_coeffs = read_in_order_tramlines(use_fitted_tramlines=False)
     else:
         order_ranges, order_beginning_coeffs, order_ending_coeffs = read_in_order_tramlines(use_fitted_tramlines=True)
@@ -1046,14 +986,9 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
 
         if Flat:
 
-            normalised_flat, smooth_flat = normalise_echelle_flat(
-                images['ccd_'+str(ccd)],
-                sigma_dispersion=30.0,
-                sigma_cross_dispersion=1.5,
-                illumination_floor=0.01,
-            )
+            normalised_flat, smooth_flat = smooth_and_normalise_master_flat_image(images['ccd_'+str(ccd)])
 
-            images['ccd_'+str(ccd)] = smooth_flat
+            images['ccd_'+str(ccd)] = images['ccd_'+str(ccd)] / normalised_flat
             normalised_flat_image['ccd_'+str(ccd)] = normalised_flat
 
             # Update tramlines if this was requested
@@ -1131,8 +1066,8 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
 
                 # Limit to width around center for visualisation with height of *width_around_center* pixels and populate a 2D array for imshow
                 width_around_center = 70
-                order_xrange_begin = np.array(polynomial_function(np.arange(4096,dtype=float),*order_beginning_coeffs[order])-1)
-                order_xrange_end   = np.array(polynomial_function(np.arange(4096,dtype=float),*order_ending_coeffs[order])+1)
+                order_xrange_begin = np.array(polynomial_function(np.arange(4096,dtype=float),*order_beginning_coeffs[order])-5)
+                order_xrange_end   = np.array(polynomial_function(np.arange(4096,dtype=float),*order_ending_coeffs[order])+6)
 
                 # If we are using the LC, use the few pixels around the LC position
                 if LC:
@@ -1196,8 +1131,8 @@ def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlin
             counts_in_orders.append(order_counts)
             continue
 
-        order_xrange_begin = np.array(polynomial_function(np.arange(4096,dtype=float),*order_beginning_coeffs[order])-2,dtype=int)
-        order_xrange_end   = np.array(polynomial_function(np.arange(4096,dtype=float),*order_ending_coeffs[order])+3,dtype=int)
+        order_xrange_begin = np.array(polynomial_function(np.arange(4096,dtype=float),*order_beginning_coeffs[order])-5,dtype=int)
+        order_xrange_end   = np.array(polynomial_function(np.arange(4096,dtype=float),*order_ending_coeffs[order])+6,dtype=int)
 
         # The SimLC position is slightly different for CCD2 and CCD3.
         if LC:

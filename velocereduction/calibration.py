@@ -998,7 +998,7 @@ def calibrate_wavelength(science_object, pixel_shifts = None, optimise_lc_soluti
                         initial_centre_wavelength = wavelength_with_lowest_flux_within_300_kms
 
                 wavelength_to_fit = file[order].data['WAVE_AIR'][close_to_line_centre]
-                flux_to_fit = file[order].data['SCIENCE'][close_to_line_centre]
+                flux_to_fit = file[order].data['SCIENCE'][close_to_line_centre] / file[order].data['FLAT'][close_to_line_centre]
 
                 # Avoid outlier pixels and renormalise locally
                 # Estimate 90th percentile and clip all values above 2*90th percentile
