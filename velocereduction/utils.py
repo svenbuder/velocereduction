@@ -49,6 +49,25 @@ SSO = EarthLocation.of_site('Siding Spring Observatory')
 # simbad_magnitudes_query.add_votable_fields('G')
 # simbad_magnitudes_query.add_votable_fields('R')
 
+
+##### Begin 0.7.0
+
+from dataclasses import dataclass
+
+@dataclass
+class ReductionConfig:
+
+    night: str
+
+    # User-facing runtime choices
+    log_level: str = 'INFO'
+    diagnostics: str = 'basic'
+    extraction_mode: str = 'summed'
+    overwrite: bool = False
+
+##### End 0.7.0
+
+
 def robust_sigma(values):
     """Robust standard deviation from the median absolute deviation."""
     values = np.asarray(values, float)

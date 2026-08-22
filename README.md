@@ -1,9 +1,12 @@
-# *velocereduction*
+# VeloceReduction
 
 [![codecov](https://codecov.io/gh/svenbuder/velocereduction/graph/badge.svg?token=VN0Q5BL8O9)](https://codecov.io/gh/svenbuder/velocereduction)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/svenbuder/velocereduction/blob/main/LICENSE)
 
 This package is designed for the reduction of spectroscopic data from the [Veloce](https://aat.anu.edu.au/science/instruments/current/veloce/overview) spectrograph.
+
+The pipeline reduces a complete observing night from raw detector images to wavelength-calibrated science spectra, including flat-fielding, wavelength calibration, barycentric corrections, initial radial velocities, and diagnostic
+products.
 
 Below are two reduced spectra of the solar-like star alpha Centauri A (HIP71683, [Fe/H] = 0.20 dex) on the left and the metal-poor star HD 140283 (HIP76976, [Fe/H] = -2.48) on right right.
 
@@ -11,6 +14,7 @@ Below are two reduced spectra of the solar-like star alpha Centauri A (HIP71683,
   <img src="./velocereduction/veloce_reference_data/Veloce_alfCenA.png" width="30%"/>
   <img src="./velocereduction/veloce_reference_data/Veloce_HD140283.png" width="30%"/>
 </p>
+
 
 ## Installation
 
@@ -35,122 +39,256 @@ cd velocereduction
 pip install .
 ```
 
-## Usage Instructions
+## Start here
 
-### Tutorial
+The easiest way to understand the pipeline is to open:
 
-The package comes with an interactive tutorial called VeloceReduction_tutorial.
+    reduce_night.ipynb
 
-You can either use this tutorial in Jupyter notebook, that is, [VeloceReduction_tutorial.ipynb](./scripts/VeloceReduction_tutorial.ipynb).  
+This notebook is the master workflow for reducing one complete night.
 
-Or use its executable python version from the command line:
-```bash
-./scripts/VeloceReduction_tutorial.py -d 001122 -wd ./
-```
+The corresponding command-line version is:
 
-The latter version comes with optional arguments of date `-d` (or `--date`) in the YYMMDD format and the working directory `-wd` (or `--working_directory`) as well as the `-h` (or `--help`) options.
+    reduce_night.py
 
-By default, a hard-coded example with `-d 001122` and `-wd ./` is used to run an example reduction of Arcturs (HIP69673) with minimum files provided as part of the package.
+`reduce_night.py` is generated from the notebook and should not be edited
+independently.
 
-### Expected format of observations directory
+---
 
-The code is expecting observations to be saved in a sub-directory of your working direcory called `observations/`.
+## Running a night
 
-In this directory, the code is further expecting each observing run to be saved in the same directory format as the one created by the Veloce observation software:
+### Interactive
 
-```bash
-observations/               # Directory where the different observing runs are saved.
-└── YYMMDD/                  # Date of the observing run
-│   ├── YYMMDD-AAT*.log/     # Night Log that is automatically created by Veloce's VC software, e.g. 001122-AAT*.log
-│   ├── ccd_1/               # Directory with images of CCD1
-│   │   ├── DDmon10001.fits  # Image of exposure 1 taken with CCD1, e.g. 22nov10001.log
-│   │   ├── DDmon10001.fits  # Image of exposure 2 taken with CCD1, e.g. 22nov10002.log
-│   │   └── ...              # Image of more exposure taken with CCD1
-│   ├── ccd_2/               # Directory with images of CCD2
-│   │   ├── DDmon20001.fits  # Image of exposure 1 taken with CCD2, e.g. 22nov20001.log
-│   │   ├── DDmon20001.fits  # Image of exposure 2 taken with CCD2, e.g. 22nov20002.log
-│   │   └── ...              # Image of more exposure taken with CCD2
-│   └── ccd_3/               # Directory with images of CCD3
-│       ├── DDmon30001.fits  # Image of exposure 1 taken with CCD3, e.g. 22nov30001.log
-│       ├── DDmon30002.fits  # Image of exposure 2 taken with CCD3, e.g. 22nov30002.log
-│       └── ...              # Image of more exposure taken with CCD3
-└── .../                     # Date of another observing run
-```
+Open `reduce_night.ipynb` and set:
 
-### Output
+    night = '001122'
 
-The software is creating new directories in the working directory that include spectra and other files for each science run:
+near the top of the notebook.
 
-```bash
-reduced_data/                                               # Directory where the different observing runs are saved.
-└── YYMMDD/                                                 # Date of the observing run
-│   ├── SCIENCENAME/                                        # Name of the science object as given to Veloce's queue.
-│   │   ├── veloce_spectra_SCIENCENAME_YYMMDD_overview.pdf  # Image of exposure 2 taken with CCD1, e.g. 22nov10002.log
-│   │   └── veloce_spectra_SCIENCENAME_YYMMDD.fits          # Image of exposure 2 taken with CCD1, e.g. 22nov10002.log
-│   └── ANOTHER_SCIENCENAME/                                # Directory with images of CCD3
-└── .../                                                    # Date of another observing run
-```
+### Command line
 
-An example reduction (blue line) of order 143 for CCD1 is shown here in comparison to a not-optimised model spectrum of the [Korg](https://ajwheeler.github.io/Korg.jl/stable/) spectrum synthesis tool with telluric lines by [Hinkle et al. (2000)](https://ui.adsabs.harvard.edu/abs/2000vnia.book.....H):
-<p align="center">
-  <img src="./velocereduction/veloce_reference_data/veloce_reduction_ccd_1_order_143.png" width="100%"/>
-</p>
+    python reduce_night.py 001122
 
+By default the pipeline uses:
 
+    log level:     INFO
+    diagnostics:   basic
 
-## Workflow
+For a full developer/debug reduction:
 
-### Identification of calibration and science runs + tramlines extractions
-- Identify calibration runs and science runs from log files.
-- For calibration frames, the following are hard-coded to be use:
-   - Flat_60.0 (Azzurro), Flat_1.0 (Verde), Flat_0.1 (Rosso)
-   - FibTh_180.0 (Azzurro), FibTh_60.0 (Verde), FibTh_15.0 (Rosso)
-   - SimLC (Verde), SimLC (Rosso)
-   - Dark not yet implemented
-- Identify overscan region and its RMS, subtract overscan and trim image
-- Join image of same type: calculate median image for calibration runs; co-add images for science runs
-- Extract tramlines: use predefined regions from Chris Tinney to identify pixels for each order that will be co-added
-- Calculate Master Flat, ThXe, and LC observation (no Darks yet)
-- Extract Science for each frame and co-add science signals for all observations of the night
-- Calculate rough SNR: use sqrt(counts + total_read noise^2), where read_noise is calculated from maximum overscan RMS (across full CCD) * sqrt(nr of pixels). For science runs also multiply read noise by sqrt(nr of runs), since they are co-added. Using the summed signal $S = \sum_{px=1}^{n_{px}} \sum_{exp=1}^{n_{exp}} S_{px,exp}$ across the number of pixels $n_{px}$ and $n_{exp}$ exposures, and $N_{read,px}$ is the readout noise for a single pixel, we calculate the total noise $N$ in a wavelength data point as:
-  
-$$N = \sqrt{S + N_{read,px}^2 * n_{px} * n_{exp}},$$  
+    python reduce_night.py 001122 --log-level DEBUG --diagnostics full
 
-- Flat-field correct science, science noise, thxe, and lc observations.
-- Safe files as veloce_spectra_SCIENCENAME_YYMMDD.fits with one extension per order. Each order has a data table with 6x4128 entries for wave (at this stage only placeholder), science, science_noise, flat, thxe, and lc. ccd and orders can be identified from the FITS extension "EXTNAME" in the form of "CCD_3_ORDER_93" for CCD3's 93rd order.
+For a fast production reduction without diagnostic figures:
 
-### Wavelength calibration
-- Loop over the science runs
-- Read in the veloce_spectra_SCIENCENAME_YYMMDD.fits file
-- Loop over each order and use the preidentified thxe pixel -> wavelength combinations to fit a 4th order polynomial wavelength solution in vacuum (WAVE_VAC).
-- This is currently a static solution (assuming and hoping that the pixel -> wavelength positions do not change over the years)
-- Optional (but activated by default): Apply barycentric velocity correction based on FITS header information on position and observing time (Ra, Dec, UTMJD)
-- Optional (but activated by default): Fit Voigt line profiles to Halpha and two of the CaT lines to estimate rough radial velocity and at to FITS header (VRAD and E_VRAD).
-- LC is currently not used to improve wavelength solution
-- Calculate the wavelength also in air (WAVE_AIR).
-- Overwrite WAVE_VAC and WAVE_AIR placeholders and update veloce_spectra_SCIENCENAME_YYMMDD.fits
+    python reduce_night.py 001122 --diagnostics none
+
+Use:
+
+    python reduce_night.py --help
+
+for all options.
+
+---
+
+## Pipeline overview
+
+A complete night is processed in the following order:
+
+1. Identify and classify all observations
+2. Prepare detector images and dark information
+3. Create the master Flat
+4. Measure detector shifts and nightly tramline geometry
+5. Create flat-response and blaze products
+6. Extract SimLC and FibTh wavelength-calibration spectra
+7. Fit the wavelength solution
+8. Extract science spectra
+9. Calculate barycentric velocity corrections
+10. Measure initial radial velocities
+11. Extract and analyse B-star/telluric observations
+12. Save science products, diagnostic figures, and reduction summary
+
+The notebook deliberately contains only high-level pipeline calls.
+The implementation of each step is kept in the corresponding Python module.
+
+---
+
+## Code organisation
+
+    velocereduction/
+        utils.py          File handling, night setup, logging, detector utilities
+        flat.py           Master Flat, response Flat, blaze
+        tramlines.py      Detector shifts, order traces, extraction regions
+        extraction.py     Summed and fibre-resolved spectral extraction
+        wavelength.py     SimLC/FibTh wavelength fitting and wavelength assignment
+        velocities.py     Barycentric corrections and radial velocities
+        tellurics.py      B-star and telluric measurements
+
+For example:
+
+    tramlines.fit_nightly_tramlines(...)
+
+is implemented in `tramlines.py`.
+
+Functions beginning with `_` are internal implementation details and normally
+should not be called from the master pipeline.
+
+---
+
+## Diagnostic levels
+
+Text logging and diagnostic figures are controlled independently.
+
+### Logging
+
+    DEBUG
+        Detailed developer information
+
+    INFO
+        Normal reduction progress and important measurements
+
+    WARNING
+        Potential problems and fallbacks
+
+    ERROR
+        Failed reduction steps
+
+All pipeline logging is written to:
+
+    reduction_process_log_YYMMDD.txt
+
+### Diagnostic products
+
+    none
+        No diagnostic figures. Intended for fast batch reductions.
+
+    basic
+        Important night-level figures showing whether the reduction succeeded.
+        This is the default.
+
+    full
+        Complete developer diagnostics, including per-order and per-exposure
+        figures. Intended for debugging and the reference-night test suite.
+
+Useful retained figures are written to:
+
+    figures/
+
+Verbose developer diagnostics are written to:
+
+    debug/
+
+---
+
+## Input and output structure
+
+Raw observations are linked under:
+
+    observations/YYMMDD/
+
+Reductions are separated by VeloceReduction version:
+
+    reductions/
+        vr_X.Y.Z/
+            YYMMDD/
+
+For example:
+
+    reductions/vr_0.6.0/001122/
+
+Each reduced night contains:
+
+    night_overview/
+    reduction_input_YYMMDD.txt
+    reduction_process_log_YYMMDD.txt
+    reduction_summary_YYMMDD.txt
+
+    calibrations/
+        detector/
+        flat/
+        wavelength/
+
+    science/
+        summed/
+        fibre/
+
+    figures/
+    debug/
+
+The top-level text files answer:
+
+    reduction_input    What observations went into the reduction?
+    process_log        What did the pipeline do?
+    reduction_summary  What came out and were there any problems?
+
+---
+
+## Extraction products
+
+The initial pipeline uses summed extraction across the cross-dispersion
+direction:
+
+    extraction_mode = 'summed'
+
+A future fibre-resolved mode will use:
+
+    extraction_mode = 'fibre'
+
+The same distinction applies to Science, SimLC, and FibTh products.
+
+The extraction method and pipeline version are stored in the FITS metadata.
+
+---
+
+## Wavelength calibration
+
+Both SimLC laser-comb spectra and FibTh spectra contribute to the wavelength
+solution.
+
+Extracted calibration observations are stored under:
+
+    calibrations/wavelength/
+
+with their exposure identifiers and MJD midpoint recorded in both the filename
+and FITS metadata.
+
+---
+
+## Tests
+
+Run the fast test suite with:
+
+    pytest
+
+Tests include:
+
+- unit tests of individual algorithms
+- synthetic detector/extraction tests
+- small integration tests
+- regression tests using reference night `001122`
+
+The complete reference-night debug reduction is run separately through
+GitHub Actions with:
+
+    log_level='DEBUG'
+    diagnostics='full'
+
+Code coverage is monitored with Codecov.
+
+When fixing a bug, add the smallest possible test that reproduces the problem
+before applying the fix.
 
 ## Dependencies
 
-The is only tested for Python >= 3.9.
-
-It requires the following libraries:
+The is only tested for Python >= 3.9. It requires the following libraries:  
 - NumPy
 - SciPy
 - matplotlib
 - Astropy
-- Astroquery >= 0.4.8
 
 ## Author
 
 Sven Buder (ANU, sven.buder@anu.edu.au)
-
-## Contributing and Testing
-
-Contributions to enhance and expand this package are highly encouraged. Please feel free to fork the repository, make your improvements, and submit a pull request.
-
-The package has both GitHub Actions for testing and code coverage as well as the succseful run of the `scripts/VeloceReduction_tutorial.py`.  
-Succesfully passing these tests is a requirement for merging your file changes into the main branch.
 
 ## License
 
