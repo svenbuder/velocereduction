@@ -6,6 +6,7 @@ import subprocess
 import platform
 import os
 import sys
+from math import comb
 
 # Numpy package
 import numpy as np
@@ -47,6 +48,40 @@ SSO = EarthLocation.of_site('Siding Spring Observatory')
 # simbad_magnitudes_query.add_votable_fields('V')
 # simbad_magnitudes_query.add_votable_fields('G')
 # simbad_magnitudes_query.add_votable_fields('R')
+
+def robust_sigma(values):
+    """Robust standard deviation from the median absolute deviation."""
+    values = np.asarray(values, float)
+    values = values[np.isfinite(values)]
+
+    if len(values) == 0:
+        return np.nan
+
+    median = np.nanmedian(values)
+    sigma = 1.4826 * np.nanmedian(np.abs(values - median))
+
+    return sigma if np.isfinite(sigma) and sigma > 0 else np.nanstd(values)
+
+def shifted_coefficients(coeffs, dx=0., dy=0.):
+    """
+    Shift polynomial y(x) to current detector coordinates.
+
+    Convention:
+        x_current = x_reference + dx
+        y_current = y_reference + dy
+
+    Thus:
+        y_current(x) = y_reference(x - dx) + dy
+    """
+    coeffs = np.asarray(coeffs, float)
+    shifted = np.zeros_like(coeffs)
+
+    for k, ck in enumerate(coeffs):
+        for j in range(k + 1):
+            shifted[j] += ck * comb(k, j) * (-dx)**(k-j)
+
+    shifted[0] += dy
+    return shifted
 
 def phase_correlation_shift(reference_image, moving_image, upsample_factor = 100):
     """

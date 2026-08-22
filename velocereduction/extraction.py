@@ -1,14 +1,23 @@
 import sys
 from pathlib import Path
+import warnings
 
 import numpy as np
+from numpy.polynomial import Polynomial
+
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
+
 from scipy.optimize import curve_fit
-from scipy.ndimage import median_filter
+from scipy.ndimage import median_filter, gaussian_filter1d
+from scipy.signal import find_peaks
 
 from . import config
-from .utils import read_veloce_fits_image_and_metadata, match_month_to_date, polynomial_function, calculate_barycentric_velocity_correction, phase_correlation_shift
+from .utils import read_veloce_fits_image_and_metadata, match_month_to_date, polynomial_function, calculate_barycentric_velocity_correction, phase_correlation_shift, robust_sigma, shifted_coefficients
+
+POLY_DEGREE = 4
+N_COEFF = POLY_DEGREE + 1
+
 
 def substract_overscan(full_image, metadata, debug_overscan = False):
     """
@@ -172,7 +181,63 @@ def substract_overscan(full_image, metadata, debug_overscan = False):
         
     return(trimmed_image, overscan_median, overscan_rms, metadata['READOUT'])
 
-def estimate_ccd_pixel_shifts_wrt_reference(date, calibration_runs, max_deviation_from_reference=0.5):
+def read_image_noise_and_metadata(image_type, ccd1_runs, ccd2_runs, ccd3_runs, debug_overscan = False):
+    """
+    Reads in images from CCDs 1-3, performs overscan subtraction, and returns the processed images along with their noise and metadata.
+    """
+
+    # Extract Images from CCDs 1-3
+    images = dict()
+    images_noise = dict()
+    images_metadata = dict()
+
+    # Read in, overscan subtract and append images to array
+    for ccd in [1,2,3]:
+        
+        images['ccd_'+str(ccd)] = []
+        images_noise['ccd_'+str(ccd)] = []
+        if ccd == 1: runs = ccd1_runs
+        if ccd == 2: runs = ccd2_runs
+        if ccd == 3: runs = ccd3_runs
+
+        for run in runs:
+
+            # There is not LC flux in CCD1, so we create mock ones with unit flux.
+            if (image_type == 'SimLC') & (ccd == 1):
+                trimmed_image = np.ones((4112,4096),dtype=float)
+                os_median = {'q1':0,'q2':0}
+                os_rms = {'q1':0,'q2':0}
+                readout_mode = 'None'
+            else:
+                full_image, metadata = read_veloce_fits_image_and_metadata(config.working_directory+'observations/'+config.date+'/ccd_'+str(ccd)+'/'+config.date[-2:]+match_month_to_date(config.date)+str(ccd)+run+'.fits')
+                trimmed_image, os_median, os_rms, readout_mode = substract_overscan(full_image, metadata, debug_overscan)
+
+            # Add check if CURE mirror folded in: We expect strong signals for Flat and ThXe.
+            use_this_image = True
+            if image_type == 'Flat':
+                # Residual from implementing CURE mirror monitoring
+                #ax.hist(trimmed_image.flatten(),bins = np.linspace(0,65535,100), histtype='step', ls='dashed', label = 'Flat '+str(run))
+                nanmed = np.nanpercentile(trimmed_image,99)
+                expectation = 5000
+                if nanmed < expectation:
+                    print('  --> Flat image '+str(run)+' for CCD '+str(ccd)+' has not enough signal in 99th percentile ('+str(nanmed)+'<'+str(expectation)+'). Ignoring. Was CURE mirror maybe not folded in?')
+                    use_this_image = False
+        
+            if use_this_image:
+                images['ccd_'+str(ccd)].append(trimmed_image)
+            elif (run == runs[-1]) & len(images['ccd_'+str(ccd)]) == 0:
+                print('  --> No good Flat or ThXe available for CCD '+str(ccd)+'. Be careful!')
+                images['ccd_'+str(ccd)].append(trimmed_image)
+
+        try:
+            images_metadata['readout_mode'] = readout_mode
+            images_metadata['ccd_'+str(ccd)+'_rms'] = os_rms
+        except:
+            pass
+
+    return(images, images_noise, images_metadata)
+
+def estimate_detector_shifts(date, calibration_runs, max_deviation_from_reference=0.5):
     """
     Estimate pixel shifts in x and y directions with respect to reference frames (from 001122).
 
@@ -391,6 +456,824 @@ def estimate_ccd_pixel_shifts_wrt_reference(date, calibration_runs, max_deviatio
         print(f'      dX {pixel_shift_x_mean:+.2f} +/- {pixel_shift_x_std:.2f} and dY {pixel_shift_y_mean:+.2f} +/- {pixel_shift_y_std:.2f}')
 
     return pixel_shifts_wrt_reference
+
+REGION_COLOURS = {
+    'SimTh':   'C1',
+    'Sky_1':   'C0',
+    'Science': 'C4',
+    'Sky_2':   'C0',
+    'SimLC':   'C3',
+}
+
+def extract_trace(image, trace, half_window):
+    """
+    Extract a fixed-width region around a tramline.
+
+    Pixels outside the CCD are returned as NaN.
+    """
+    nx, ny = image.shape
+    centres = np.rint(trace).astype(int)
+    extracted = np.full((nx, 2 * half_window), np.nan)
+
+    for x, centre in enumerate(centres):
+        y0, y1 = centre - half_window, centre + half_window
+        source0, source1 = max(0, y0), min(ny, y1)
+
+        if source0 < source1:
+            destination0 = source0 - y0
+            extracted[x, destination0:destination0 + source1-source0] = \
+                image[x, source0:source1]
+
+    return extracted, centres
+
+
+def collapsed_profile(extracted):
+    """
+    Collapse an extracted order along dispersion.
+
+    Corrects for CCD-edge regions where different numbers of valid
+    dispersion pixels contribute.
+    """
+    valid = np.isfinite(extracted)
+    n_valid = valid.sum(axis=0)
+    summed = np.nansum(extracted, axis=0)
+
+    profile = np.full(extracted.shape[1], np.nan)
+    good = n_valid > 0
+
+    if np.any(good):
+        profile[good] = (
+            summed[good] / n_valid[good] * np.nanmedian(n_valid[good])
+        )
+
+    return profile
+
+
+def plot_tramline(extracted, row, order, image_type):
+    """
+    Diagnostic extracted tramline + collapsed profile.
+
+    Only the final adopted extraction boundaries are shown.
+    """
+    half_window = int(row['extraction_half_window'])
+    profile = collapsed_profile(extracted)
+
+    fig, (ax_image, ax_profile) = plt.subplots(
+        2, 1,
+        figsize=(6, 7),
+        sharex=True,
+        constrained_layout=True,
+        height_ratios=[3, 1]
+    )
+
+    finite = np.isfinite(extracted)
+    vmax = np.nanpercentile(extracted[finite], 95) if finite.any() else 1.
+
+    image_plot = ax_image.imshow(
+        extracted,
+        origin='lower',
+        aspect='auto',
+        cmap='Greys_r',
+        vmax=vmax
+    )
+
+    ax_image.set_ylabel('Dispersion pixel')
+
+    cbar = plt.colorbar(
+        image_plot,
+        ax=ax_image,
+        orientation='horizontal',
+        location='top',
+        pad=0.01,
+        fraction=0.05
+    )
+    cbar.set_label(f'Counts for {order} — {image_type}')
+
+    # Central tramline.
+    ax_image.axvline(
+        half_window,
+        color='k',
+        lw=0.8,
+        ls='dotted'
+    )
+
+    # Collapsed cross-dispersion profile.
+    ax_profile.plot(profile / 1e3, color='k')
+
+    # Final adopted extraction regions.
+    for region, colour in REGION_COLOURS.items():
+        begin = float(row[f'{region}_begin']) + half_window
+        end = float(row[f'{region}_end']) + half_window
+
+        if not (np.isfinite(begin) and np.isfinite(end)):
+            continue
+
+        ax_image.axvline(begin, color=colour, lw=1, ls='dashed')
+        ax_image.axvline(end, color=colour, lw=1, ls='dashed')
+
+        ax_profile.axvspan(
+            begin, end,
+            color=colour,
+            alpha=0.25,
+            lw=0,
+            label=region
+        )
+
+    ticks = np.arange(5, 2 * half_window, 10)
+    ax_profile.set_xticks(ticks, ticks - half_window)
+
+    ax_profile.set_xlabel(
+        'Cross-dispersion pixel relative to central fibre'
+    )
+    ax_profile.set_ylabel(r'Counts / $10^3$')
+    ax_profile.legend(ncol=2, loc='lower center', fontsize=8)
+
+    fig.align_ylabels([ax_image, ax_profile])
+
+    plt.show()
+    plt.close(fig)
+
+def _find_trough(profile, m, expected, radius=6, smooth=1.5,
+                 min_prominence=5., prominence_fraction=0.05):
+    """Find a dark minimum near its expected position."""
+
+    use = np.isfinite(profile) & (np.abs(m - expected) <= radius)
+
+    if use.sum() < 5:
+        return np.nan
+
+    x = m[use]
+    y = gaussian_filter1d(profile[use], smooth)
+
+    dynamic = np.nanpercentile(y, 95) - np.nanpercentile(y, 5)
+    prominence = max(min_prominence, prominence_fraction * dynamic)
+
+    peaks, _ = find_peaks(-y, prominence=prominence)
+
+    if len(peaks) == 0:
+        return np.nan
+
+    i = peaks[np.argmin(np.abs(x[peaks] - expected))]
+
+    # Sub-pixel parabolic minimum.
+    if 0 < i < len(x) - 1:
+        a, b, _ = np.polyfit(x[i-1:i+2], y[i-1:i+2], 2)
+
+        if a > 0:
+            position = -b / (2 * a)
+
+            if x[i-1] <= position <= x[i+1]:
+                return position
+
+    return x[i]
+
+
+def _fit_flat_trace(x, left, right, sigma_clip=4., iterations=5):
+    """
+    Fit the midpoint of the two Flat minima with a 4th-order polynomial.
+
+    Also requires their half-separation to remain approximately constant
+    along a given order.
+    """
+    centre = 0.5 * (left + right)
+    width = 0.5 * (right - left)
+
+    good = (
+        np.isfinite(x)
+        & np.isfinite(centre)
+        & np.isfinite(width)
+        & (width > 0)
+    )
+
+    if good.sum() < N_COEFF + 1:
+        raise RuntimeError('Too few Flat gap measurements')
+
+    for _ in range(iterations):
+
+        p = Polynomial.fit(
+            x[good], centre[good], POLY_DEGREE
+        ).convert()
+
+        centre_residual = centre - p(x)
+        width_residual = width - np.nanmedian(width[good])
+
+        centre_sigma = robust_sigma(centre_residual[good])
+        width_sigma = robust_sigma(width_residual[good])
+
+        new_good = good.copy()
+
+        if np.isfinite(centre_sigma) and centre_sigma > 0:
+            new_good &= np.abs(centre_residual) < sigma_clip * centre_sigma
+
+        if np.isfinite(width_sigma) and width_sigma > 0:
+            new_good &= np.abs(width_residual) < sigma_clip * width_sigma
+
+        if np.array_equal(new_good, good):
+            break
+
+        good = new_good
+
+    if good.sum() < N_COEFF + 1:
+        raise RuntimeError('Too few Flat measurements after clipping')
+
+    p = Polynomial.fit(
+        x[good], centre[good], POLY_DEGREE
+    ).convert()
+
+    coeffs = np.zeros(N_COEFF)
+    coeffs[:len(p.coef)] = p.coef
+
+    half_width = np.nanmedian(width[good])
+    rms = np.sqrt(np.nanmean((centre[good] - p(x[good]))**2))
+
+    return coeffs, half_width, good, rms
+
+
+def _find_outer_edge(profile, m, expected, bright_side, radius,
+                     smooth=1.5, threshold_fraction=0.20, min_snr=2.5):
+    """Find the outer beginning/end of a Sky region."""
+
+    use = np.isfinite(profile) & (np.abs(m - expected) <= radius)
+
+    if use.sum() < 7:
+        return np.nan
+
+    x = m[use]
+    raw = profile[use]
+    y = gaussian_filter1d(raw, smooth)
+
+    left = y[x < expected - 1]
+    right = y[x > expected + 1]
+
+    if len(left) < 2 or len(right) < 2:
+        return np.nan
+
+    left_level = np.nanmedian(left)
+    right_level = np.nanmedian(right)
+
+    if bright_side == 'right':
+        dark, bright, direction = left_level, right_level, +1
+    else:
+        bright, dark, direction = left_level, right_level, -1
+
+    contrast = bright - dark
+    noise = robust_sigma(raw - y)
+
+    if contrast <= 0:
+        return np.nan
+
+    if np.isfinite(noise) and noise > 0 and contrast < min_snr * noise:
+        return np.nan
+
+    threshold = dark + threshold_fraction * contrast
+    crossings = []
+
+    for i in range(len(x) - 1):
+
+        crosses = (
+            (y[i] - threshold)
+            * (y[i+1] - threshold)
+            <= 0
+        )
+
+        correct_direction = direction * (y[i+1] - y[i]) > 0
+
+        if crosses and correct_direction:
+
+            if y[i+1] == y[i]:
+                position = 0.5 * (x[i] + x[i+1])
+            else:
+                position = x[i] + (
+                    (threshold - y[i])
+                    * (x[i+1] - x[i])
+                    / (y[i+1] - y[i])
+                )
+
+            crossings.append(position)
+
+    return (
+        min(crossings, key=lambda value: abs(value - expected))
+        if crossings else np.nan
+    )
+
+
+def _find_bright_interval(profile, m, begin0, end0,
+                          smooth=1.5,
+                          threshold_fraction=0.20,
+                          min_snr=6.):
+    """
+    Find the illuminated SimTh/SimLC interval.
+
+    Search padding scales with its reference width, while the measured
+    width itself is free to vary.
+    """
+
+    width0 = max(abs(end0 - begin0), 1.)
+    padding = max(6., width0)
+
+    use = (
+        np.isfinite(profile)
+        & (m >= begin0 - padding)
+        & (m <= end0 + padding)
+    )
+
+    if use.sum() < 7:
+        return np.nan, np.nan, False
+
+    x = m[use]
+    raw = profile[use]
+    y = gaussian_filter1d(raw, smooth)
+
+    low, high = np.nanpercentile(y, [10, 95])
+    amplitude = high - low
+    noise = robust_sigma(raw - y)
+
+    # Reject absent calibration signal.
+    if not np.isfinite(amplitude) or amplitude <= 0:
+        return np.nan, np.nan, False
+
+    if np.isfinite(noise) and noise > 0 and amplitude < min_snr * noise:
+        return np.nan, np.nan, False
+
+    threshold = low + threshold_fraction * amplitude
+    bright = y > threshold
+
+    changes = np.diff(
+        np.r_[False, bright, False].astype(int)
+    )
+
+    starts = np.where(changes == 1)[0]
+    ends = np.where(changes == -1)[0] - 1
+
+    if len(starts) == 0:
+        return np.nan, np.nan, False
+
+    # Prefer a component overlapping the old interval;
+    # otherwise select the nearest one.
+    expected = 0.5 * (begin0 + end0)
+    candidates = []
+
+    for start, end in zip(starts, ends):
+
+        overlap = max(
+            0.,
+            min(x[end], end0) - max(x[start], begin0)
+        )
+
+        distance = abs(
+            0.5 * (x[start] + x[end]) - expected
+        )
+
+        candidates.append(
+            (overlap, -distance, start, end)
+        )
+
+    _, _, start, end = max(candidates)
+
+    begin = x[start]
+    finish = x[end]
+
+    # Sub-pixel threshold crossings.
+    if start > 0 and y[start] != y[start-1]:
+        begin = x[start-1] + (
+            (threshold-y[start-1])
+            * (x[start]-x[start-1])
+            / (y[start]-y[start-1])
+        )
+
+    if end < len(x)-1 and y[end+1] != y[end]:
+        finish = x[end] + (
+            (threshold-y[end])
+            * (x[end+1]-x[end])
+            / (y[end+1]-y[end])
+        )
+
+    if finish <= begin:
+        return np.nan, np.nan, False
+
+    return begin, finish, True
+
+def update_tramline_order(image, image_type, row,
+                          dx=0., dy=0., debug=False):
+    """
+    Update tramline information for one order.
+
+    Flat:
+        fit current 4th-order tramline from Sky/Science minima;
+        Science extraction goes minimum-to-minimum.
+
+    SimTh / SimLC:
+        keep tramline fixed and only determine begin/end of signal.
+
+    Science:
+        no geometry update.
+    """
+
+    order = (
+        row['order_name'].decode()
+        if isinstance(row['order_name'], bytes)
+        else str(row['order_name'])
+    )
+
+    ccd = order[4]
+    half_window = int(row['extraction_half_window'])
+
+    x = np.arange(image.shape[0], dtype=float)
+    m = np.arange(2 * half_window) - half_window
+
+    # Current predicted trace
+    coeffs = np.array([
+        float(row[f'tramline_coeff_{i}'])
+        for i in range(N_COEFF)
+    ])
+
+    coeffs = shifted_coefficients(coeffs, dx, dy)
+    trace = Polynomial(coeffs)(x)
+
+    extracted, centres = extract_trace(
+        image, trace, half_window
+    )
+
+    # FLAT
+    if image_type == 'Flat':
+
+        old_left = 0.5 * (
+            float(row['Sky_1_end'])
+            + float(row['Science_begin'])
+        )
+
+        old_right = 0.5 * (
+            float(row['Science_end'])
+            + float(row['Sky_2_begin'])
+        )
+
+        # Measure minima along dispersion.
+        
+        measurements = []
+
+        for x0 in range(0, len(extracted), 4):
+
+            lo = max(0, x0 - 2)
+            hi = min(len(extracted), x0 + 3)
+
+            with warnings.catch_warnings():
+                warnings.simplefilter('ignore', RuntimeWarning)
+                profile = np.nanmedian(
+                    extracted[lo:hi],
+                    axis=0
+                )
+
+            # Account for integer centring of extracted array.
+            fractional_offset = trace[x0] - centres[x0]
+
+            left = _find_trough(
+                profile,
+                m,
+                old_left + fractional_offset
+            )
+
+            right = _find_trough(
+                profile,
+                m,
+                old_right + fractional_offset
+            )
+
+            if (
+                np.isfinite(left)
+                and np.isfinite(right)
+                and right > left
+            ):
+                measurements.append((
+                    x0,
+                    centres[x0] + left,
+                    centres[x0] + right
+                ))
+
+        # Fit trace, falling back to shifted reference for faint orders.
+        
+        left_gap = old_left
+        right_gap = old_right
+
+        n_good = 0
+        rms = np.nan
+        trace_status = 'shifted reference'
+
+        if len(measurements) >= 20:
+
+            measured_x, left, right = np.asarray(measurements).T
+
+            try:
+                coeffs, half_width, good, rms = _fit_flat_trace(
+                    measured_x,
+                    left,
+                    right
+                )
+
+                left_gap = -half_width
+                right_gap = +half_width
+
+                n_good = good.sum()
+                trace_status = 'fitted'
+
+            except RuntimeError:
+                pass
+
+        # Save adopted CURRENT detector polynomial.
+        for i, value in enumerate(coeffs):
+            row[f'tramline_coeff_{i}'] = value
+
+        # Re-extract around final adopted trace.
+        trace = Polynomial(coeffs)(x)
+
+        extracted, centres = extract_trace(
+            image,
+            trace,
+            half_window
+        )
+
+        profile = collapsed_profile(extracted)
+
+        # Confirm/refine minima using collapsed profile.
+        
+        profile_left = _find_trough(
+            profile,
+            m,
+            left_gap,
+            radius=4,
+            min_prominence=0.,
+            prominence_fraction=0.02
+        )
+
+        profile_right = _find_trough(
+            profile,
+            m,
+            right_gap,
+            radius=4,
+            min_prominence=0.,
+            prominence_fraction=0.02
+        )
+
+        minima_measured = 0
+
+        if (
+            np.isfinite(profile_left)
+            and abs(profile_left - left_gap) < 3
+        ):
+            left_gap = profile_left
+            minima_measured += 1
+
+        if (
+            np.isfinite(profile_right)
+            and abs(profile_right - right_gap) < 3
+        ):
+            right_gap = profile_right
+            minima_measured += 1
+
+        # Science runs minimum-to-minimum.
+        # Sky outer boundaries may have varying widths.
+        
+        old_sky1_begin = float(row['Sky_1_begin'])
+        old_sky2_end = float(row['Sky_2_end'])
+
+        old_sky1_width = abs(
+            float(row['Sky_1_end'])
+            - old_sky1_begin
+        )
+
+        old_sky2_width = abs(
+            old_sky2_end
+            - float(row['Sky_2_begin'])
+        )
+
+        sky1_begin = old_sky1_begin + (left_gap - old_left)
+        sky2_end = old_sky2_end + (right_gap - old_right)
+
+        measured_sky1 = _find_outer_edge(
+            profile,
+            m,
+            sky1_begin,
+            bright_side='right',
+            radius=max(6., old_sky1_width)
+        )
+
+        measured_sky2 = _find_outer_edge(
+            profile,
+            m,
+            sky2_end,
+            bright_side='left',
+            radius=max(6., old_sky2_width)
+        )
+
+        outer_measured = 0
+
+        if (
+            np.isfinite(measured_sky1)
+            and measured_sky1 < left_gap
+            and abs(measured_sky1-sky1_begin)
+                < max(4., old_sky1_width)
+        ):
+            sky1_begin = measured_sky1
+            outer_measured += 1
+
+        if (
+            np.isfinite(measured_sky2)
+            and measured_sky2 > right_gap
+            and abs(measured_sky2-sky2_end)
+                < max(4., old_sky2_width)
+        ):
+            sky2_end = measured_sky2
+            outer_measured += 1
+
+        # Final extraction geometry.
+        row['Sky_1_begin'] = sky1_begin
+        row['Sky_1_end'] = left_gap
+
+        row['Science_begin'] = left_gap
+        row['Science_end'] = right_gap
+
+        row['Sky_2_begin'] = right_gap
+        row['Sky_2_end'] = sky2_end
+
+        # Optional diagnostics.
+        diagnostics = {
+            'tramline_half_width': 0.5 * (right_gap-left_gap),
+            'tramline_fit_rms': rms,
+            'tramline_fit_npoints': n_good,
+        }
+
+        for name, value in diagnostics.items():
+            if name in row.colnames:
+                row[name] = value
+
+        rms_text = f'{rms:.3f}' if np.isfinite(rms) else '---'
+
+        print(
+            f'{order}: Flat | trace={trace_status} | '
+            f'N={n_good} | RMS={rms_text} | '
+            f'{minima_measured}/2 minima, '
+            f'{outer_measured}/2 outer Sky edges'
+        )
+
+        print(
+            f'    Sky_1   = '
+            f'{float(row["Sky_1_begin"]):+.2f} : '
+            f'{float(row["Sky_1_end"]):+.2f}'
+        )
+
+        print(
+            f'    Science = '
+            f'{float(row["Science_begin"]):+.2f} : '
+            f'{float(row["Science_end"]):+.2f}'
+        )
+
+        print(
+            f'    Sky_2   = '
+            f'{float(row["Sky_2_begin"]):+.2f} : '
+            f'{float(row["Sky_2_end"]):+.2f}'
+        )
+
+    # update tramline begin/end for SimTh or SimLC
+    elif image_type in ('SimTh', 'SimLC'):
+
+        region = image_type
+        profile = collapsed_profile(extracted)
+
+        begin0 = float(row[f'{region}_begin'])
+        end0 = float(row[f'{region}_end'])
+
+        # SimLC is known not to illuminate CCD1.
+        if region == 'SimLC' and ccd == '1':
+            detected = False
+        else:
+            begin, end, detected = _find_bright_interval(
+                profile,
+                m,
+                begin0,
+                end0
+            )
+
+            if detected:
+                row[f'{region}_begin'] = begin
+                row[f'{region}_end'] = end
+
+        available_column = f'{region}_available'
+
+        if available_column in row.colnames:
+            row[available_column] = detected
+
+        begin = float(row[f'{region}_begin'])
+        end = float(row[f'{region}_end'])
+
+        if detected:
+
+            print(
+                f'{order}: {region} DETECTED | '
+                f'{region}_begin={begin:+.2f}, '
+                f'{region}_end={end:+.2f}, '
+                f'width={end-begin:.2f} px'
+            )
+
+        else:
+
+            reason = (
+                'unavailable on CCD1'
+                if region == 'SimLC' and ccd == '1'
+                else 'no significant signal'
+            )
+
+            print(
+                f'{order}: {region} NOT DETECTED ({reason}) | '
+                f'retaining {begin:+.2f} : {end:+.2f}'
+            )
+
+    # SCIENCE
+    elif image_type == 'Science':
+
+        print(
+            f'{order}: Science | '
+            f'using Flat-derived extraction geometry'
+        )
+
+    else:
+        raise ValueError(
+            f'Unknown image_type: {image_type}'
+        )
+
+    if debug:
+        plot_tramline(
+            extracted,
+            row,
+            order,
+            image_type
+        )
+
+    return row
+
+def update_tramlines(images, tramline_references, image_type,
+                     detector_shifts=None,
+                     apply_detector_shift=False,
+                     debug=False):
+    """
+    Update all tramlines for one image type.
+
+    Parameters
+    ----------
+    images : dict
+        images['ccd_1'][0], images['ccd_2'][0], images['ccd_3'][0]
+
+    tramline_references : astropy.table.Table
+
+    image_type : {'Flat', 'SimTh', 'SimLC', 'Science'}
+
+    detector_shifts : dict, optional
+        e.g. {'1': {'dx': ..., 'dy': ...}, ...}
+
+    apply_detector_shift : bool
+        True when starting from the long-term reference.
+        False once the nightly Flat solution has been fitted.
+
+    debug : bool
+        Show diagnostic plots.
+    """
+
+    detector_shifts = detector_shifts or {}
+
+    for i, row in enumerate(tramline_references):
+
+        order = (
+            row['order_name'].decode()
+            if isinstance(row['order_name'], bytes)
+            else str(row['order_name'])
+        )
+
+        ccd = order[4]
+
+        shift = detector_shifts.get(
+            ccd,
+            {'dx': 0., 'dy': 0.}
+        )
+
+        dx = shift['dx'] if apply_detector_shift else 0.
+        dy = shift['dy'] if apply_detector_shift else 0.
+
+        try:
+
+            tramline_references[i] = update_tramline_order(
+                images[f'ccd_{ccd}'][0],
+                image_type,
+                row,
+                dx=dx,
+                dy=dy,
+                debug=debug
+            )
+
+        except Exception as error:
+
+            warnings.warn(
+                f'{order}: tramline update failed: {error}'
+            )
+
+    return tramline_references
 
 def read_in_order_tramlines_tinney():
     """
