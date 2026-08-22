@@ -1,0 +1,80 @@
+name: Reference night 001122
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+  push:
+    branches: [main]
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: reference-night-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  reference-night:
+    name: Reduce reference night 001122
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install VeloceReduction
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[test]"
+
+      - name: Check available resources
+        run: |
+          echo "Disk:"
+          df -h
+          echo
+          echo "Memory:"
+          free -h
+
+      - name: Reduce reference night
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          python reduce_night.py 001122 \
+            --log-level INFO \
+            --diagnostics basic
+
+      - name: Run reference-night regression tests
+        run: |
+          pytest -ra -m reference tests/
+
+      - name: Show final resource usage
+        if: always()
+        run: |
+          echo "Disk:"
+          df -h
+          echo
+          echo "Memory:"
+          free -h
+
+      - name: Upload reduction summary and figures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reference-night-001122-${{ github.sha }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            reductions/vr_*/001122/reduction_input_001122.txt
+            reductions/vr_*/001122/reduction_summary_001122.txt
+            reductions/vr_*/001122/reduction_process_log_001122.txt
+            reductions/vr_*/001122/figures/

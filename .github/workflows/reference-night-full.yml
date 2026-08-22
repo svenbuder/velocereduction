@@ -1,0 +1,58 @@
+name: Full reference-night diagnostics
+
+on:
+  workflow_dispatch:
+
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  full-reference-night:
+    name: Full diagnostics for 001122
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install VeloceReduction
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[test]"
+
+      - name: Reduce 001122 with full diagnostics
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          python reduce_night.py 001122 \
+            --log-level DEBUG \
+            --diagnostics full
+
+      - name: Run reference regression tests
+        run: |
+          pytest -ra -m reference tests/
+
+      - name: Upload complete diagnostic suite
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-debug-001122-${{ github.sha }}
+          if-no-files-found: warn
+          retention-days: 30
+          compression-level: 6
+          path: |
+            reductions/vr_*/001122/reduction_input_001122.txt
+            reductions/vr_*/001122/reduction_summary_001122.txt
+            reductions/vr_*/001122/reduction_process_log_001122.txt
+            reductions/vr_*/001122/figures/
+            reductions/vr_*/001122/debug/

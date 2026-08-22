@@ -53,10 +53,33 @@ SSO = EarthLocation.of_site('Siding Spring Observatory')
 ##### Begin 0.7.0
 
 from dataclasses import dataclass
+from pathlib import Path
+import logging
+import sys
+from calendar import month_abbr
+import shutil
+
+import numpy as np
+
+from astropy.table import Table
+from astropy.io import fits
+from astropy.time import Time
+
+logger = logging.getLogger(__name__)
+
+
+def _as_float(value, default=np.nan):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+# =============================================================================
+# REDUCTION CONFIGURATION
+# =============================================================================
 
 @dataclass
 class ReductionConfig:
-
     night: str
 
     # User-facing runtime choices
@@ -64,6 +87,1042 @@ class ReductionConfig:
     diagnostics: str = 'basic'
     extraction_mode: str = 'summed'
     overwrite: bool = False
+
+
+@dataclass
+class ReductionPaths:
+    """All important input/output paths for one nightly reduction."""
+
+    repository: Path
+    observations: Path
+    root: Path
+
+    night_overview: Path
+    calibrations: Path
+    detector: Path
+    flat: Path
+    wavelength: Path
+
+    science: Path
+    science_products: Path
+
+    figures: Path
+    debug: Path
+
+    reduction_input: Path
+    process_log: Path
+    reduction_summary: Path
+
+
+# =============================================================================
+# PREPARE NIGHTLY REDUCTION
+# =============================================================================
+
+def prepare_reduction(config, version, repository=None):
+    """
+    Validate the night and prepare the output structure.
+
+    Expected repository layout
+    --------------------------
+    observations/YYMMDD/
+    reductions/vr_X.Y.Z/YYMMDD/
+
+    Parameters
+    ----------
+    config : ReductionConfig
+    version : str
+        VeloceReduction version, e.g. '0.7.0'.
+    repository : str or Path, optional
+        Repository root. If omitted, inferred from this utils.py file.
+
+    Returns
+    -------
+    ReductionPaths
+    """
+
+    # -------------------------------------------------------------------------
+    # Validate runtime configuration
+    # -------------------------------------------------------------------------
+
+    if len(config.night) != 6 or not config.night.isdigit():
+        raise ValueError(
+            f"night must be a six-digit YYMMDD string, got '{config.night}'"
+        )
+
+    if config.log_level not in {'DEBUG', 'INFO', 'WARNING', 'ERROR'}:
+        raise ValueError(f"Unknown log level: {config.log_level}")
+
+    if config.diagnostics not in {'none', 'basic', 'full'}:
+        raise ValueError(f"Unknown diagnostics level: {config.diagnostics}")
+
+    if config.extraction_mode not in {'summed', 'fibre'}:
+        raise ValueError(f"Unknown extraction mode: {config.extraction_mode}")
+
+    # -------------------------------------------------------------------------
+    # Repository + input/output locations
+    # -------------------------------------------------------------------------
+
+    # utils.py is expected at:
+    #
+    # repository/
+    #     velocereduction/
+    #         utils.py
+    #
+    repository = (
+        Path(repository).expanduser().resolve()
+        if repository is not None
+        else Path(__file__).resolve().parents[1]
+    )
+
+    observations = repository / 'observations' / config.night
+
+    if not observations.exists():
+        raise FileNotFoundError(
+            f'Observation directory does not exist: {observations}'
+        )
+
+    version_directory = (
+        version if str(version).startswith('vr_')
+        else f'vr_{version}'
+    )
+
+    root = repository / 'reductions' / version_directory / config.night
+
+    # -------------------------------------------------------------------------
+    # Main reduction directories
+    # -------------------------------------------------------------------------
+
+    paths = ReductionPaths(
+        repository=repository,
+        observations=observations,
+        root=root,
+
+        night_overview=root / 'night_overview',
+
+        calibrations=root / 'calibrations',
+        detector=root / 'calibrations' / 'detector',
+        flat=root / 'calibrations' / 'flat',
+        wavelength=root / 'calibrations' / 'wavelength',
+
+        science=root / 'science',
+        science_products=root / 'science' / config.extraction_mode,
+
+        figures=root / 'figures',
+        debug=root / 'debug',
+
+        reduction_input=root / f'reduction_input_{config.night}.txt',
+        process_log=root / f'reduction_process_log_{config.night}.txt',
+        reduction_summary=root / f'reduction_summary_{config.night}.txt',
+    )
+
+    # Always-required directories.
+    for directory in [
+        paths.root,
+        paths.night_overview,
+        paths.detector,
+        paths.flat,
+        paths.wavelength,
+        paths.science_products,
+    ]:
+        directory.mkdir(parents=True, exist_ok=True)
+
+    # Retained figures are created for basic + full diagnostics.
+    if config.diagnostics in {'basic', 'full'}:
+        paths.figures.mkdir(parents=True, exist_ok=True)
+
+    # Verbose developer products only exist in full mode.
+    if config.diagnostics == 'full':
+        paths.debug.mkdir(parents=True, exist_ok=True)
+
+    return paths
+
+
+# =============================================================================
+# LOGGING
+# =============================================================================
+
+def setup_logging(config, paths):
+    """
+    Configure VeloceReduction logging to both screen and file.
+
+    Re-running this function in a notebook removes handlers created by a
+    previous call, preventing every log message from appearing multiple times.
+
+    Returns
+    -------
+    logger : logging.Logger
+    """
+
+    level = getattr(logging, config.log_level.upper())
+
+    logger = logging.getLogger('velocereduction')
+    logger.setLevel(level)
+    logger.propagate = False
+
+    # -------------------------------------------------------------------------
+    # Remove previous VeloceReduction handlers.
+    #
+    # Important when re-running the setup cell in a notebook.
+    # -------------------------------------------------------------------------
+
+    for handler in logger.handlers[:]:
+        if getattr(handler, '_velocereduction_handler', False):
+            logger.removeHandler(handler)
+            handler.close()
+
+    # -------------------------------------------------------------------------
+    # Console output: compact and readable.
+    # -------------------------------------------------------------------------
+
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(level)
+    console_handler.setFormatter(
+        logging.Formatter(
+            '%(levelname)-8s %(message)s'
+        )
+    )
+    console_handler._velocereduction_handler = True
+
+    # -------------------------------------------------------------------------
+    # Process log: timestamp + module + message.
+    #
+    # append by default, overwrite when explicitly requested.
+    # -------------------------------------------------------------------------
+
+    file_handler = logging.FileHandler(
+        paths.process_log,
+        mode='w' if config.overwrite else 'a',
+        encoding='utf-8'
+    )
+
+    file_handler.setLevel(level)
+    file_handler.setFormatter(
+        logging.Formatter(
+            '%(asctime)s | %(levelname)-8s | %(name)s | %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+    )
+    file_handler._velocereduction_handler = True
+
+    logger.addHandler(console_handler)
+    logger.addHandler(file_handler)
+
+    # Clearly separate multiple runs if appending to an existing log.
+    logger.info('=' * 72)
+    logger.info('Starting VeloceReduction')
+    logger.info('Night: %s', config.night)
+    logger.info('Log level: %s', config.log_level)
+    logger.info('Diagnostics: %s', config.diagnostics)
+    logger.info('Extraction mode: %s', config.extraction_mode)
+    logger.info('Output directory: %s', paths.root)
+
+    return logger
+
+def _raw_fits_path(paths, night, run, ccd):
+    """
+    Return the expected raw FITS path for one run and CCD.
+
+    Example
+    -------
+    night = '001122'
+    run   = '0001'
+    ccd   = '1'
+
+    -> observations/001122/ccd_1/22nov10001.fits
+    """
+
+    day = night[-2:]
+    month = month_abbr[int(night[-4:-2])].lower()
+
+    filename = f'{day}{month}{ccd}{int(run):04d}.fits'
+
+    return paths.observations / f'ccd_{ccd}' / filename
+
+def _parse_log_line(line):
+    """Parse one Veloce observing-log line."""
+
+    run = line[:4]
+
+    if not run.isnumeric():
+        return None
+
+    ccd = line[6]
+
+    utc_colon = line.find(':')
+
+    if utc_colon < 0:
+        return None
+
+    run_object = line[8:utc_colon - 2].strip()
+
+    utc = line[
+        utc_colon - 2:
+        utc_colon + 7
+    ].strip()
+
+    exposure_time = line[
+        utc_colon + 9:
+        utc_colon + 17
+    ].strip()
+
+    # Keep the raw log states. We can interpret them later.
+    lc_status = line[
+        utc_colon + 35:
+        utc_colon + 37
+    ].strip()
+
+    thxe_status = line[
+        utc_colon + 38:
+        utc_colon + 42
+    ].strip()
+
+    overscan_section = line[utc_colon + 70:].split()
+
+    overscan = (
+        overscan_section[0]
+        if len(overscan_section) > 0
+        else ''
+    )
+
+    comments_start = utc_colon + 71 + len(overscan)
+
+    comments = line[comments_start:].strip()
+
+    marked_bad = (
+        'crap' in line.lower()
+        or 'unknown' in line.lower()
+    )
+
+    return {
+        'run': run,
+        'ccd': ccd,
+        'object_log': run_object,
+        'utc_log': utc,
+        'exptime_log': exposure_time,
+        'lc_status_log': lc_status,
+        'thxe_status_log': thxe_status,
+        'overscan_log': overscan,
+        'comments': comments,
+        'marked_bad': marked_bad,
+    }
+
+def _parse_observing_log(log_file):
+    """
+    Parse the observing log and group CCD entries by run number.
+    """
+
+    runs = {}
+
+    with open(log_file) as file:
+
+        for line in file:
+
+            row = _parse_log_line(line)
+
+            if row is None:
+                continue
+
+            run = row['run']
+            ccd = row['ccd']
+
+            if run not in runs:
+                runs[run] = {}
+
+            runs[run][ccd] = row
+
+    return runs
+
+_BSTAR_HD_NUMBERS = {
+    '10144', '14228', '37795', '47670', '50013', '56139',
+    '89080', '91465', '93030', '98718', '105435', '105937',
+    '106490', '108248', '108249', '108483', '109026',
+    '109668', '110879', '118716', '120324', '121263',
+    '121743', '121790', '122451', '125238', '127972',
+    '129116', '132058', '134481', '136298', '136504',
+    '138690', '139365', '142669', '143018', '143118',
+    '143275', '144470', '157246', '158094', '158427',
+    '158926', '160578', '165024', '169022', '175191',
+    '209952'
+}
+
+
+def _classify_run_object(run_object):
+
+    if run_object == 'SimLC':
+        return 'SimLC'
+
+    if run_object == 'BiasFrame':
+        return 'Bias'
+
+    if run_object == 'FlatField-Quartz':
+        return 'Flat'
+
+    if run_object == 'ARC-ThAr':
+        return 'FibTh'
+
+    if run_object in {'SimTh', 'SimThLong'}:
+        return 'SimTh'
+
+    if run_object == 'DarkFrame':
+        return 'Dark'
+
+    if run_object == 'Acquire':
+        return 'Acquire'
+
+    # Everything else is an astronomical target.
+    return 'Science'
+
+def _is_bstar(run_object):
+    return run_object in _BSTAR_HD_NUMBERS
+
+# Exposure time [s] to use for each CCD and calibration type.
+_CALIBRATION_EXPTIMES = {
+    'Flat': {
+        '1': 60.0,
+        '2': 1.0,
+        '3': 0.1,
+    },
+    'SimTh': {
+        '1': 180.0,
+        '2': 60.0,
+        '3': 15.0,
+    },
+    'FibTh': {
+        '1': 180.0,
+        '2': 60.0,
+        '3': 15.0,
+    },
+}
+
+_EXPECTED_CCDS = {
+    'Bias':    {'1', '2', '3'},
+    'Dark':    {'1', '2', '3'},
+    'Flat':    {'1', '2', '3'},
+    'SimTh':   {'1', '2', '3'},
+    'FibTh':   {'1', '2', '3'},
+    'Science': {'1', '2', '3'},
+
+    # No useful SimLC spectrum on CCD1.
+    'SimLC':   {'2', '3'},
+}
+
+def _useful_ccds(observation_type, exptime, atol=0.01):
+    """
+    Return the CCDs for which this exposure should be used.
+
+    For Flat, SimTh and FibTh, the useful CCD depends on exposure time.
+    Other exposure types use all expected CCDs.
+    """
+
+    if observation_type in _CALIBRATION_EXPTIMES:
+
+        useful = []
+
+        for ccd, required_exptime in _CALIBRATION_EXPTIMES[
+            observation_type
+        ].items():
+
+            if np.isclose(
+                exptime,
+                required_exptime,
+                atol=atol,
+                rtol=0
+            ):
+                useful.append(ccd)
+
+        return useful
+
+    if observation_type == 'SimLC':
+        return ['2', '3']
+
+    return sorted(
+        _EXPECTED_CCDS.get(
+            observation_type,
+            []
+        )
+    )
+
+def _read_exposure_metadata(files):
+    """
+    Read useful run-level metadata from an available raw FITS file.
+
+    CCD3 is preferred, followed by CCD2 and CCD1.
+
+    Note
+    ----
+    LCUT/LCEXP indicate that an LC exposure was requested/configured.
+    Whether useful LC or ThXe signal is actually present is determined
+    later from the detector images.
+    """
+
+    header = None
+    header_ccd = None
+
+    # Prefer CCD3 -> CCD2 -> CCD1
+    for ccd in ['3', '2', '1']:
+
+        filename = files.get(ccd)
+
+        if filename is not None and filename.exists():
+            header = fits.getheader(filename, 0)
+            header_ccd = ccd
+            break
+
+    # -------------------------------------------------------------------------
+    # No available FITS file
+    # -------------------------------------------------------------------------
+
+    if header is None:
+        return {
+            'header_ccd': '',
+
+            'run_fits': -1,
+            'object_fits': '',
+            'gaia_id': '',
+
+            'date_obs': '',
+            'mjd_obs': np.nan,
+            'mjd_mid': np.nan,
+            'exptime': np.nan,
+            'ut_start': '',
+            'ut_end': '',
+
+            'ra': np.nan,
+            'dec': np.nan,
+            'airmass': np.nan,
+
+            'lc_requested': False,
+            'lc_ut': '',
+            'lc_exp': np.nan,
+        }
+
+    # -------------------------------------------------------------------------
+    # Timing
+    # -------------------------------------------------------------------------
+
+    date_obs = str(
+        header.get('DATE-OBS', '')
+    ).strip()
+
+    mjd_obs = _as_float(
+        header.get('MJD-OBS')
+    )
+
+    exptime = _as_float(
+        header.get('EXPTIME')
+    )
+
+    if np.isfinite(mjd_obs) and np.isfinite(exptime):
+        mjd_mid = mjd_obs + 0.5 * exptime / 86400.
+    else:
+        mjd_mid = np.nan
+
+    # -------------------------------------------------------------------------
+    # Laser comb
+    # -------------------------------------------------------------------------
+
+    lc_ut = str(
+        header.get('LCUT', '')
+    ).strip()
+
+    lc_exp = _as_float(
+        header.get('LCEXP')
+    )
+
+    lc_requested = bool(lc_ut)
+
+    # -------------------------------------------------------------------------
+    # Metadata
+    # -------------------------------------------------------------------------
+
+    return {
+        'header_ccd': header_ccd,
+
+        # Identification
+        'run_fits': int(
+            _as_float(header.get('RUN'), default=-1)
+        ),
+        'object_fits': str(
+            header.get('OBJECT', '')
+        ).strip(),
+        'gaia_id': str(
+            header.get('GAIAID', '')
+        ).strip(),
+
+        # Timing
+        'date_obs': date_obs,
+        'mjd_obs': mjd_obs,
+        'mjd_mid': mjd_mid,
+        'exptime': exptime,
+        'ut_start': str(
+            header.get('UTSTART', '')
+        ).strip(),
+        'ut_end': str(
+            header.get('UTEND', '')
+        ).strip(),
+
+        # Target
+        'ra': _as_float(
+            header.get('MEANRA')
+        ),
+        'dec': _as_float(
+            header.get('MEANDEC')
+        ),
+        'airmass': _as_float(
+            header.get('AIRMASS')
+        ),
+
+        # Laser comb request
+        'lc_requested': lc_requested,
+        'lc_ut': lc_ut,
+        'lc_exp': lc_exp,
+    }
+
+def _build_observation_table(log_runs, config, paths):
+
+    rows = []
+
+    for run in sorted(log_runs, key=int):
+
+        ccd_log = log_runs[run]
+
+        # Prefer CCD3 information from the observing log.
+        if '3' in ccd_log:
+            log = ccd_log['3']
+        else:
+            log = next(iter(ccd_log.values()))
+
+        observation_type = _classify_run_object(
+            log['object_log']
+        )
+
+        # Expected raw FITS filenames.
+        files = {
+            ccd: _raw_fits_path(
+                paths,
+                config.night,
+                run,
+                ccd
+            )
+            for ccd in ['1', '2', '3']
+        }
+
+        # Which files actually exist?
+        has_ccd = {
+            ccd: files[ccd].exists()
+            for ccd in ['1', '2', '3']
+        }
+
+        # Read authoritative metadata, including EXPTIME.
+        metadata = _read_exposure_metadata(files)
+
+        # -------------------------------------------------------------
+        # Which CCDs from this exposure are actually useful?
+        # -------------------------------------------------------------
+
+        useful_ccds = _useful_ccds(
+            observation_type,
+            metadata['exptime']
+        )
+
+        use_ccd = {
+            ccd: (
+                ccd in useful_ccds
+                and has_ccd[ccd]
+            )
+            for ccd in ['1', '2', '3']
+        }
+
+        # -------------------------------------------------------------
+        # Check expected files.
+        # -------------------------------------------------------------
+
+        expected_ccds = _EXPECTED_CCDS.get(
+            observation_type,
+            set()
+        )
+
+        missing_ccds = sorted(
+            ccd
+            for ccd in expected_ccds
+            if not has_ccd[ccd]
+        )
+
+        files_complete = len(missing_ccds) == 0
+
+        # Overall run-level status.
+        use = (
+            not log['marked_bad']
+            and observation_type != 'Acquire'
+        )
+
+        issues = []
+
+        if log['marked_bad']:
+            issues.append('Marked bad in observing log')
+
+        if missing_ccds:
+            issues.append(
+                'Missing CCD' + ', CCD'.join(missing_ccds)
+            )
+
+        if (
+            observation_type in _CALIBRATION_EXPTIMES
+            and len(useful_ccds) == 0
+        ):
+            issues.append(
+                f'Unexpected exposure time {metadata["exptime"]:.2f} s'
+            )
+
+        rows.append({
+            'run': run,
+            'type': observation_type,
+            'object': log['object_log'],
+
+            'exptime': metadata['exptime'],
+            'mjd_obs': metadata['mjd_obs'],
+            'mjd_mid': metadata['mjd_mid'],
+
+            'has_ccd1': has_ccd['1'],
+            'has_ccd2': has_ccd['2'],
+            'has_ccd3': has_ccd['3'],
+
+            'use_ccd1': use_ccd['1'],
+            'use_ccd2': use_ccd['2'],
+            'use_ccd3': use_ccd['3'],
+
+            'file_ccd1': str(files['1']),
+            'file_ccd2': str(files['2']),
+            'file_ccd3': str(files['3']),
+
+            'files_complete': files_complete,
+            'use': use,
+
+            'lc_requested': metadata['lc_requested'],
+            'lc_ut': metadata['lc_ut'],
+            'lc_exp': metadata['lc_exp'],
+
+            'comments': log['comments'],
+
+            'issue': '; '.join(issues),
+        })
+
+    return Table(rows=rows)
+
+_CALIBRATION_TYPES = {
+    'Bias',
+    'Dark',
+    'Flat',
+    'FibTh',
+    'SimTh',
+    'SimLC',
+}
+
+
+def _assign_calibration_blocks(
+    observations,
+    gap_minutes=30.
+):
+    """
+    Label consecutive calibration sequences as cal001, cal002, ...
+    """
+
+    blocks = np.full(
+        len(observations),
+        '',
+        dtype='U16'
+    )
+
+    block_number = 0
+    previous_was_calibration = False
+    previous_mjd = None
+
+    for i in np.argsort(observations['mjd_mid']):
+
+        row = observations[i]
+
+        is_calibration = (
+            row['type'] in _CALIBRATION_TYPES
+            and row['use']
+        )
+
+        if not is_calibration:
+            previous_was_calibration = False
+            previous_mjd = None
+            continue
+
+        start_new_block = not previous_was_calibration
+
+        if (
+            previous_mjd is not None
+            and np.isfinite(row['mjd_mid'])
+        ):
+
+            gap = (
+                row['mjd_mid'] - previous_mjd
+            ) * 24. * 60.
+
+            if gap > gap_minutes:
+                start_new_block = True
+
+        if start_new_block:
+            block_number += 1
+
+        blocks[i] = f'cal{block_number:03d}'
+
+        previous_was_calibration = True
+        previous_mjd = row['mjd_mid']
+
+    observations['calibration_block'] = blocks
+
+    return observations
+
+def identify_observations(config, paths):
+    """
+    Identify and validate all observations for one Veloce night.
+    """
+
+    # -------------------------------------------------------------------------
+    # Find observing log
+    # -------------------------------------------------------------------------
+
+    log_files = sorted(
+        paths.observations.glob('*.log')
+    )
+
+    if len(log_files) == 0:
+        raise FileNotFoundError(
+            f'No observing log found in {paths.observations}'
+        )
+
+    if len(log_files) > 1:
+        logger.warning(
+            'Found %d observing logs; using %s',
+            len(log_files),
+            log_files[0].name
+        )
+
+    log_file = log_files[0]
+
+    logger.info(
+        'Using observing log %s',
+        log_file.name
+    )
+
+    # Keep a copy with the reduction.
+    shutil.copy2(
+        log_file,
+        paths.night_overview / log_file.name
+    )
+
+    # -------------------------------------------------------------------------
+    # Parse + validate observations
+    # -------------------------------------------------------------------------
+
+    log_runs = _parse_observing_log(
+        log_file
+    )
+
+    observations = _build_observation_table(
+        log_runs,
+        config,
+        paths
+    )
+
+    observations = _assign_calibration_blocks(
+        observations
+    )
+
+    # -------------------------------------------------------------------------
+    # Summary
+    # -------------------------------------------------------------------------
+
+    logger.info(
+        'Identified %d observing runs',
+        len(observations)
+    )
+
+    for observation_type in sorted(
+        set(observations['type'])
+    ):
+
+        number = np.sum(
+            observations['type']
+            == observation_type
+        )
+
+        logger.info(
+            '  %-10s %d',
+            observation_type,
+            number
+        )
+
+    bad = np.sum(~observations['use'])
+
+    if bad:
+        logger.warning(
+            '%d runs are currently excluded from reduction',
+            bad
+        )
+
+    return observations
+
+def write_reduction_input(observations, config, paths):
+    """
+    Write a human-readable summary of all observations identified for the night.
+    """
+
+    with open(paths.reduction_input, 'w') as file:
+
+        file.write(f'VeloceReduction input for night {config.night}\n')
+        file.write('=' * 100 + '\n\n')
+
+        file.write(f'Observation directory: {paths.observations}\n')
+        file.write(f'Total runs:            {len(observations)}\n\n')
+
+        # ---------------------------------------------------------------------
+        # Counts by observation type
+        # ---------------------------------------------------------------------
+
+        file.write('Observation counts\n')
+        file.write('-' * 100 + '\n')
+
+        for observation_type in [
+            'Bias',
+            'Dark',
+            'Flat',
+            'SimTh',
+            'SimLC',
+            'FibTh',
+            'Science',
+            'Acquire',
+            'Unknown',
+        ]:
+
+            n_runs = np.sum(
+                observations['type'] == observation_type
+            )
+
+            if n_runs > 0:
+                file.write(
+                    f'{observation_type:<12} {n_runs:>4}\n'
+                )
+
+        file.write('\n')
+
+        # ---------------------------------------------------------------------
+        # Calibration blocks
+        # ---------------------------------------------------------------------
+
+        if 'calibration_block' in observations.colnames:
+
+            file.write('Calibration blocks\n')
+            file.write('-' * 100 + '\n')
+
+            blocks = sorted(
+                set(observations['calibration_block'])
+                - {''}
+            )
+
+            for block in blocks:
+
+                selection = (
+                    observations['calibration_block'] == block
+                )
+
+                runs = ', '.join(
+                    observations['run'][selection]
+                )
+
+                file.write(
+                    f'{block:<10} {runs}\n'
+                )
+
+            file.write('\n')
+
+        # ---------------------------------------------------------------------
+        # Individual exposures
+        # ---------------------------------------------------------------------
+
+        file.write('Runs\n')
+        file.write('-' * 100 + '\n')
+
+        file.write(
+            f'{"Run":<6}'
+            f'{"Type":<10}'
+            f'{"Object":<22}'
+            f'{"Exp[s]":>8}'
+            f'{"MJD-mid":>15}'
+            f'  {"CCD1":>4}'
+            f'{"CCD2":>5}'
+            f'{"CCD3":>5}'
+            f'  {"LC":>4}'
+            f'  {"Block":<8}'
+            f'{"Use":>5}\n'
+        )
+
+        file.write('-' * 100 + '\n')
+
+        for row in observations:
+
+            exptime = (
+                f'{row["exptime"]:.1f}'
+                if np.isfinite(row['exptime'])
+                else ''
+            )
+
+            mjd_mid = (
+                f'{row["mjd_mid"]:.6f}'
+                if np.isfinite(row['mjd_mid'])
+                else ''
+            )
+
+            ccd1 = 'Y' if row['use_ccd1'] else '-'
+            ccd2 = 'Y' if row['use_ccd2'] else '-'
+            ccd3 = 'Y' if row['use_ccd3'] else '-'
+
+            lc = (
+                'Y'
+                if row['lc_requested']
+                else '-'
+            )
+
+            block = (
+                row['calibration_block']
+                if 'calibration_block' in observations.colnames
+                else ''
+            )
+
+            use = 'Y' if row['use'] else 'N'
+
+            file.write(
+                f'{row["run"]:<6}'
+                f'{row["type"]:<10}'
+                f'{row["object"][:21]:<22}'
+                f'{exptime:>8}'
+                f'{mjd_mid:>15}'
+                f'  {ccd1:>4}'
+                f'{ccd2:>5}'
+                f'{ccd3:>5}'
+                f'  {lc:>4}'
+                f'  {block:<8}'
+                f'{use:>5}\n'
+            )
+
+            if row['issue']:
+                file.write(
+                    f'      WARNING: {row["issue"]}\n'
+                )
+
+            if row['comments']:
+                file.write(
+                    f'      Comment: {row["comments"]}\n'
+                )
+
+    logger.info(
+        'Wrote reduction input to %s',
+        paths.reduction_input
+    )
 
 ##### End 0.7.0
 
