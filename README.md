@@ -281,10 +281,11 @@ before applying the fix.
 ## Dependencies
 
 The is only tested for Python >= 3.9. It requires the following libraries:  
-- NumPy
-- SciPy
+- numpy
+- scipy
 - matplotlib
-- Astropy
+- astropy
+- scikit-image
 
 ## Author
 
