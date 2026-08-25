@@ -1,3 +1,4 @@
+from email.mime import image
 import logging
 
 from pathlib import Path
@@ -452,219 +453,478 @@ REGION_COLOURS = {
     'SimLC':   'C3',
 }
 
-
 def _plot_tramline_diagnostic(
-    extracted,
+    flat_image,
+    simth_image,
+    simlc_image,
     row,
     order,
-    image_type,
     filename,
 ):
     """
-    Save a diagnostic plot of one extracted tramline.
+    Full per-order tramline diagnostic.
 
-    Shows:
-        - extracted detector data around the tramline
-        - collapsed cross-dispersion profile
-        - central tramline
-        - final adopted extraction regions
+    Columns:
+        SimTh | Flat | SimLC
 
-    This function is diagnostic only and does not affect the reduction.
+    SimTh and SimLC panels show +/-10 pixels around their
+    adopted aperture centres. The Flat panel shows the full
+    extraction window.
     """
+
+    import re
 
     half_window = int(
         row['extraction_half_window']
     )
 
-    profile = collapsed_profile(
-        extracted
-    )
-
-    fig, (
-        ax_image,
-        ax_profile,
-    ) = plt.subplots(
+    fig, axes = plt.subplots(
         2,
-        1,
-        figsize=(6, 7),
-        sharex=True,
+        3,
+        figsize=(12, 7),
+        sharex='col',
         constrained_layout=True,
         height_ratios=[3, 1],
+        width_ratios=[1, 4, 1],
     )
 
-    # -------------------------------------------------------------------------
-    # Extracted tramline image
-    # -------------------------------------------------------------------------
+    # --------------------------------------------------------------
+    # Figure title
+    # --------------------------------------------------------------
 
-    finite = np.isfinite(
-        extracted
+    ccd = order[4]
+
+    numbers = re.findall(
+        r'\d+',
+        order,
     )
 
-    if np.any(finite):
+    order_number = (
+        numbers[-1]
+        if numbers
+        else order
+    )
 
-        vmin = np.nanpercentile(
-            extracted[finite],
-            5,
+    fig.suptitle(
+        f'Tramline Fits to CCD {ccd} Order {order_number}'
+    )
+
+    inputs = [
+        ('SimTh', simth_image),
+        ('Flat', flat_image),
+        ('SimLC', simlc_image),
+    ]
+
+    for column, (
+        source,
+        image,
+    ) in enumerate(inputs):
+
+        ax_image = axes[
+            0,
+            column,
+        ]
+
+        ax_profile = axes[
+            1,
+            column,
+        ]
+
+        # Always show the title, even when unavailable.
+        ax_image.set_title(
+            source
         )
 
-        vmax = np.nanpercentile(
-            extracted[finite],
-            95,
+        # ----------------------------------------------------------
+        # Horizontal extent of this panel.
+        # Define this even when the calibration image is unavailable,
+        # so the axes retain meaningful tramline-relative coordinates.
+        # ----------------------------------------------------------
+
+        if source == 'Flat':
+
+            x_min = 0
+            x_max = 2 * half_window
+
+        else:
+
+            begin = float(
+                row[f'{source}_begin']
+            )
+
+            end = float(
+                row[f'{source}_end']
+            )
+
+            centre = (
+                half_window
+                + 0.5 * (
+                    begin + end
+                )
+            )
+
+            x_min = centre - 6
+            x_max = centre + 6
+
+        ax_profile.set_xlim(
+            x_min,
+            x_max,
         )
 
-    else:
+        # ----------------------------------------------------------
+        # Missing calibration image.
+        # ----------------------------------------------------------
 
-        vmin = 0.0
-        vmax = 1.0
+        if image is None:
 
-    image_plot = ax_image.imshow(
-        extracted,
-        origin='lower',
-        aspect='auto',
-        cmap='Greys_r',
-        vmin=vmin,
-        vmax=vmax,
-    )
+            ax_image.text(
+                0.5,
+                0.5,
+                'Unavailable',
+                ha='center',
+                va='center',
+                transform=ax_image.transAxes,
+            )
 
-    ax_image.set_ylabel(
+            ax_profile.text(
+                0.5,
+                0.5,
+                'Unavailable',
+                ha='center',
+                va='center',
+                transform=ax_profile.transAxes,
+            )
+
+            # Give unavailable SimLC/SimTh panels the intended
+            # 16-pixel horizontal extent anyway.
+            if source != 'Flat':
+
+                begin = float(
+                    row[
+                        f'{source}_begin'
+                    ]
+                )
+
+                end = float(
+                    row[
+                        f'{source}_end'
+                    ]
+                )
+
+                centre = (
+                    half_window
+                    + 0.5 * (
+                        begin + end
+                    )
+                )
+
+            continue
+
+        # ----------------------------------------------------------
+        # Extract using final Flat-derived trace.
+        # ----------------------------------------------------------
+
+        (
+            extracted,
+            profile,
+            m,
+        ) = _extract_order_profile(
+            image,
+            row,
+        )
+
+        finite = np.isfinite(
+            extracted
+        )
+
+        if not finite.any():
+
+            vmin = 0.0
+            vmax = 1.0
+
+        elif source == 'Flat':
+
+            values = extracted[
+                finite
+            ]
+
+            vmin = np.nanpercentile(
+                values,
+                5,
+            )
+
+            vmax = np.nanpercentile(
+                values,
+                95,
+            )
+
+        else:
+
+            # For SimTh/SimLC, determine the contrast only from
+            # the +/-10 pixel region that is actually displayed.
+
+            begin = float(
+                row[f'{source}_begin']
+            )
+
+            end = float(
+                row[f'{source}_end']
+            )
+
+            centre = (
+                half_window
+                + 0.5 * (
+                    begin + end
+                )
+            )
+
+            lo = max(
+                0,
+                int(np.floor(centre - 6)),
+            )
+
+            hi = min(
+                extracted.shape[1],
+                int(np.ceil(centre + 6)),
+            )
+
+            display_region = extracted[
+                :,
+                lo:hi
+            ]
+
+            finite_display = np.isfinite(
+                display_region
+            )
+
+            if finite_display.any():
+
+                values = display_region[
+                    finite_display
+                ]
+
+                vmin = np.nanpercentile(
+                    values,
+                    20,
+                )
+
+                vmax = np.nanpercentile(
+                    values,
+                    99.5,
+                )
+
+            else:
+
+                vmin = 0.0
+                vmax = 1.0
+
+        ax_image.imshow(
+            extracted,
+            origin='lower',
+            aspect='auto',
+            cmap='Greys_r',
+            vmin=vmin,
+            vmax=vmax,
+        )
+
+        ax_profile.plot(
+            profile / 1e3,
+            color='k',
+            lw=1,
+        )
+
+        # ----------------------------------------------------------
+        # Plot final extraction boundaries.
+        # ----------------------------------------------------------
+
+        if source == 'Flat':
+
+            regions = [
+                'Sky_1',
+                'Science',
+                'Sky_2',
+            ]
+
+        else:
+
+            regions = [
+                source
+            ]
+
+        for region in regions:
+
+            begin = float(
+                row[
+                    f'{region}_begin'
+                ]
+            )
+
+            end = float(
+                row[
+                    f'{region}_end'
+                ]
+            )
+
+            if not (
+                np.isfinite(begin)
+                and np.isfinite(end)
+            ):
+                continue
+
+            # Convert from relative tramline coordinate into
+            # extracted-array coordinate.
+            plot_begin = (
+                begin
+                + half_window
+            )
+
+            plot_end = (
+                end
+                + half_window
+            )
+
+            # For the Flat regions, separate coincident boundaries
+            # visually:
+            #
+            #     region begin -> +0.15 px
+            #     region end   -> -0.15 px
+            #
+            # Thus Science/Sky boundaries no longer sit directly
+            # on top of one another.
+            if source == 'Flat':
+
+                plot_begin += 0.15
+                plot_end -= 0.15
+
+            colour = REGION_COLOURS[
+                region
+            ]
+
+            ax_image.axvline(
+                plot_begin,
+                color=colour,
+                lw=1,
+                ls='dashed',
+            )
+
+            ax_image.axvline(
+                plot_end,
+                color=colour,
+                lw=1,
+                ls='dashed',
+            )
+
+            ax_profile.axvspan(
+                plot_begin,
+                plot_end,
+                color=colour,
+                alpha=0.25,
+                lw=0,
+                label=region,
+            )
+
+        # ----------------------------------------------------------
+        # Horizontal panel extent.
+        # ----------------------------------------------------------
+
+        if source == 'Flat':
+
+            # Full +/- half_window extraction.
+            ax_profile.set_xlim(
+                0,
+                2 * half_window,
+            )
+
+        else:
+
+            begin = float(
+                row[
+                    f'{source}_begin'
+                ]
+            )
+
+            end = float(
+                row[
+                    f'{source}_end'
+                ]
+            )
+
+            centre = (
+                half_window
+                + 0.5 * (
+                    begin + end
+                )
+            )
+
+            ax_profile.set_xlim(
+                centre - 6,
+                centre + 6,
+            )
+
+        handles, labels = (
+            ax_profile.get_legend_handles_labels()
+        )
+
+        if handles:
+
+            ax_profile.legend(
+                fontsize=8,
+                loc='lower center',
+                ncol = 3
+            )
+
+    # --------------------------------------------------------------
+    # Shared formatting
+    # --------------------------------------------------------------
+
+    axes[0, 0].set_ylabel(
         'Dispersion pixel'
     )
 
-    cbar = fig.colorbar(
-        image_plot,
-        ax=ax_image,
-        orientation='horizontal',
-        location='top',
-        pad=0.01,
-        fraction=0.05,
+    axes[1, 0].set_ylabel(
+        r'Counts / $10^3$'
     )
+    # Relative cross-dispersion labels.
+    for column in range(3):
 
-    cbar.set_label(
-        f'Counts for {order} — {image_type}'
-    )
+        ax = axes[
+            1,
+            column
+        ]
 
-    # Central tramline.
-    ax_image.axvline(
-        half_window,
-        color='k',
-        lw=0.8,
-        ls='dotted',
-    )
+        xmin, xmax = ax.get_xlim()
 
-    # -------------------------------------------------------------------------
-    # Collapsed cross-dispersion profile
-    # -------------------------------------------------------------------------
+        first = int(
+            np.ceil(
+                (xmin - half_window) / 4
+            )
+        ) * 4
 
-    ax_profile.plot(
-        profile / 4096,
-        color='k',
-        lw=1,
-    )
+        last = int(
+            np.floor(
+                (xmax - half_window) / 4
+            )
+        ) * 4
 
-    # -------------------------------------------------------------------------
-    # Final adopted extraction regions
-    # -------------------------------------------------------------------------
-
-    for region, colour in REGION_COLOURS.items():
-
-        begin_column = (
-            f'{region}_begin'
+        relative_ticks = np.arange(
+            first,
+            last + 1,
+            4,
         )
 
-        end_column = (
-            f'{region}_end'
-        )
-
-        # Allows this diagnostic to remain usable even if a future
-        # tramline table does not contain every calibration region.
-        if (
-            begin_column not in row.colnames
-            or end_column not in row.colnames
-        ):
-            continue
-
-        begin = (
-            float(row[begin_column])
+        ax.set_xticks(
+            relative_ticks
             + half_window
         )
 
-        end = (
-            float(row[end_column])
-            + half_window
+        ax.set_xticklabels([
+            f'{value:+d}'
+            for value in relative_ticks
+        ])
+
+        ax.set_xlabel(
+            'Cross-dispersion pixel'
         )
-
-        if not (
-            np.isfinite(begin)
-            and np.isfinite(end)
-        ):
-            continue
-
-        ax_image.axvline(
-            begin+0.15,
-            color=colour,
-            lw=1,
-            ls='dashed',
-        )
-
-        ax_image.axvline(
-            end-0.15,
-            color=colour,
-            lw=1,
-            ls='dashed',
-        )
-
-        ax_profile.axvspan(
-            begin,
-            end,
-            color=colour,
-            alpha=0.25,
-            lw=0,
-            label=region,
-        )
-
-    # -------------------------------------------------------------------------
-    # Relative cross-dispersion coordinate
-    # -------------------------------------------------------------------------
-
-    ticks = np.arange(
-        5,
-        2 * half_window,
-        10,
-    )
-
-    ax_profile.set_xticks(
-        ticks,
-        ticks - half_window,
-    )
-
-    ax_profile.set_xlabel(
-        'Cross-dispersion pixel relative to central fibre'
-    )
-
-    ax_profile.set_ylabel(
-        r'Counts / 4096'
-    )
-
-    handles, labels = (
-        ax_profile.get_legend_handles_labels()
-    )
-
-    if handles:
-
-        ax_profile.legend(
-            ncol=2,
-            loc='lower center',
-            fontsize=8,
-        )
-
-    fig.align_ylabels([
-        ax_image,
-        ax_profile,
-    ])
-
-    # -------------------------------------------------------------------------
-    # Save rather than display.
-    # -------------------------------------------------------------------------
 
     filename = Path(
         filename
@@ -1244,6 +1504,670 @@ def _find_outer_edge(
         )
     )
 
+
+def _find_bright_interval(
+    profile,
+    m,
+    begin0,
+    end0,
+    smooth=1.5,
+    threshold_fraction=0.20,
+    min_snr=6.0,
+):
+    """
+    Find an illuminated SimTh or SimLC interval.
+
+    Search padding scales with the reference width, while the measured
+    width itself is free to vary.
+    """
+
+    width0 = max(
+        abs(end0 - begin0),
+        1.0,
+    )
+
+    padding = max(
+        6.0,
+        width0,
+    )
+
+    use = (
+        np.isfinite(profile)
+        & (m >= begin0 - padding)
+        & (m <= end0 + padding)
+    )
+
+    if use.sum() < 7:
+        return np.nan, np.nan, False
+
+    x = m[use]
+    raw = profile[use]
+
+    y = gaussian_filter1d(
+        raw,
+        smooth,
+    )
+
+    low, high = np.nanpercentile(
+        y,
+        [10, 95],
+    )
+
+    amplitude = high - low
+
+    noise = utils.robust_sigma(
+        raw - y
+    )
+
+    if (
+        not np.isfinite(amplitude)
+        or amplitude <= 0
+    ):
+        return np.nan, np.nan, False
+
+    if (
+        np.isfinite(noise)
+        and noise > 0
+        and amplitude < min_snr * noise
+    ):
+        return np.nan, np.nan, False
+
+    threshold = (
+        low
+        + threshold_fraction * amplitude
+    )
+
+    bright = y > threshold
+
+    changes = np.diff(
+        np.r_[
+            False,
+            bright,
+            False,
+        ].astype(int)
+    )
+
+    starts = np.where(
+        changes == 1
+    )[0]
+
+    ends = (
+        np.where(
+            changes == -1
+        )[0]
+        - 1
+    )
+
+    if len(starts) == 0:
+        return np.nan, np.nan, False
+
+    expected = 0.5 * (
+        begin0 + end0
+    )
+
+    candidates = []
+
+    for start, end in zip(
+        starts,
+        ends,
+    ):
+
+        overlap = max(
+            0.0,
+            min(x[end], end0)
+            - max(x[start], begin0),
+        )
+
+        distance = abs(
+            0.5 * (
+                x[start]
+                + x[end]
+            )
+            - expected
+        )
+
+        candidates.append(
+            (
+                overlap,
+                -distance,
+                start,
+                end,
+            )
+        )
+
+    _, _, start, end = max(
+        candidates
+    )
+
+    begin = x[start]
+    finish = x[end]
+
+    # Sub-pixel threshold crossings.
+    if (
+        start > 0
+        and y[start] != y[start - 1]
+    ):
+
+        begin = (
+            x[start - 1]
+            + (
+                (threshold - y[start - 1])
+                * (x[start] - x[start - 1])
+                / (y[start] - y[start - 1])
+            )
+        )
+
+    if (
+        end < len(x) - 1
+        and y[end + 1] != y[end]
+    ):
+
+        finish = (
+            x[end]
+            + (
+                (threshold - y[end])
+                * (x[end + 1] - x[end])
+                / (y[end + 1] - y[end])
+            )
+        )
+
+    if finish <= begin:
+        return np.nan, np.nan, False
+
+    return (
+        float(begin),
+        float(finish),
+        True,
+    )
+
+def _extract_order_profile(
+    image,
+    row,
+):
+    """
+    Extract one order using the final nightly tramline.
+
+    Returns the 2D extracted order, collapsed profile, and relative
+    cross-dispersion coordinate.
+    """
+
+    half_window = int(
+        row['extraction_half_window']
+    )
+
+    x = np.arange(
+        image.shape[0],
+        dtype=float,
+    )
+
+    m = (
+        np.arange(
+            2 * half_window
+        )
+        - half_window
+    )
+
+    coeffs = np.array([
+        float(
+            row[f'tramline_coeff_{i}']
+        )
+        for i in range(N_COEFF)
+    ])
+
+    trace = Polynomial(
+        coeffs
+    )(x)
+
+    extracted, _ = extract_trace(
+        image,
+        trace,
+        half_window,
+    )
+
+    profile = collapsed_profile(
+        extracted
+    )
+
+    return (
+        extracted,
+        profile,
+        m,
+    )
+
+def _measure_calibration_region(
+    image,
+    row,
+    region,
+):
+    """
+    Measure the SimTh or SimLC cross-dispersion interval for one order.
+
+    The Flat-derived tramline itself is never modified.
+    """
+
+    order = _order_name(
+        row
+    )
+
+    ccd = order[4]
+
+    if region not in (
+        'SimTh',
+        'SimLC',
+    ):
+        raise ValueError(
+            f'Unknown calibration region: {region}'
+        )
+
+    if (
+        region == 'SimLC'
+        and ccd == '1'
+    ):
+        return {
+            'detected': False,
+            'begin': np.nan,
+            'end': np.nan,
+        }
+
+    (
+        extracted,
+        profile,
+        m,
+    ) = _extract_order_profile(
+        image,
+        row,
+    )
+
+    begin0 = float(
+        row[f'{region}_begin']
+    )
+
+    end0 = float(
+        row[f'{region}_end']
+    )
+
+    begin, end, detected = (
+        _find_bright_interval(
+            profile,
+            m,
+            begin0,
+            end0,
+        )
+    )
+
+    return {
+        'detected': detected,
+        'begin': begin,
+        'end': end,
+    }
+
+def _select_calibration_exposures(
+    reduction_input,
+    source,
+    ccd,
+):
+    """
+    Select candidate SimTh or SimLC exposures for geometry determination.
+    """
+
+    selection = (
+        (reduction_input['type'] == source)
+        & reduction_input['use']
+        & reduction_input[f'use_ccd{ccd}']
+    )
+
+    # Use pure SimTh only.
+    if source == 'SimTh':
+
+        selection &= (
+            ~reduction_input['lc_requested']
+        )
+
+    return reduction_input[
+        selection
+    ]
+
+def _calibration_image_is_usable(
+    image,
+    nightly_tramlines,
+    source,
+    ccd,
+    n_test_orders=5,
+    minimum_detected=2,
+):
+    """
+    Test whether a calibration image contains useful signal.
+
+    A few well-separated, non-edge orders are tested using the same
+    aperture-detection algorithm that will subsequently be used for all
+    orders.
+    """
+
+    rows = [
+        row
+        for row in nightly_tramlines
+        if _order_name(row)[4] == str(ccd)
+    ]
+
+    if len(rows) == 0:
+        return False, 0
+
+    n_test = min(
+        n_test_orders,
+        len(rows),
+    )
+
+    # Avoid testing only the extreme edge orders.
+    indices = np.unique(
+        np.rint(
+            np.linspace(
+                0.2 * (len(rows) - 1),
+                0.8 * (len(rows) - 1),
+                n_test,
+            )
+        ).astype(int)
+    )
+
+    n_detected = 0
+
+    for index in indices:
+
+        result = _measure_calibration_region(
+            image,
+            rows[index],
+            source,
+        )
+
+        if result['detected']:
+            n_detected += 1
+
+    required = min(
+        minimum_detected,
+        len(indices),
+    )
+
+    return (
+        n_detected >= required,
+        n_detected,
+    )
+
+def _calibration_image_has_signal(
+    image,
+    tramlines,
+    source,
+    ccd,
+    detector_shifts,
+    padding=10,
+    threshold=100.0,
+    minimum_bright_pixels=20,
+    n_test_orders=3,
+    x_step=8,
+):
+    """
+    Cheap check that a SimTh/SimLC image contains signal where expected.
+
+    Uses a few representative orders and the detector-shifted reference
+    tramlines. The expected calibration aperture is enlarged by `padding`
+    pixels on either side.
+
+    This is only an exposure-level pre-check. The actual begin/end
+    positions are measured later for every order.
+    """
+
+    rows = [
+        row
+        for row in tramlines
+        if _order_name(row)[4] == str(ccd)
+    ]
+
+    if len(rows) == 0:
+        return False, 0, np.nan
+
+    # Use a few orders away from the extreme CCD edges.
+    indices = np.unique(
+        np.rint(
+            np.linspace(
+                0.25 * (len(rows) - 1),
+                0.75 * (len(rows) - 1),
+                min(n_test_orders, len(rows)),
+            )
+        ).astype(int)
+    )
+
+    dx, dy = _get_detector_shift(
+        detector_shifts,
+        ccd,
+    )
+
+    x_sample = np.arange(
+        0,
+        image.shape[0],
+        x_step,
+    )
+
+    samples = []
+
+    for index in indices:
+
+        row = rows[index]
+
+        coeffs = np.array([
+            float(row[f'tramline_coeff_{i}'])
+            for i in range(N_COEFF)
+        ])
+
+        # At this point these are still the long-term reference
+        # tramlines, so shift them to the current detector position.
+        coeffs = utils.shifted_coefficients(
+            coeffs,
+            dx=dx,
+            dy=dy,
+        )
+
+        trace = Polynomial(coeffs)(
+            x_sample
+        )
+
+        begin = float(
+            row[f'{source}_begin']
+        )
+
+        end = float(
+            row[f'{source}_end']
+        )
+
+        for x, centre in zip(
+            x_sample,
+            trace,
+        ):
+
+            y0 = int(
+                np.floor(
+                    centre
+                    + begin
+                    - padding
+                )
+            )
+
+            y1 = int(
+                np.ceil(
+                    centre
+                    + end
+                    + padding
+                )
+            )
+
+            y0 = max(
+                0,
+                y0,
+            )
+
+            y1 = min(
+                image.shape[1],
+                y1,
+            )
+
+            if y0 < y1:
+
+                samples.append(
+                    image[x, y0:y1]
+                )
+
+    if len(samples) == 0:
+        return False, 0, np.nan
+
+    values = np.concatenate(
+        samples
+    )
+
+    values = values[
+        np.isfinite(values)
+    ]
+
+    if len(values) == 0:
+        return False, 0, np.nan
+
+    n_bright = int(
+        np.sum(
+            values > threshold
+        )
+    )
+
+    signal = float(
+        np.nanpercentile(
+            values,
+            99,
+        )
+    )
+
+    usable = (
+        n_bright
+        >= minimum_bright_pixels
+    )
+
+    return (
+        usable,
+        n_bright,
+        signal,
+    )
+
+def _find_first_usable_calibration_image(
+    reduction_input,
+    tramlines,
+    detector_shifts,
+    source,
+    ccd,
+):
+    """
+    Find the first SimTh/SimLC exposure with useful signal.
+
+    This performs only a cheap exposure-level signal check. Exact
+    calibration-region boundaries are measured order-by-order later.
+    """
+
+    candidates = _select_calibration_exposures(
+        reduction_input,
+        source,
+        ccd,
+    )
+
+    logger.info(
+        'CCD%s: checking %d %s exposures',
+        ccd,
+        len(candidates),
+        source,
+    )
+
+    for row in candidates:
+
+        image, _, _ = utils.preprocess_image(
+            row[f'file_ccd{ccd}'],
+            ccd=ccd,
+        )
+
+        (
+            usable,
+            n_bright,
+            signal,
+        ) = _calibration_image_has_signal(
+            image,
+            tramlines,
+            source,
+            ccd,
+            detector_shifts,
+            padding=10,
+            threshold=100.0,
+            minimum_bright_pixels=20,
+        )
+
+        logger.debug(
+            'CCD%s %s run %s: '
+            '%d pixels >100 ADU, '
+            '99th percentile %.1f ADU',
+            ccd,
+            source,
+            row['run'],
+            n_bright,
+            signal,
+        )
+
+        if usable:
+
+            logger.info(
+                'CCD%s: using %s run %s '
+                'for aperture determination',
+                ccd,
+                source,
+                row['run'],
+            )
+
+            return (
+                image,
+                str(row['run']),
+            )
+
+    logger.warning(
+        'CCD%s: no usable %s exposure found',
+        ccd,
+        source,
+    )
+
+    return None, None
+
+def _update_calibration_region(
+    image,
+    row,
+    region,
+):
+    """
+    Measure one SimTh/SimLC aperture without changing the Flat-derived trace.
+    """
+
+    result = _measure_calibration_region(
+        image,
+        row,
+        region,
+    )
+
+    available_column = (
+        f'{region}_available'
+    )
+
+    if available_column in row.colnames:
+        row[available_column] = result['detected']
+
+    if result['detected']:
+
+        row[
+            f'{region}_begin'
+        ] = result['begin']
+
+        row[
+            f'{region}_end'
+        ] = result['end']
+
+    return row
+
 def median_profile(
     extracted_rows,
     min_valid=1,
@@ -1758,29 +2682,22 @@ def _fit_flat_order(
 # =============================================================================
 
 def fit_nightly_tramlines(
+    reduction_input,
     master_flat,
     detector_shifts,
     config,
     paths,
 ):
-    """
-    Fit all nightly tramlines from the master Flat.
-
-    The long-term reference geometry is shifted by the detector-registration
-    measurement before each order is locally refitted.
-    """
 
     output_file = (
         paths.flat
         / 'tramlines.fits'
     )
 
-    # Cache/restart behaviour.
     if (
         output_file.exists()
         and not config.overwrite
     ):
-
         logger.info(
             'Loading existing nightly tramlines: %s',
             output_file,
@@ -1797,21 +2714,48 @@ def fit_nightly_tramlines(
         / 'tramline_reference_001122.fits'
     )
 
-    if not reference_file.exists():
-
-        raise FileNotFoundError(
-            'Reference tramline file not found: '
-            f'{reference_file}'
-        )
-
     nightly_tramlines = Table.read(
         reference_file
     ).copy()
 
-    logger.info(
-        'Fitting nightly geometry for %d orders',
-        len(nightly_tramlines),
-    )
+    # ------------------------------------------------------------------
+    # Find one representative SimTh / SimLC image per CCD first.
+    # ------------------------------------------------------------------
+
+    calibration_images = {
+        'SimTh': {},
+        'SimLC': {},
+    }
+
+    for ccd in ['1', '2', '3']:
+
+        simth_image, simth_run = _find_first_usable_calibration_image(
+            reduction_input,
+            nightly_tramlines,
+            detector_shifts,
+            source='SimTh',
+            ccd=ccd,
+        )
+
+        calibration_images['SimTh'][ccd] = simth_image
+
+    for ccd in ['2', '3']:
+
+        simlc_image, simlc_run = _find_first_usable_calibration_image(
+            reduction_input,
+            nightly_tramlines,
+            detector_shifts,
+            source='SimLC',
+            ccd=ccd,
+        )
+
+        calibration_images['SimLC'][ccd] = simlc_image
+
+    calibration_images['SimLC']['1'] = None
+
+    # ------------------------------------------------------------------
+    # Now complete each order before moving to the next.
+    # ------------------------------------------------------------------
 
     for i, row in enumerate(
         nightly_tramlines
@@ -1828,37 +2772,77 @@ def fit_nightly_tramlines(
             ccd,
         )
 
-        diagnostic_file = None
+        # 1. Fit Flat geometry.
+        row = _fit_flat_order(
+            master_flat[
+                f'ccd_{ccd}'
+            ],
+            row,
+            dx=dx,
+            dy=dy,
+        )
 
+        # 2. Measure SimTh region.
+        simth_image = (
+            calibration_images[
+                'SimTh'
+            ].get(ccd)
+        )
+
+        if simth_image is not None:
+
+            row = _update_calibration_region(
+                simth_image,
+                row,
+                region='SimTh',
+            )
+
+        # 3. Measure SimLC region.
+        simlc_image = (
+            calibration_images[
+                'SimLC'
+            ].get(ccd)
+        )
+
+        if simlc_image is not None:
+
+            row = _update_calibration_region(
+                simlc_image,
+                row,
+                region='SimLC',
+            )
+
+        else:
+
+            if 'SimLC_available' in row.colnames:
+                row['SimLC_available'] = False
+
+        # Write completed row back.
+        nightly_tramlines[i] = row
+
+        # 4. Diagnostic immediately after completing this order.
         if config.diagnostics == 'full':
 
             diagnostic_file = (
                 paths.debug
                 / 'tramlines'
-                / f'{order}_flat.png'
+                / f'tramline_ccd_{ccd}_order_{order}.png'
             )
 
-        try:
-
-            nightly_tramlines[i] = (
-                _fit_flat_order(
-                    master_flat[
-                        f'ccd_{ccd}'
-                    ],
-                    row,
-                    dx=dx,
-                    dy=dy,
-                    diagnostic_file=diagnostic_file,
-                )
+            _plot_tramline_diagnostic(
+                flat_image=master_flat[
+                    f'ccd_{ccd}'
+                ],
+                simth_image=simth_image,
+                simlc_image=simlc_image,
+                row=row,
+                order=order,
+                filename=diagnostic_file,
             )
 
-        except Exception as error:
-
-            logger.exception(
-                '%s: nightly tramline fit failed: %s',
-                order,
-                error,
-            )
+    # ------------------------------------------------------------------
+    # Save only once, after all orders are complete.
+    # ------------------------------------------------------------------
 
     nightly_tramlines.write(
         output_file,
@@ -1866,12 +2850,11 @@ def fit_nightly_tramlines(
     )
 
     logger.info(
-        'Saved nightly tramlines: %s',
+        'Saved complete nightly tramline geometry: %s',
         output_file,
     )
 
     return nightly_tramlines
-
 
 # =============================================================================
 # BASIC NOTEBOOK SUMMARY
