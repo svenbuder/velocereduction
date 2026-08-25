@@ -1065,6 +1065,9 @@ def extract_trace(
     """
     Extract a fixed-width detector region around a tramline.
 
+    For half_window=40 this returns 81 pixels:
+        -40, ..., -1, 0, +1, ..., +40
+
     Parameters
     ----------
     image : ndarray
@@ -1080,7 +1083,7 @@ def extract_trace(
     Returns
     -------
     extracted : ndarray
-        Shape (n_dispersion, 2*half_window).
+        Shape (n_dispersion, 2*half_window + 1).
 
         Pixels outside the detector are NaN.
 
@@ -1096,7 +1099,7 @@ def extract_trace(
     ).astype(int)
 
     extracted = np.full(
-        (nx, 2 * half_window),
+        (nx, 2 * half_window + 1),
         np.nan,
         dtype=np.float32,
     )
@@ -1104,7 +1107,7 @@ def extract_trace(
     for x, centre in enumerate(centres):
 
         y0 = centre - half_window
-        y1 = centre + half_window
+        y1 = centre + half_window + 1
 
         source0 = max(
             0,
@@ -1700,11 +1703,9 @@ def _extract_order_profile(
         dtype=float,
     )
 
-    m = (
-        np.arange(
-            2 * half_window
-        )
-        - half_window
+    m = np.arange(
+        -half_window,
+        half_window + 1,
     )
 
     coeffs = np.array([
@@ -2249,11 +2250,9 @@ def _fit_flat_order(
         dtype=float,
     )
 
-    m = (
-        np.arange(
-            2 * half_window
-        )
-        - half_window
+    m = np.arange(
+        -half_window,
+        half_window + 1,
     )
 
     # -------------------------------------------------------------------------
