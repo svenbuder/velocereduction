@@ -1,1284 +1,1480 @@
-import numpy as np
-np.seterr(divide='ignore', invalid='ignore')
+"""Calibration-line measurement for Veloce spectra.
+
+This module currently covers only the part of the wavelength-calibration
+pipeline that has been implemented and tested so far:
+
+1. detect emission-line candidates in extracted SimLC/SimTh/FibTh spectra;
+2. fit each candidate with a pixel-integrated Gaussian profile;
+3. flag saturated, weak, poorly measured, unusually broad, or blended peaks;
+4. save one peak-measurement FITS table per calibration type;
+5. create optional QA diagnostics.
+
+Line identification (comb-mode / Th-line assignment) and the global wavelength
+surface are intentionally kept out of this file until those pipeline stages
+are implemented.
+
+Coordinate convention
+---------------------
+y : dispersion direction
+x : cross-dispersion direction
+m : physical echelle order
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from enum import IntFlag
+import logging
 from pathlib import Path
-import sys
-
-from scipy.optimize import curve_fit
-from scipy.signal import find_peaks
-from scipy.integrate import quad
-from astropy.io import fits
-
-# from astropy.table import Table
-# import pickle
 
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
+import numpy as np
+from astropy.table import Table, vstack
+from scipy.ndimage import median_filter
+from scipy.optimize import least_squares
+from scipy.signal import find_peaks
+from scipy.special import ndtr
 
-from . import config
 
-from .utils import polynomial_function, calculate_barycentric_velocity_correction, apply_velocity_shift_to_wavelength_array, fit_voigt_absorption_profile, radial_velocity_from_line_shift, voigt_absorption_profile, wavelength_vac_to_air, wavelength_air_to_vac, lc_peak_gauss, lasercomb_numbers_from_wavelength, lasercomb_wavelength_from_numbers, read_in_wavelength_solution_coefficients_tinney
+logger = logging.getLogger(__name__)
 
-def optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values, pixel_shifts=None, overwrite=False, plot_peak_fits = False, rejection = 'auto', debug=False, use_ylim=False):
+
+# Physical Veloce echelle orders in the same descending order used by the
+# extracted calibration arrays.
+VELOCE_CCD_ORDERS = {
+    "1": np.arange(167, 138 - 1, -1),
+    "2": np.arange(140, 103 - 1, -1),
+    "3": np.arange(104, 65 - 1, -1),
+}
+
+
+class CalibrationPeakFlag(IntFlag):
+    """Bit mask describing why a measured calibration peak is not trusted."""
+
+    GOOD = 0
+    EDGE = 1 << 0
+    SATURATED = 1 << 1
+    LOW_SNR = 1 << 2
+    WIDTH_OUTLIER = 1 << 3
+    BLEND_CANDIDATE = 1 << 4
+    BAD_PROFILE_FIT = 1 << 5
+    LARGE_CENTROID_ERROR = 1 << 6
+
+
+@dataclass
+class CalibrationPeakConfig:
+    """Settings for detecting, fitting, and quality-checking calibration peaks."""
+
+    # Candidate detection.
+    background_window: int = 31
+    noise_window: int = 101
+    detection_snr: float = 5.0
+    prominence_snr: float = 4.0
+    minimum_peak_distance: int = 3
+
+    # Pixel-integrated Gaussian profile fit.
+    fit_half_width: int = 4
+    maximum_centroid_shift: float = 1.5
+    minimum_sigma: float = 0.20
+    maximum_sigma: float = 3.00
+
+    # Individual-peak quality cuts.
+    minimum_fit_snr: float = 10.0
+    maximum_y_uncertainty: float = 0.10
+
+    # Maximum value in the extracted 1D spectrum within the local fit window.
+    # Set this separately for SimTh/FibTh if needed. None disables the cut.
+    maximum_signal: float | None = None
+
+    # Ensemble rejection within each order.
+    fwhm_mad_sigma: float = 4.0
+    measured_blend_fwhm_factor: float = 2.0
+
+
+# -----------------------------------------------------------------------------
+# Small helpers
+# -----------------------------------------------------------------------------
+
+
+def robust_sigma(values: np.ndarray) -> float:
+    """Return a Gaussian-equivalent scatter estimated from the MAD."""
+
+    values = np.asarray(values, dtype=float)
+    finite = np.isfinite(values)
+
+    if not np.any(finite):
+        return np.nan
+
+    median = np.nanmedian(values[finite])
+    return 1.4826 * np.nanmedian(np.abs(values[finite] - median))
+
+
+def _normalise_diagnostics(diagnostics: str | None) -> str:
+    """Return one of ``none``, ``basic``, or ``full``."""
+
+    if diagnostics is None:
+        return "none"
+
+    diagnostics = str(diagnostics).lower()
+
+    if diagnostics not in {"none", "basic", "full"}:
+        raise ValueError(
+            "diagnostics must be one of 'none', 'basic', or 'full'"
+        )
+
+    return diagnostics
+
+
+def _debug_enabled(log_level: str | int | None) -> bool:
+    """Whether verbose per-order console output was requested."""
+
+    if isinstance(log_level, str):
+        return log_level.upper() == "DEBUG"
+
+    if isinstance(log_level, int):
+        return log_level <= logging.DEBUG
+
+    return logger.isEnabledFor(logging.DEBUG)
+
+
+
+def _count_flag(peak_table: Table, flag: CalibrationPeakFlag) -> int:
+    """Count rows containing one quality-flag bit."""
+
+    if len(peak_table) == 0:
+        return 0
+
+    flags = np.asarray(peak_table["quality_flag"], dtype=np.int64)
+    return int(np.sum((flags & int(flag)) != 0))
+
+
+def _quality_summary(peak_table: Table) -> dict[str, int]:
+    """Return counts for the currently implemented quality flags."""
+
+    summary = {
+        "total": len(peak_table),
+        "accepted": 0,
+    }
+
+    if len(peak_table) > 0:
+        summary["accepted"] = int(
+            np.sum(np.asarray(peak_table["used_for_wavelength_fit"], dtype=bool))
+        )
+
+    for flag in CalibrationPeakFlag:
+        if flag == CalibrationPeakFlag.GOOD:
+            continue
+        summary[flag.name.lower()] = _count_flag(peak_table, flag)
+
+    return summary
+
+
+# -----------------------------------------------------------------------------
+# Peak detection
+# -----------------------------------------------------------------------------
+
+
+def detect_calibration_peaks(
+    counts: np.ndarray,
+    *,
+    config: CalibrationPeakConfig | None = None,
+):
+    """Detect candidate emission peaks in one extracted echelle order.
+
+    Detection is performed on a locally background-subtracted spectrum and
+    uses an empirical local-noise estimate. This noise estimate is used only
+    for *detection*. It is deliberately not passed to the profile fit because
+    a dense comb spectrum can inflate it with real neighbouring peaks.
+
+    Parameters
+    ----------
+    counts
+        One-dimensional extracted counts along the dispersion coordinate y.
+    config
+        Peak-detection/fitting configuration.
+
+    Returns
+    -------
+    candidate_pixels, background, detection_noise, detection_snr, properties
+        Integer peak locations and diagnostic arrays from the detection step.
     """
-    Optimises the wavelength solution for a given spectral order using the laser comb data.
-    This function first identifies rough peaks with scipy.signal.find_peaks and then fits a Gaussian to these peaks.
-    It then fits a polynomial (and in the case of 3-sigma outliers repeats the fit) of peak pixel to peak wavelength.
 
-    Parameters:
-        order_name (str):                   The name of the spectral order to optimise the wavelength solution for.
-        lc_pixel_values (numpy.ndarray):    The pixel values of the laser comb data for the given spectral order.
-        pixel_shifts (dict, optional):          Dictionary with x- and y-pixel shifts for CCDs 1-3
-        overwrite (bool, optional):         If True, the function will overwrite the existing wavelength solution coefficients.
-        plot_peak_fits (bool, optional):    If True, the function will plot the fitting results for each LC peak
-        rejection:                          Options: auto, none, outliers, km/s, m/s, default: none
-        debug (bool, optional):             If True, the function will generate diagnostic plots showing the wavelength solution.
-        use_ylim (bool, optional):          If True, the function will set the y-axis limits for the diagnostic plots.
+    if config is None:
+        config = CalibrationPeakConfig()
 
-    Returns:
-        coeffs_lc (numpy.ndarray):          The optimised polynomial wavelength solution coefficients for the given spectral order.
+    counts = np.asarray(counts, dtype=float)
+
+    if counts.ndim != 1:
+        raise ValueError("counts must be one-dimensional")
+
+    finite_counts = counts[np.isfinite(counts)]
+
+    if len(finite_counts) == 0:
+        return (
+            np.array([], dtype=int),
+            np.full_like(counts, np.nan),
+            np.full_like(counts, np.nan),
+            np.full_like(counts, np.nan),
+            {},
+        )
+
+    # Fill only for the detection filters; the original counts are still used
+    # for the profile fits.
+    fill_value = float(np.nanmedian(finite_counts))
+    working_counts = np.where(np.isfinite(counts), counts, fill_value)
+
+    # Median-filtered background: broad enough not to follow individual narrow
+    # calibration peaks.
+    background = median_filter(
+        working_counts,
+        size=config.background_window,
+        mode="nearest",
+    )
+
+    line_signal = working_counts - background
+
+    # Robust local scatter for peak detection. This does not need to be a
+    # perfect statistical variance; it only normalises the find_peaks criteria.
+    local_center = median_filter(
+        line_signal,
+        size=config.noise_window,
+        mode="nearest",
+    )
+
+    absolute_deviation = np.abs(line_signal - local_center)
+
+    detection_noise = 1.4826 * median_filter(
+        absolute_deviation,
+        size=config.noise_window,
+        mode="nearest",
+    )
+
+    global_noise = robust_sigma(line_signal)
+    if not np.isfinite(global_noise) or global_noise <= 0:
+        global_noise = 1.0
+
+    detection_noise = np.maximum(detection_noise, global_noise)
+
+    detection_snr = np.divide(
+        line_signal,
+        detection_noise,
+        out=np.zeros_like(line_signal),
+        where=detection_noise > 0,
+    )
+
+    candidate_pixels, properties = find_peaks(
+        detection_snr,
+        height=config.detection_snr,
+        prominence=config.prominence_snr,
+        distance=config.minimum_peak_distance,
+    )
+
+    return (
+        candidate_pixels,
+        background,
+        detection_noise,
+        detection_snr,
+        properties,
+    )
+
+
+# -----------------------------------------------------------------------------
+# Pixel-integrated line-profile fit
+# -----------------------------------------------------------------------------
+
+
+def pixel_integrated_gaussian(
+    y: np.ndarray,
+    integrated_counts: float,
+    y_center: float,
+    sigma: float,
+) -> np.ndarray:
+    """Evaluate a Gaussian line profile integrated over finite detector pixels."""
+
+    y = np.asarray(y, dtype=float)
+
+    lower_edge = (y - 0.5 - y_center) / sigma
+    upper_edge = (y + 0.5 - y_center) / sigma
+
+    return integrated_counts * (ndtr(upper_edge) - ndtr(lower_edge))
+
+
+def calibration_line_model(
+    y: np.ndarray,
+    integrated_counts: float,
+    y_center: float,
+    sigma: float,
+    background: float,
+    background_slope: float,
+    *,
+    y_reference: float,
+) -> np.ndarray:
+    """Pixel-integrated Gaussian plus a local linear background."""
+
+    return (
+        background
+        + background_slope * (y - y_reference)
+        + pixel_integrated_gaussian(
+            y,
+            integrated_counts,
+            y_center,
+            sigma,
+        )
+    )
+
+
+def fit_calibration_peak(
+    counts: np.ndarray,
+    candidate_pixel: int,
+    *,
+    background: np.ndarray | None = None,
+    config: CalibrationPeakConfig | None = None,
+    return_diagnostics: bool = False,
+) -> dict:
+    """Fit one calibration peak with a pixel-integrated Gaussian.
+
+    The first fit uses a robust loss to reduce the leverage of a deviant pixel.
+    A second ordinary least-squares fit starts from that solution so that the
+    Jacobian can be used for a simple local covariance estimate.
+
+    We do not yet have a propagated variance spectrum. The fit is therefore
+    unweighted, and its covariance is scaled by the measured residual variance
+    of the local profile fit. The empirical noise used for peak detection is
+    intentionally not reused here.
     """
 
-    # We are only fitting peaks and wavelength solutions within a certain pixel range.
-    # Here, we define these pixel ranges (0-4128).
-    lc_range = dict()
-    lc_range['ccd_3_order_104'] = [1455,3900]
-    lc_range['ccd_3_order_103'] = [780,3900]
-    lc_range['ccd_3_order_102'] = [700,3900]
-    lc_range['ccd_3_order_101'] = [650,3920]
-    lc_range['ccd_3_order_100'] = [600,3820]
-    lc_range['ccd_3_order_99'] = [490,3800]
-    lc_range['ccd_3_order_98'] = [500,3750]
-    lc_range['ccd_3_order_97'] = [325,3775]
-    lc_range['ccd_3_order_96'] = [255,3720]
-    lc_range['ccd_3_order_95'] = [250,3650]
-    lc_range['ccd_3_order_94'] = [450,3650]
-    lc_range['ccd_3_order_93'] = [270,3600]
-    lc_range['ccd_3_order_92'] = [540,2800]
-    lc_range['ccd_3_order_91'] = [630,3525]
-    lc_range['ccd_3_order_90'] = [490,3525]
-    lc_range['ccd_3_order_89'] = [355,3465]
-    lc_range['ccd_3_order_88'] = [400,2900]
-    lc_range['ccd_3_order_87'] = [505,3245]
-    lc_range['ccd_3_order_86'] = [200,3200]
-    lc_range['ccd_3_order_85'] = [455,3655]
-    lc_range['ccd_3_order_84'] = [150,3578]
-    lc_range['ccd_3_order_83'] = [145,3850]
-    lc_range['ccd_3_order_82'] = [120,3870]
-    lc_range['ccd_3_order_81'] = [125,4050]
-    lc_range['ccd_3_order_80'] = [130,4000]
-    lc_range['ccd_3_order_79'] = [120,4070]
-    lc_range['ccd_3_order_78'] = [100,4100]
-    lc_range['ccd_3_order_77'] = [100,4100]
-    lc_range['ccd_3_order_76'] = [105,4095]
-    lc_range['ccd_3_order_75'] = [99,4050]
-    lc_range['ccd_3_order_74'] = [745,4050]
-    lc_range['ccd_3_order_73'] = [99,4100]
-    lc_range['ccd_3_order_72'] = [125,4090]
-    lc_range['ccd_3_order_71'] = [95,4086]
-    lc_range['ccd_3_order_70'] = [110,4077]
-    lc_range['ccd_3_order_69'] = [90,4087]
-    lc_range['ccd_3_order_68'] = [90,4090]
-    lc_range['ccd_3_order_67'] = [100,4090]
-    lc_range['ccd_3_order_66'] = [100,3730]
-    lc_range['ccd_3_order_65'] = [100,3730] # for test purposes!
-    lc_range['ccd_2_order_134'] = [1590,3850]
-    lc_range['ccd_2_order_133'] = [1398,3850]
-    lc_range['ccd_2_order_132'] = [1420,3850]
-    lc_range['ccd_2_order_131'] = [1420,3850]
-    lc_range['ccd_2_order_130'] = [1153,3900]
-    lc_range['ccd_2_order_129'] = [1025,3960]
-    lc_range['ccd_2_order_128'] = [825,3960]
-    lc_range['ccd_2_order_127'] = [825,3965]
-    lc_range['ccd_2_order_126'] = [905,3970]
-    lc_range['ccd_2_order_125'] = [895,3970]
-    lc_range['ccd_2_order_124'] = [795,3970]
-    lc_range['ccd_2_order_123'] = [885,3870]
-    lc_range['ccd_2_order_122'] = [785,3870]
-    lc_range['ccd_2_order_121'] = [785,3870]
-    lc_range['ccd_2_order_120'] = [785,3870]
-    lc_range['ccd_2_order_119'] = [405,3870]
-    lc_range['ccd_2_order_118'] = [355,3670]
-    lc_range['ccd_2_order_117'] = [855,3850]
-    lc_range['ccd_2_order_116'] = [480,3850]
-    lc_range['ccd_2_order_115'] = [405,3790]
-    lc_range['ccd_2_order_114'] = [475,3700]
-    lc_range['ccd_2_order_113'] = [845,3700]
-    lc_range['ccd_2_order_112'] = [445,3700]
-    lc_range['ccd_2_order_111'] = [170,3830]
-    lc_range['ccd_2_order_110'] = [150,3980]
-    lc_range['ccd_2_order_109'] = [430,3730]
-    lc_range['ccd_2_order_108'] = [320,3500]
-    lc_range['ccd_2_order_107'] = [215,3580]
-    lc_range['ccd_2_order_106'] = [215,3455]
-    lc_range['ccd_2_order_105'] = [150,3680]
-    lc_range['ccd_2_order_104'] = [200,3200]
-    lc_range['ccd_2_order_103'] = [140,3200]
+    if config is None:
+        config = CalibrationPeakConfig()
 
-    # Check if the order is in the range of orders we can optimise
-    if order_name not in lc_range.keys():
-        raise ValueError('This function is only implemented for CCD3 (exepct order 65) and CCD2 orders 103-134, not your order '+order_name)
+    counts = np.asarray(counts, dtype=float)
+    n_pixels = len(counts)
+
+    left = max(0, int(candidate_pixel) - config.fit_half_width)
+    right = min(
+        n_pixels,
+        int(candidate_pixel) + config.fit_half_width + 1,
+    )
+
+    y = np.arange(left, right, dtype=float)
+    observed_counts = counts[left:right]
+    y_reference = float(candidate_pixel)
+
+    finite = np.isfinite(observed_counts)
+    if np.count_nonzero(finite) < 6:
+        raise ValueError("too few finite pixels in the line-fit window")
+
+    # least_squares cannot handle NaNs. For the very unusual case of an
+    # isolated non-finite value, fill it from the local median and flag the fit
+    # as bad below if the optimiser does not behave well.
+    if not np.all(finite):
+        observed_counts = observed_counts.copy()
+        observed_counts[~finite] = np.nanmedian(observed_counts[finite])
+
+    edge = left == 0 or right == n_pixels
+
+    maximum_observed_signal = float(np.nanmax(observed_counts))
+    saturated = (
+        config.maximum_signal is not None
+        and maximum_observed_signal >= config.maximum_signal
+    )
+
+    # Use the background found during the detection step when available.
+    if background is None:
+        n_edge = min(2, max(1, len(observed_counts) // 3))
+        background_guess = float(
+            np.nanmedian(
+                np.concatenate(
+                    [
+                        observed_counts[:n_edge],
+                        observed_counts[-n_edge:],
+                    ]
+                )
+            )
+        )
     else:
+        background_guess = float(background[candidate_pixel])
 
-        if debug: print('  --> Optimising wavelength solution with LC peaks for '+order_name)
+    peak_height_guess = max(
+        float(counts[candidate_pixel]) - background_guess,
+        1.0,
+    )
 
-        # Use wavelength coefficients according to the following preference:
-        # 1) Coefficients fitted with 18Sco and Korg synthesis
-        # 2) Coefficients fitted with LC
-        # 3) Coefficients fitted with ThXe
-        try:
-            previous_calibration_coefficients = np.loadtxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_{order_name}_korg.txt')
-        except:
-            try:
-                previous_calibration_coefficients = np.loadtxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_{order_name}_lc.txt')
-            except:
-                previous_calibration_coefficients = np.loadtxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_{order_name}_thxe.txt')
+    sigma_guess = 0.7
+    integrated_counts_guess = (
+        peak_height_guess * np.sqrt(2.0 * np.pi) * sigma_guess
+    )
 
-        central_pixel = int(len(lc_pixel_values)/2)
-        centred_pixels = np.arange(len(lc_pixel_values))-int(len(lc_pixel_values)/2)
+    initial_parameters = np.array(
+        [
+            integrated_counts_guess,
+            float(candidate_pixel),
+            sigma_guess,
+            background_guess,
+            0.0,
+        ],
+        dtype=float,
+    )
 
-        # Shifts centre pixel if pixel_shift is not None
-        if pixel_shifts is not None:
-            # pixel_shifts = {'ccd_1': (0.0, 0.0), 'ccd_2': (0.0, 0.0), 'ccd_3': (0.0, 0.0)}
-            y_shift = pixel_shifts['ccd_'+order_name[4]][1] # extraxt y-pixel shift of relevant CCD for this order.
-            centred_pixels += y_shift
+    lower_bounds = np.array(
+        [
+            0.0,
+            candidate_pixel - config.maximum_centroid_shift,
+            config.minimum_sigma,
+            -np.inf,
+            -np.inf,
+        ],
+        dtype=float,
+    )
 
-        wavelength = polynomial_function(centred_pixels,*previous_calibration_coefficients)*10
+    upper_bounds = np.array(
+        [
+            np.inf,
+            candidate_pixel + config.maximum_centroid_shift,
+            config.maximum_sigma,
+            np.inf,
+            np.inf,
+        ],
+        dtype=float,
+    )
 
-        # Let's figure out, where we expect LC peaks at this wavelength
-        lc_number_upper = np.floor(lasercomb_numbers_from_wavelength(wavelength[0])) - 35
-        lc_number_lower = np.ceil(lasercomb_numbers_from_wavelength(wavelength[-1])) + 15
-        lc_numbers = np.arange(lc_number_lower, lc_number_upper+1)
-        lc_wavelengths = lasercomb_wavelength_from_numbers(np.arange(lc_number_lower, lc_number_upper+1))[::-1]
+    def residuals(parameters):
+        model = calibration_line_model(
+            y,
+            *parameters,
+            y_reference=y_reference,
+        )
+        return model - observed_counts
 
-        # By inverting the previous wavelength solution, we can compute the expected LC pixel positions
-        lc_peak_pixel_expectations = np.interp(lc_wavelengths, wavelength, centred_pixels) + central_pixel
+    robust_fit = least_squares(
+        residuals,
+        initial_parameters,
+        bounds=(lower_bounds, upper_bounds),
+        loss="soft_l1",
+        f_scale=1.0,
+    )
 
-        lc_pixel_arange = np.arange(len(lc_pixel_values))
-        
-        lc_pixels_to_fit = []
-        lc_wavelengths_to_fit = []
-        lc_fwhms = []
+    final_fit = least_squares(
+        residuals,
+        robust_fit.x,
+        bounds=(lower_bounds, upper_bounds),
+        loss="linear",
+    )
 
-        lc_fit_nr_expected = len(lc_wavelengths)
-        lc_fit_failed = 0
-        lc_fit_bad_quality = 0
-        lc_fit_outside_window = 0
+    (
+        integrated_counts,
+        y_center,
+        sigma,
+        fitted_background,
+        background_slope,
+    ) = final_fit.x
 
-        lc_fit_peak_position = []
-        lc_fit_peak_offsets = []
-        lc_fit_peak_sigmas = []
+    model = calibration_line_model(
+        y,
+        *final_fit.x,
+        y_reference=y_reference,
+    )
 
-        for lc_peak_index in range(len(lc_peak_pixel_expectations)):
-            lc_peak_wavelength = lc_wavelengths[lc_peak_index]
-            lc_peak_pixel = lc_peak_pixel_expectations[lc_peak_index]
+    fit_residual = observed_counts - model
+    fit_rms = float(np.sqrt(np.nanmean(fit_residual**2)))
 
-            lc_peak_fitting_window = 6 # pixels
+    # Local covariance estimate. Because the fit is currently unweighted,
+    # scale (J^T J)^-1 by the measured residual variance.
+    n_parameters = len(final_fit.x)
+    degrees_of_freedom = max(1, len(y) - n_parameters)
+    residual_variance = float(
+        np.nansum(fit_residual**2) / degrees_of_freedom
+    )
 
-            lc_pixels_in_window = lc_pixel_arange[int(lc_peak_pixel-lc_peak_fitting_window):int(lc_peak_pixel+lc_peak_fitting_window)]
-            lc_pixel_values_in_window = lc_pixel_values[int(lc_peak_pixel-lc_peak_fitting_window):int(lc_peak_pixel+lc_peak_fitting_window)]
+    covariance = np.linalg.pinv(final_fit.jac.T @ final_fit.jac)
+    covariance *= residual_variance
 
-            significant_peak_within_window = False
-            if len(lc_pixel_values_in_window) > 5:
-                highest_value = np.argmax(lc_pixel_values_in_window)
-                if lc_pixel_values_in_window[highest_value] > 10000:
-                    significant_peak_within_window = True
-                    detection = 'Yes'
-                    marker = 'x'
-                else:
-                    detection = 'No'
-                    marker = 'o'
+    parameter_uncertainty = np.sqrt(
+        np.clip(np.diag(covariance), 0.0, None)
+    )
 
-                if plot_peak_fits:
-                    f2, ax_new = plt.subplots()
-                    ax_new.plot(
-                        lc_pixels_in_window,
-                        lc_pixel_values_in_window, label = 'LC measurement'
-                    )
-                    ax_new.axvline(lc_peak_pixel, label = 'Expected peak position')
-                    ax_new.scatter(lc_pixels_in_window[highest_value],lc_pixel_values_in_window[highest_value], marker = marker, label = detection)
-                    ax_new.set_title('LC peak '+str(int(lc_numbers[lc_peak_index]))+' at '+str(np.round(lc_peak_wavelength,3))+' Å')
+    integrated_counts_uncertainty = float(parameter_uncertainty[0])
+    y_uncertainty = float(parameter_uncertainty[1])
+    sigma_uncertainty = float(parameter_uncertainty[2])
 
-                try:
-                    popt, pcov = curve_fit(
-                        lc_peak_gauss,
-                        lc_pixels_in_window,
-                        lc_pixel_values_in_window,
-                        p0 = [lc_peak_pixel, 1, np.nanmax(lc_pixel_values_in_window), 0],
-                        # bounds:
-                        # peak sigma must be between 0.3 and 2.0
-                        # peak amplitude must be at least 0.5 and up to 2e6
-                        # peak offset must be positive and should be less than 500
-                        bounds=([lc_peak_pixel-4,0.35,0.5,0],[lc_peak_pixel+4,2.0,2e6,500])
-                    )
-                    if plot_peak_fits:
-                        ax_new.plot(
-                            lc_pixels_in_window,
-                            lc_peak_gauss(lc_pixels_in_window,*popt)
+    gaussian_to_fwhm = 2.0 * np.sqrt(2.0 * np.log(2.0))
+    fwhm = float(gaussian_to_fwhm * sigma)
+    fwhm_uncertainty = float(gaussian_to_fwhm * sigma_uncertainty)
+
+    if integrated_counts_uncertainty > 0:
+        signal_to_noise = float(
+            integrated_counts / integrated_counts_uncertainty
+        )
+    else:
+        signal_to_noise = np.nan
+
+    flag = CalibrationPeakFlag.GOOD
+
+    if edge:
+        flag |= CalibrationPeakFlag.EDGE
+
+    if saturated:
+        flag |= CalibrationPeakFlag.SATURATED
+
+    if not final_fit.success or not np.all(np.isfinite(final_fit.x)):
+        flag |= CalibrationPeakFlag.BAD_PROFILE_FIT
+
+    if (
+        not np.isfinite(signal_to_noise)
+        or signal_to_noise < config.minimum_fit_snr
+    ):
+        flag |= CalibrationPeakFlag.LOW_SNR
+
+    if (
+        not np.isfinite(y_uncertainty)
+        or y_uncertainty > config.maximum_y_uncertainty
+    ):
+        flag |= CalibrationPeakFlag.LARGE_CENTROID_ERROR
+
+    result = dict(
+        y=float(y_center),
+        y_uncertainty=y_uncertainty,
+        pixel_phase=float(y_center - np.round(y_center)),
+        integrated_counts=float(integrated_counts),
+        integrated_counts_uncertainty=integrated_counts_uncertainty,
+        maximum_signal=maximum_observed_signal,
+        signal_to_noise=signal_to_noise,
+        fwhm=fwhm,
+        fwhm_uncertainty=fwhm_uncertainty,
+        background=float(fitted_background),
+        background_slope=float(background_slope),
+        fit_rms=fit_rms,
+        fit_success=bool(final_fit.success),
+        quality_flag=int(flag),
+    )
+
+    if return_diagnostics:
+        result.update(
+            fit_y=y,
+            fit_observed=observed_counts,
+            fit_model=model,
+            fit_residual=fit_residual,
+        )
+
+    return result
+
+
+# -----------------------------------------------------------------------------
+# Ensemble quality checks
+# -----------------------------------------------------------------------------
+
+
+def _apply_ensemble_peak_flags(
+    peak_table: Table,
+    *,
+    config: CalibrationPeakConfig,
+) -> None:
+    """Flag unusual widths and very close measured neighbours per order."""
+
+    if len(peak_table) == 0:
+        return
+
+    orders = np.asarray(peak_table["order"], dtype=int)
+
+    for order in np.unique(orders):
+        indices = np.where(orders == order)[0]
+
+        # Estimate the normal FWHM using peaks that are not already clearly
+        # unusable for reasons independent of their width.
+        excluded_for_width_reference = int(
+            CalibrationPeakFlag.SATURATED
+            | CalibrationPeakFlag.BAD_PROFILE_FIT
+            | CalibrationPeakFlag.EDGE
+        )
+
+        basic_good = np.array(
+            [
+                (
+                    int(peak_table["quality_flag"][i])
+                    & excluded_for_width_reference
+                )
+                == 0
+                for i in indices
+            ],
+            dtype=bool,
+        )
+
+        if np.count_nonzero(basic_good) >= 3:
+            good_indices = indices[basic_good]
+            widths = np.asarray(
+                peak_table["fwhm"][good_indices],
+                dtype=float,
+            )
+
+            median_fwhm = float(np.nanmedian(widths))
+            fwhm_scatter = robust_sigma(widths)
+
+            if np.isfinite(fwhm_scatter) and fwhm_scatter > 0:
+                lower = median_fwhm - config.fwhm_mad_sigma * fwhm_scatter
+                upper = median_fwhm + config.fwhm_mad_sigma * fwhm_scatter
+
+                for i in indices:
+                    width = float(peak_table["fwhm"][i])
+                    if (
+                        not np.isfinite(width)
+                        or width < lower
+                        or width > upper
+                    ):
+                        peak_table["quality_flag"][i] = int(
+                            int(peak_table["quality_flag"][i])
+                            | int(CalibrationPeakFlag.WIDTH_OUTLIER)
                         )
-                        ax_new.axvline(popt[0], color = 'C3', ls = 'dashed', label = 'Peak fit')
-                except:
-                    popt = [np.nan,np.nan,np.nan,np.nan]
 
-                if plot_peak_fits:
-                    ax_new.legend()
-                    if 'ipykernel' in sys.modules: plt.show(f2)
-                    plt.close(f2)
-
-                lc_fit_peak_position.append(lc_peak_pixel)
-                lc_fit_peak_offsets.append(lc_peak_pixel - popt[0])
-                lc_fit_peak_sigmas.append(popt[1])
-
-                # Quality control:
-                if (
-                    # peak position must be less than 3 pixels off from expected position
-                    (np.abs(lc_peak_pixel - popt[0]) < 4) &
-                    # peak sigma must be between 0.35 and 2.0
-                    ((popt[1] > 0.35) & (popt[1] < 2.0)) &
-                    # ratio of peak amplitude to offset must be at least 2
-                    ((popt[2] / popt[3] > 2))
-                ):
-                    lc_pixels_to_fit.append(popt[0])
-                    lc_wavelengths_to_fit.append(lc_peak_wavelength)
-                    lc_fwhms.append(2*np.sqrt(2*np.log(2))*popt[1])
-                else:
-                    lc_fit_bad_quality += 1
-                    # if debug: print('      --> Peak quality for '+str(lc_peak_pixel)+' at position '+str(lc_peak_wavelength)+' Å below criteria: '+str(np.round(np.abs(lc_peak_pixel - popt[0]),2))+' Pixel shift  / Sigma. '+str(np.round(popt[1],1))+' / Ampl. Ratio '+str(np.round(popt[2] / popt[3],1))+' = '+str(popt[2])+'/'+str(popt[3]))
-                # except:
-
-                    # lc_fit_failed += 1
-                    # # if debug: print('      --> Failed fit for finer peak '+str(lc_peak_pixel)+' at position '+str(lc_peak_wavelength)+' Å.')
-            else:
-                lc_fit_outside_window += 1
-                # if debug: print('LC peak '+str(int(lc_numbers[lc_peak_index]))+' at '+str(np.round(lc_peak_wavelength,3))+' Å not in window!')
-
-        if debug:
-            f2, (ax_new1, ax_new2) = plt.subplots(2,1)
-            ax_new1.scatter(
-                lc_fit_peak_position,
-                lc_fit_peak_offsets
-            )
-            ax_new1.set_xlabel('Pixel')
-            ax_new1.set_ylabel('Offsets')
-            ax_new2.scatter(
-                lc_fit_peak_position,
-                lc_fit_peak_sigmas
-            )
-            ax_new2.set_xlabel('Pixel')
-            ax_new2.set_ylabel('Sigma')
-            if 'ipykernel' in sys.modules: plt.show(f2)
-            plt.close(f2)
-
-
-        lc_pixels_to_fit = np.array(lc_pixels_to_fit) - central_pixel
-        lc_wavelengths_to_fit = np.array(lc_wavelengths_to_fit)
-        lc_fwhms = np.array(lc_fwhms)
-
-        """
-        # The following code has previously been used to find_peaks across an order
-        # and then fine-tune them with Gaussian fits.
-        # This was not as robust against missing peaks though!
-        # The version above should be more robust as it is using expected peaks
-
-        # Identify the range for which we will fit the peaks
-        lc_beginning, lc_ending = lc_range[order_name]
-        # previous defaults have been: lc_beginning = 500, lc_ending = 3700
-        in_panel = np.arange(lc_beginning,lc_ending+1)
-        close_to_in_panel = np.arange(lc_beginning-100,np.min([lc_ending+100,4127]))
-
-        # Adjust the peak distance, acknowledging that the distance differs based on wavelength
-        # and order. We use the following separations:
-        # 6-8 pxiels for the CCD3
-        # 5-6 pixels for the red part of CCD2
-        # 4-6 pixels for bluest part of CCD2
-        if order_name[4] == '3':
-            peak_distance1 = 6
-            peak_distance2 = 8
-        elif int(order_name[-3:]) > 118:
-            peak_distance1 = 4
-            peak_distance2 = 6
-        else:
-            peak_distance1 = 5
-            peak_distance2 = 6
-        # Use the midpoint for a better application of find_peaks (since it can only take 1 integer as distance)
-        lc_value_in_panel_midpoint = len(lc_pixel_values[in_panel]) // 2
-        lc_values_half1 = lc_pixel_values[in_panel][:lc_value_in_panel_midpoint]  # First half
-        lc_values_half2 = lc_pixel_values[in_panel][lc_value_in_panel_midpoint:]
-
-        # Adjust the expected peak height and dominance - this is not yet robust, and only established for 1 LC exposure...
-        if order_name in ['ccd_3_order_80','ccd_3_order_81','ccd_3_order_90','ccd_3_order_92','ccd_3_order_88','ccd_2_order_126']:
-            peak_height = 10
-            peak_prominence = 10
-        elif order_name in [
-            'ccd_3_order_86',
-            'ccd_2_order_104','ccd_2_order_105',
-            'ccd_2_order_112','ccd_2_order_113','ccd_2_order_114','ccd_2_order_115','ccd_2_order_116'
-        ]:
-            peak_height = 5
-            peak_prominence = 5
-        elif order_name in ['ccd_3_order_87','ccd_3_order_91']:
-            peak_height = 1
-            peak_prominence = 3
-
-        elif order_name in ['ccd_2_order_106','ccd_2_order_107','ccd_2_order_108','ccd_2_order_109','ccd_2_order_117']:
-            peak_height = 2
-            peak_prominence = 2
-        else:
-            peak_height = 20
-            peak_prominence = 20
-
-        # Fit the peaks for the left and right half of the order and concatenate them to "peaks"
-        peaks1, peak_metadata1 = find_peaks(
-            lc_values_half1,
-            height = peak_height,
-            prominence = peak_prominence,
-            distance = peak_distance1
-        )
-        peaks2, peak_metadat2 = find_peaks(
-            lc_values_half2,
-            height = peak_height,
-            prominence = peak_prominence,
-            distance = peak_distance2
-        )
-        peaks = np.concatenate((peaks1,peaks2+lc_value_in_panel_midpoint))
-
-        # Identify gaps (>1.5 median_peak_distance) that are not within the first 50 and last 600 pixels and fill these gaps
-        max_right_buffer = 600
-        if order_name == 'ccd_2_order_111': max_right_buffer = 50
-        median_peak_distance = np.median(np.diff(peaks))
-        
-        position_of_too_large_gap_between_peaks = np.where((np.diff(peaks) > 1.5*median_peak_distance) & (peaks[:-1] > 20) & (peaks[:-1] < lc_ending - max_right_buffer))[0]
-        
-        if len(position_of_too_large_gap_between_peaks) > 0:
-
-            # Initialize the new peaks list from existing peaks
-            new_peaks = list(peaks)
-            new_peaks_added = []
-
-            # Insert new peaks in the positions of the large gaps and overwrite peaks
-            for index in reversed(position_of_too_large_gap_between_peaks):
-                start_peak = peaks[index]
-                end_peak = peaks[index + 1]
-                try:
-                    neighbour_distance = abs(peaks[index + 2] - end_peak)
-                except:
-                    neighbour_distance = abs(peaks[index - 1] - start_peak)
-
-                # Enforce additional robustness of significant enough gap at specific location
-                # Distance at gap is better than median distance, since the pixel distance increases across the order.
-                if end_peak - start_peak > 1.5*neighbour_distance:
-                    new_peak_position = (start_peak + end_peak) // 2
-                    new_peaks.insert(index + 1, new_peak_position)
-                    new_peaks_added.append(new_peak_position)
-            peaks = new_peaks
-
-            if debug:
-                if len(new_peaks_added) > 0: print('      --> Found '+str(len(new_peaks_added))+' gaps: ', new_peaks_added)
-                else: print('      --> Found 0 gaps')
-
-        # Plot the laser rough comb peaks if we want to debug
-        if debug:
-            f, ax = plt.subplots(1,1,figsize=(15,5))
-            ax.set_title(order_name)
-            ax.plot(
-                wavelength[close_to_in_panel],
-                lc_pixel_values[close_to_in_panel],
-                lw = 0.5
-            )
-            ax.set_ylim(0,1.1*np.percentile(lc_pixel_values[np.isfinite(lc_pixel_values)],q=99))
-
-            for peak in peaks:
-                ax.axvline(wavelength[in_panel][peak], c = 'C3', lw=0.5, ls='dashed')
-            plt.tight_layout()
-            if 'ipykernel' in sys.modules: plt.show()
-            plt.close()
-
-        # Now that we have the integer peak positions, let's fit more precise Gaussians.
-        # Use the rough integer peaks, if the Gaussian fit fails (likely for weak peaks)
-        fine_peaks = []
-        for peak in peaks:
-
-            # Find the pixels that are +- 0.5*peak_distance away from the peak
-            pixels_around_peak = np.arange(
-                np.max([0,peak - int(np.ceil(peak_distance1/2))]),
-                np.min([len(lc_pixel_values[in_panel]),peak + int(np.ceil(peak_distance1/2))+1])
-            )
-            pixel_values_around_peak = lc_pixel_values[in_panel][pixels_around_peak]
-            pixel_minmax = list(np.nanpercentile(pixel_values_around_peak,q=[1,99]))
-
-            try:
-                popt, pcov = curve_fit(
-                    lc_peak_gauss,
-                    pixels_around_peak,
-                    pixel_values_around_peak,
-                    p0 = [peak, 1, pixel_minmax[1]-pixel_minmax[0], pixel_minmax[0]]
-                )
-
-                # Make sure the Gaussian is not too far off!
-                # Use initial peak integer otherwise
-                if abs(peak - popt[0] > 1):
-                    fine_peaks.append(peak)
-                else:
-                    fine_peaks.append(popt[0])
-            except:
-                if debug: print('      --> Failed fit for finer peak '+str(peak)+' at position '+str(peak+lc_beginning)+'. Using rough peak.')
-                fine_peaks.append(peak)
-        fine_peaks = np.array(fine_peaks)
-
-            # #Plot the Gaussian fits for each peak if we want to debug
-            # if debug:
-            #     f, ax = plt.subplots(1,1)
-            #     ax.scatter(
-            #         pixels_around_peak,
-            #         pixel_values_around_peak,
-            #         s = 20
-            #     )
-            #     ax.plot(
-            #         np.linspace(pixels_around_peak[0],pixels_around_peak[-1],50),
-            #         lc_peak_gauss(np.linspace(pixels_around_peak[0],pixels_around_peak[-1],50), *popt),
-            #         c = 'C1'
-            #     )
-            #     plt.tight_layout()
-            #     plt.show()
-            #     plt.close()
-
-        # Now that we have the fine peaks, let's fit a polynomial to the pixel and wavelength data
-        # For this, we first have to determine the laser comb numbers and wavelengths
-        lc_number_upper = np.floor(lasercomb_numbers_from_wavelength(wavelength[in_panel][0]))
-        lc_number_lower = np.ceil(lasercomb_numbers_from_wavelength(wavelength[in_panel][-1]))
-        lc_wavelengths = lasercomb_wavelength_from_numbers(np.arange(lc_number_lower, lc_number_upper+1))[::-1]
-
-        # In some cases, the number of peaks and modes differ. In this case, we only use the first n peaks and modes.
-        if debug:
-            print('    --> Peaks found: ',len(peaks))
-            print('    --> Modes found: ',len(lc_wavelengths))
-        if len(peaks) != len(lc_wavelengths):
-            use_peaks_and_modes = np.min([len(peaks),len(lc_wavelengths)])
-            if debug: print('    --> Only using first '+str(use_peaks_and_modes)+' entries')
-        else:
-            use_peaks_and_modes = len(peaks)
-
-        # Fit a polynomial function to pixel and wavelength data
-        lc_pixels_to_fit = lc_beginning + fine_peaks[:use_peaks_and_modes] - central_pixel
-        lc_wavelengths_to_fit = lc_wavelengths[:use_peaks_and_modes]
-        """
-
-        coeffs_lc, _ = curve_fit(
-            polynomial_function,
-            lc_pixels_to_fit,
-            lc_wavelengths_to_fit/10.,
-            p0=previous_calibration_coefficients
-        )
-
-        # Calculate the RMS wavelength and velocity
-        wavelength_residuals = (lc_wavelengths_to_fit - (polynomial_function(lc_pixels_to_fit,*coeffs_lc)*10)) # Aangstroem
-        rms_wavelength = np.std(wavelength_residuals)
-        rms_velocity = 299792.46 * np.std(wavelength_residuals/(lc_wavelengths_to_fit))
-
-        if debug:
-            f, gs = plt.subplots(3,1,figsize=(15,7))
-            f.suptitle(order_name,fontsize=15)
-
-            gs[0].plot(
-                lc_pixel_values, lw = 0.5, label = 'LC Counts'
-            )
-            gs[0].set_ylabel('LC counts')
-            gs[0].set_ylim(0,2*np.nanpercentile(lc_pixel_values,q=90))
-            for lc_peak_pixel_expectation in lc_peak_pixel_expectations:
-                if lc_peak_pixel_expectation == lc_peak_pixel_expectations[0]:
-                    label = 'Peak expectation previous solution'
-                else:
-                    label = '_nolegend_'
-                gs[0].axvline(lc_peak_pixel_expectation, ls = 'dashed', lw = 0.5, color = 'C3', label = label)
-
-        # Calculate X-sigma RMS velocity outliers, clip them, and refit the wavelength solution
-        rms_sigma = 3 < 299792.46 * np.abs(wavelength_residuals/(lc_wavelengths_to_fit)) / rms_velocity
-        rms_500ms = 299792458.0 * np.abs(wavelength_residuals/(lc_wavelengths_to_fit)) > 500.0
-
-        rms_velocity_x_sigma_outlier = np.where(rms_sigma | rms_500ms)[0]
-
-        if rejection == 'none':
-            rms_velocity_x_sigma_outlier = []
-        elif rejection == 'left100':
-            rms_velocity_x_sigma_outlier = np.arange(100)
-        elif rejection == 'left50':
-            rms_velocity_x_sigma_outlier = np.arange(50)
-        elif rejection == 'right50':
-            rms_velocity_x_sigma_outlier = np.arange(len(rms_sigma)-50,len(rms_sigma))
-        elif rejection == 'right100':
-            rms_velocity_x_sigma_outlier = np.arange(len(rms_sigma)-100,len(rms_sigma))
-        elif rejection == 'm/s':
-            rms_velocity_x_sigma_outlier = np.where(rms_sigma | rms_500ms)[0]
-        elif rejection == 'km/s':
-            rms_2000ms = 299792458.0 * np.abs(wavelength_residuals/(lc_wavelengths_to_fit)) > 2000.0
-            rms_velocity_x_sigma_outlier = np.where(rms_sigma | rms_2000ms)[0]
-        elif rejection == 'outliers':
-            rms_velocity_x_sigma_outlier = np.where(rms_sigma)[0]
-        else:
-            if len(rms_sigma) - len(rms_velocity_x_sigma_outlier) < 20:
-                if debug: print('   --> Too many outliers to delete them. Relaxing outliers to 2km/s!')
-                rms_2000ms = 299792458.0 * np.abs(wavelength_residuals/(lc_wavelengths_to_fit)) > 2000.0
-                rms_velocity_x_sigma_outlier = np.where(rms_sigma | rms_2000ms)[0]
-                if len(rms_sigma) - len(rms_velocity_x_sigma_outlier) < 20:
-                    if debug: print('   --> Still too many outliers to delete them. Relaxing outliers to 3-sigma outliers only!')
-                    rms_velocity_x_sigma_outlier = np.where(rms_sigma)[0]
-                    if len(rms_sigma) - len(rms_velocity_x_sigma_outlier) < 20:
-                        if debug: print('   --> Still too many outliers to delete them. Using all data point!')
-                        rms_velocity_x_sigma_outlier = []
-                
-        if debug: print('   --> Peaks: Of '+str(lc_fit_nr_expected)+', '+str(lc_fit_outside_window)+' were outside window, '+str(lc_fit_failed)+' failed, '+str(lc_fit_bad_quality)+' bad quality, and '+str(len(rms_velocity_x_sigma_outlier))+' RMS outliers. Nr peaks for fit: '+str(len(lc_pixels_to_fit)))
-
-        if len(rms_velocity_x_sigma_outlier) > 0:
-
-            outlier_pixels = lc_pixels_to_fit[rms_velocity_x_sigma_outlier]+central_pixel
-
-            lc_pixels_to_fit = np.delete(lc_pixels_to_fit, rms_velocity_x_sigma_outlier)
-            lc_wavelengths_to_fit = np.delete(lc_wavelengths_to_fit, rms_velocity_x_sigma_outlier)
-            coeffs_lc, _ = curve_fit(
-                polynomial_function,
-                lc_pixels_to_fit,
-                lc_wavelengths_to_fit/10.,
-                p0=coeffs_lc
-            )
-            wavelength_residuals = lc_wavelengths_to_fit - (polynomial_function(lc_pixels_to_fit,*coeffs_lc)*10) # Aangstroem
-            rms_wavelength = np.std(wavelength_residuals)
-            rms_velocity = 299792458. * np.std(wavelength_residuals/lc_wavelengths_to_fit)
-
-            if debug:
-                gs[1].scatter(
-                    outlier_pixels,
-                    np.zeros(len(outlier_pixels)),
-                    s = 5, c = 'C3',
-                    label = str(len(rms_velocity_x_sigma_outlier))+' RMS velocity outlier(s) 3sigma or 500m/s'
-                )
-                gs[2].scatter(
-                    outlier_pixels,
-                    np.zeros(len(outlier_pixels)),
-                    s = 5, c = 'C3',
-                    label = str(len(rms_velocity_x_sigma_outlier))+' RMS velocity outlier(s) 3sigma or 500m/s'
-                )
-
-        if overwrite: np.savetxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_{order_name}_lc.txt',coeffs_lc)
-
-        # Plot the difference between the LC wavelength solution and
-        #   a) the LC peaks (as scatter points) as dots,
-        #   b) the Tinney wavelength solution, and
-        #   c) the ThXe wavelength solution.
-        # Also inform the user about the wavelength and RV RMS.
-        if debug:
-
-            print('   --> Fitted coefficients:',coeffs_lc)
-
-            # LC Wavelength Solution
-            wavelength_residual_aangstroem = (lc_wavelengths_to_fit - (polynomial_function(lc_pixels_to_fit,*coeffs_lc))*10)
-            wavelength_residual_ms = wavelength_residual_aangstroem / lc_wavelengths_to_fit * 299792458. # speed of light in in m/s
-
-            rms_wavelength = np.std(wavelength_residual_aangstroem)
-            rms_velocity = np.std(wavelength_residual_ms)
-
-            gs[1].set_ylabel('Residual Å')
-            gs[1].scatter(
-                lc_pixels_to_fit+central_pixel,
-                wavelength_residual_aangstroem,
-                s = 1,
-                label = 'LC Peaks, RMS = '+str(np.round(rms_wavelength,4))+' Å or '+str(np.round(rms_velocity))+' m/s'
-            )
-            gs[1].plot(
-                np.arange(len(lc_pixel_values)),
-                np.zeros(len(lc_pixel_values)),
-                label = 'LC Wavelength Solution'
-            )
-
-            gs[2].set_xlabel('Pixels')
-            gs[2].set_ylabel('Residual m/s')
-            gs[2].scatter(
-                lc_pixels_to_fit+central_pixel,
-                wavelength_residual_ms,
-                s = 1,
-                label = 'LC Peaks, RMS = '+str(np.round(rms_wavelength,4))+' Å or '+str(np.round(rms_velocity))+' m/s'
-            )
-            gs[2].plot(
-                np.arange(len(lc_pixel_values)),
-                np.zeros(len(lc_pixel_values)),
-                label = 'LC Wavelength Solution'
-            )
-
-            # Tinney Wavelength Solution - shifted from its native DYO to 2048 and ensuring CCD1+2 are in vacuum
-            coeffs_tinney = read_in_wavelength_solution_coefficients_tinney()
-            wavelength_tinney = polynomial_function(np.arange(len(lc_pixel_values))-central_pixel,*coeffs_tinney[order_name][:-1])*10
-            gs[1].plot(
-                np.arange(len(lc_pixel_values)),
-                wavelength_tinney -
-                polynomial_function(np.arange(len(lc_pixel_values))-central_pixel,*coeffs_lc)*10,
-                label = 'Tinney Wavelength Solution'
-            )
-
-            # ThXe Wavelegnth Solution
-            coeffs_thxe = np.loadtxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_{order_name}_thxe.txt')
-            gs[1].plot(
-                np.arange(len(lc_pixel_values)),
-                polynomial_function(np.arange(len(lc_pixel_values))-central_pixel,*coeffs_thxe)*10 - 
-                polynomial_function(np.arange(len(lc_pixel_values))-central_pixel,*coeffs_lc)*10,
-                label = 'ThXe Wavelength Solution'
-            )
-
-            if use_ylim: gs[0].set_ylim(-0.5,0.5)
-            for ax in gs:
-                ax.legend(ncol=5)
-            plt.tight_layout()
-            if 'ipykernel' in sys.modules: plt.show()
-            plt.close()
-
-        return(coeffs_lc, rms_wavelength, rms_velocity)
-    
-def add_wavelength_solution_to_fits_header(file, order, lc_thxe_or_korg, reference_pixel, wavelength_coefficients, rms_wavelength = None, rms_velocity = None):
-    """
-    adds wavelength solution to FITS header of specific order/extension
-    
-    file (HDUList):                         An open FITS file object from astropy.io.fits, which should contain the spectral data.
-                                            The spectral data of each order should be accessible via indexing.
-    order (int):                            The index of the order within the FITS file to calibrate. This specifies which HDU in the
-                                            FITS file is being calibrated.
-    lc_thxe_or_korg (str):                  LC/ThXe/Korg to describe source of wavelength solution
-    reference_pixel:                        Central reference pixel CRPIX of wavelength solution
-    wavelength_coefficients (array):        Coefficients of polynomial wavelnegth solution
-    """
-
-    file[order].header['HIERARCH AIRVAC_'+lc_thxe_or_korg] = 'VAC'
-    file[order].header['HIERARCH WAVE_REFPIX_'+lc_thxe_or_korg] = reference_pixel
-    for coefficient_index, wavelength_coefficient in enumerate(wavelength_coefficients):
-        file[order].header['HIERARCH WAVE_COEFF_'+lc_thxe_or_korg+'_'+str(coefficient_index)] = wavelength_coefficient
-    if rms_wavelength is not None:
-        file[order].header['HIERARCH WAVE_RMS_'+lc_thxe_or_korg+'_AA'] = rms_wavelength
-    if rms_wavelength is not None:
-        file[order].header['HIERARCH WAVE_RMS_'+lc_thxe_or_korg+'_MS'] = rms_velocity
-
-def calibrate_single_order(file, order, pixel_shifts=None, barycentric_velocity=None, optimise_lc_solution=True, debug=False):
-    """
-    Calibrates a single spectral order by fitting a polynomial to the pixel-to-wavelength relationship 
-    and optionally applying a barycentric velocity correction. The calibration updates the wavelength 
-    data for both vacuum and air wavelengths directly within the provided FITS file object.
-
-    Parameters:
-        file (HDUList):                         An open FITS file object from astropy.io.fits, which should contain the spectral data.
-                                                The spectral data of each order should be accessible via indexing.
-        order (int):                            The index of the order within the FITS file to calibrate. This specifies which HDU in the
-                                                FITS file is being calibrated.
-        pixel_shifts (dict, optional):          Dictionary with x- and y-pixel shifts for CCDs 1-3
-        barycentric_velocity (float, optional): The barycentric radial velocity (in km/s) to correct for
-                                                the Doppler shift due to Earth's motion. If provided, this velocity
-                                                is used to adjust the calculated wavelengths for the motion of the Earth.
-                                                If None, no correction is applied.
-        optimise_lc_solution (bool, optional):  If True, the function will use the laser comb data of the FITS extension
-                                                and optimise the wavelength solution based on refitted peaks of the laser comb.
-        debug (bool, optional):                 If True, the function will generate diagnostic plots showing the wavelength solution.
-        
-    Returns:
-        None: The function modifies the 'file' object in-place, updating the wavelength data for the specified order.
-
-    This function processes the spectral data by:
-    - Determining the center pixel based on the number of pixels in the order, which varies by readout mode.
-    - Loading a predefined pixel-to-wavelength calibration from a text file.
-    - Fitting a polynomial to these data points to create a wavelength solution in vacuum.
-    - Converting this vacuum wavelength solution to air wavelength using a standard conversion formula.
-    - Optionally correcting for barycentric velocity if a value is provided.
-
-    Note:
-    - The polynomial fit and vacuum-to-air wavelength conversion rely on specific coefficients and formulae
-      that are expected to be defined or included via external resources or modules.
-
-    Example:
-        >>> from astropy.io import fits
-        >>> fits_file = fits.open('path_to_fits_file.fits')
-        >>> calibrate_single_order(fits_file, 0, barycentric_velocity=30.5)
-        >>> fits_file.close()  # Always close the FITS file after modification to ensure data integrity
-    """
-
-    order_name = file[order].header['EXTNAME'].lower()
-
-    # Identify the central pixel of the order
-    order_centre_pixel = int(len(file[order].data['WAVE_AIR'])/2)
-    
-    # Shifts centre pixel if pixel_shift is not None
-    if pixel_shifts is not None:
-        # pixel_shifts = {'ccd_1': (0.0, 0.0), 'ccd_2': (0.0, 0.0), 'ccd_3': (0.0, 0.0)}
-        y_shift = pixel_shifts['ccd_'+order_name[4]][1] # extraxt y-pixel shift of relevant CCD for this order.
-        order_centre_pixel += y_shift
-
-    # Use the initial pixel <-> wavelength information per order to fit a polynomial function to it.
-
-    # Use wavelength coefficients according to the following preference:
-    # 1) Coefficients fitted with 18Sco (RV = 11.7640 +- 0.0004 km/s) and Korg synthesis
-    # 2) Coefficients fitted with LC
-    # 3) Coefficients fitted with ThXe
-    best_wavelength_solution = 'None'
-    try:
-        wavelength_solution_vacuum_coefficients = np.loadtxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_{order_name}_thxe.txt')
-        add_wavelength_solution_to_fits_header(file, order, 'ThXe', order_centre_pixel, wavelength_solution_vacuum_coefficients)
-        best_wavelength_solution = 'ThXe'
-    except:
-        pass
-    try:
-        wavelength_solution_vacuum_coefficients = np.loadtxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_{order_name}_lc.txt')
-        add_wavelength_solution_to_fits_header(file, order, 'LC', order_centre_pixel, wavelength_solution_vacuum_coefficients)
-        best_wavelength_solution = 'LC'
-    except:
-        pass
-    try:
-        wavelength_solution_vacuum_coefficients = np.loadtxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_{order_name}_korg.txt')
-        add_wavelength_solution_to_fits_header(file, order, 'Korg', order_centre_pixel, wavelength_solution_vacuum_coefficients)
-        best_wavelength_solution = 'Korg'
-    except:
-        pass
-
-    # Optimise the LC solution based on the refitted peaks of the laser comb, if enabled
-    if optimise_lc_solution:
-        if (
-            # We can use all orders of CCD3
-            (order_name[4] == '3') |
-            # and the orders of CCD2 order 103-134 (135-150 do not have enough LC peaks!)
-            # Let's use the last 2 digits to avoid warnings, because not all of CCD3 are > 100 (but all of CCD2).
-            ((order_name[4] == '2') & (int(order_name[-2:]) >= 3) & (int(order_name[-2:]) <= 34))
-        ):
-            try:
-                wavelength_solution_vacuum_coefficients, lc_rms_wavelength, lc_rms_velocity = optimise_wavelength_solution_with_laser_comb(order_name, lc_pixel_values = file[order].data['LC'], debug=debug)
-                add_wavelength_solution_to_fits_header(file, order, 'LC', order_centre_pixel, wavelength_solution_vacuum_coefficients, rms_wavelength = lc_rms_wavelength, rms_velocity = lc_rms_velocity)
-                best_wavelength_solution = 'LC'
-            except:
-                pass
-
-    file[order].header['HIERARCH WAVE_SOURCE'] = best_wavelength_solution
-
-    if best_wavelength_solution != 'None':
-
-        # Calculate vacuum wavelengths and convert them to air wavelengths
-        wavelength_solution_vacuum = polynomial_function(
-            np.arange(len(file[order].data['WAVE_VAC'])) - order_centre_pixel,
-            *wavelength_solution_vacuum_coefficients
-        ) * 10  # Convert from nm to Å
-        file[order].data['WAVE_VAC'] = wavelength_solution_vacuum
-
-        if barycentric_velocity is not None: file[order].data['WAVE_VAC'] = apply_velocity_shift_to_wavelength_array(barycentric_velocity, file[order].data['WAVE_VAC'])
-
-        # Using conversion from Birch, K. P., & Downs, M. J. 1994, Metro, 31, 315
-        # Consistent to the 2024 version of Korg (https://github.com/ajwheeler/Korg.jl)
-        file[order].data['WAVE_AIR'] = wavelength_vac_to_air(file[order].data['WAVE_VAC'])
-
-def plot_wavelength_calibrated_order_data(order, science_object, file, overview_pdf):
-    """
-    Generates a five-panel plot for a single calibrated spectral order and saves it to the provided PDF. The panels include:
-    1. Science spectrum.
-    2. Science signal-to-noise ratio.
-    3. Flat-field data.
-    4. ThXe emission lines used for wavelength calibration.
-    5. Laser Comb (LC) data used for wavelength calibration.
-
-    Parameters:
-        order (int): The index of the spectral order to plot.
-        science_object (str): The name of the science object associated with the data.
-        file (HDUList): The FITS file object containing the spectral data and associated headers.
-        overview_pdf (PdfPages): A PdfPages object where the generated plot will be saved as a new page.
-
-    Returns:
-        None: The function does not return anything but saves the generated plot as a new page in the provided PDF.
-
-    This function performs the following:
-    - Reads the air wavelength data and optionally applies a radial velocity correction based on the FITS header.
-    - Creates a five-panel plot with shared x-axes showing:
-        - Science spectrum with pixel and wavelength labels.
-        - Signal-to-noise ratio of the science spectrum.
-        - Flat-field spectrum.
-        - ThXe calibration lamp spectrum (logarithmic scale).
-        - Laser Comb calibration spectrum (logarithmic scale).
-    - Saves the plot to the specified PDF and closes the plot to free resources.
-
-    Example:
-        >>> from matplotlib.backends.backend_pdf import PdfPages
-        >>> from astropy.io import fits
-        >>> fits_file = fits.open('path_to_fits_file.fits')
-        >>> with PdfPages('overview.pdf') as pdf:
-        ...     plot_wavelength_calibrated_order_data(0, 'HD12345', fits_file, pdf)
-        >>> fits_file.close()
-    """
-
-    # Extract wavelength data to plot
-    wavelength_to_plot = file[order].data['WAVE_AIR']
-
-    # Create the figure and set up shared x-axis
-    f, gs = plt.subplots(6,1,figsize=(11.69,8.27),sharex=True)
-    
-    # Plot title with radial and barycentric velocity information
-    if isinstance(file[0].header['VRAD'], float):
-        wavelength_to_plot = apply_velocity_shift_to_wavelength_array(velocity_in_kms=file[0].header['VRAD'], wavelength_array=wavelength_to_plot)
-        f.suptitle(config.date+' '+science_object+' '+file[order].header['EXTNAME']+ r' $v_\mathrm{rad} = '+str(file[0].header['VRAD'])+r' \pm '+str(file[0].header['E_VRAD'])+r'\,\mathrm{km\,s^{-1}}$, $v_\mathrm{bary} = '+"{:.2f}".format(np.round(file[0].header['BARYVEL'],2))+r'\,\mathrm{km\,s^{-1}}$')
-    else:
-        f.suptitle(config.date+' '+science_object+' '+file[order].header['EXTNAME']+ r' $v_\mathrm{rad}$ = N/A, $v_\mathrm{bary} = '+"{:.2f}".format(np.round(file[0].header['BARYVEL'],2))+r'\,\mathrm{km\,s^{-1}}$')
-
-    # Panel 1: Science spectrum
-    ax = gs[0]
-
-    # To make the plotting easier, apply rough renormalisation with outlier-robuster 90th percenile of ~middle of order
-    science_flux_to_plot = (file[order].data['SCIENCE']).copy()
-    science_90percentile = np.nanpercentile(science_flux_to_plot[1500:2500],q=90)
-    if np.isnan(science_90percentile):
-        science_90percentile = 1.0
-    science_flux_to_plot /= science_90percentile
-
-    # Now plot
-    ax.plot(science_flux_to_plot, lw=1)
-    ax.set_ylabel('Science')
-    ax.set_ylim(-0.1, 1.2)
-    ticks = np.arange(0, len(wavelength_to_plot), 100)
-    ax.set_xticks(ticks)
-    ax.set_xticklabels(ticks, rotation=90)
-    ax.set_xlim(ticks[0], ticks[-1])
-    ax2 = ax.twiny()
-    ax2.set_xticks(ticks - ticks[0])
-    ax2.set_xticklabels(np.round(wavelength_to_plot[ticks], 1), rotation=90)
-    ax2.set_xlabel(r'Air Wavelength $\lambda_\mathrm{air}~/~\mathrm{\AA}$')
-
-    # Panel 2: Signal-to-noise ratio
-    ax = gs[1]
-    ax.plot(file[order].data['SCIENCE'] / file[order].data['SCIENCE_NOISE'], lw=1)
-    ax.set_ylabel('Science S/N')
-
-    # Panel 3: Flat-field data
-    ax = gs[2]
-    ax.plot(file[order].data['FLAT'], lw=1)
-    ax.set_ylabel('Flat')
-
-    # Panel 4: Telluric spectrum
-    ax = gs[3]
-    ax.plot(file[order].data['TELLURIC'], lw=1)
-    ax.set_ylabel('Telluric')
-    ax.set_ylim(-0.1,1.1)
-
-    # Panel 5: ThXe emission lines
-    ax = gs[4]
-    ax.plot(file[order].data['THXE'], lw=1)
-    ax.set_yscale('log')
-    ax.set_ylabel('ThXe')
-
-    # Panel 6: Laser Comb data
-    ax = gs[5]
-    ax.plot(file[order].data['LC'], lw=0.5)
-    ax.set_yscale('log')
-    ax.set_ylabel('LC')
-    ax.set_xlabel('Pixel')
-    ax.set_xticks(ticks)
-    ax.set_xticklabels(ticks, rotation=90)
-
-    # Save the plot to the provided PDF
-    plt.tight_layout()
-    overview_pdf.savefig()
-    plt.close()
-
-def calibrate_wavelength(science_object, pixel_shifts = None, optimise_lc_solution=True, correct_barycentric_velocity=True, fit_voigt_for_rv=True, create_overview_pdf=False, debug=False):
-    """
-    Calibrates the wavelength data for a given science object by applying a series of corrections and enhancements.
-    This includes barycentric velocity correction, radial velocity estimation via Voigt profile fitting, and
-    optionally, generating an overview PDF with plots of the calibrated data.
-
-    Parameters:
-        science_object (str):                       The identifier for the science object. This is used to locate the corresponding
-                                                    FITS file and to label outputs appropriately.
-        pixel_shifts (dict):                        Dictionary with x- and y-pixel shifts for CCDs 1-3
-        optimise_lc_solution (bool):                If True, optimise the wavelength solution based on the refitted peaks of the laser comb.
-        correct_barycentric_velocity (bool):        If True, apply a correction for the barycentric velocity to the
-                                                    wavelength data based on header information.
-        fit_voigt_for_rv (bool):                    If True, fits a Voigt profile to selected spectral lines (Halpha and CaII triplet)
-                                                    to estimate the radial velocity of the object.
-        create_overview_pdf (bool):                 If True, generates a PDF file containing plots of the calibrated spectral data
-                                                    for each order in the FITS file.
-        debug (bool):                               If True, generates additional diagnostic plots and information during the calibration.
-
-    Returns:
-        None: This function modifies the FITS files in-place and may generate output files (PDFs), but does not
-              return any values.
-
-    Workflow:
-        - The function first identifies the appropriate directory and FITS file based on the provided science_object name.
-        - If barycentric velocity correction is enabled, it calculates and applies this correction.
-        - If Voigt profile fitting is enabled, it estimates the radial velocity for the object using selected spectral lines
-          and updates the FITS header with these values.
-        - Optionally, it can generate a comprehensive PDF overview of the calibrated spectral data.
-        - The function handles updates to the FITS file in-place and ensures all changes are saved.
-
-    Note:
-        The function assumes that the directory structure and naming conventions are consistent with a predefined
-        configuration, which should be verified in the actual implementation environment.
-
-    Example:
-        >>> calibrate_wavelength('HD12345', correct_barycentric_velocity=True, fit_voigt_for_rv=True, create_overview_pdf=True)
-    """
-
-    print('Calibrating wavelength for ' + science_object)
-
-    # Directory where the reduced data for this science_object can be found
-    input_output_directory = config.working_directory+'reduced_data/'+config.date+'/'+science_object
-
-    # Read in FITS file and prepare it to be updated
-    with fits.open(input_output_directory+'/veloce_spectra_'+science_object+'_'+config.date+'.fits', mode='update') as file:
-    
-        # Let user know if we are correcting for barycentric velocity and creating overview PDF
-        if correct_barycentric_velocity:
-            # ToDo: Check why the barycentric velocity correction seems to be exactly off in the wrong direction?! For now, we will just flip the sign.
-            barycentric_velocity = -calculate_barycentric_velocity_correction(fits_header=file[0].header)
-            print('  --> Correcting for barycentric velocity: '+"{:.2f}".format(np.round(barycentric_velocity,2))+' km/s')
-            file[0].header['BARYVEL'] = barycentric_velocity
-        else:
-            print('  --> Not correcting for barycentric velocity.')
-            barycentric_velocity = None
-            file[0].header['BARYVEL'] = 0.0
-
-        if optimise_lc_solution: print('  --> Optimising wavelength solution based on Laser Comb data where available (and using previous ThXe otherwise)')
-        else: print('  --> Using previous LC and ThXe calibrations as wavelength solution')
-
-        # Now loop through the FITS file extensions aka Veloce orders to apply the wavelength calibration
-        for order in range(1,len(file)):
-            calibrate_single_order(file, order, pixel_shifts=pixel_shifts, barycentric_velocity=barycentric_velocity, optimise_lc_solution=optimise_lc_solution, debug=debug)
-
-        # If requested, fit a Voigt profile to the Halpha and CaII triplet lines to estimate the radial velocity
-        if fit_voigt_for_rv:
-            print('\n  --> Estimating rough RV from Halpha and CaT; starting with CaII 8662 using its RV as initial guess for others.')
-
-            # Define the lines and orders to fit a Voigt profile to.
-            # Only fit a few at the moment, as they deliver the most reliable results of ~3 km/s of literature values for the tests done for 240219.
-            lines_air_and_orders_for_rv = [
-                 # Note: CaII 8662.1410 has to be the first one, as we will use it as initial RV estimate for the other lines
-                [r'CaII triplet 8662.1410',8662.1410,103,'CCD_3_ORDER_70'],
-                [r'CaII triplet 8662.1410',8662.1410,102,'CCD_3_ORDER_71'],
-                [r'CaII triplet 8542.0910',8542.0910,102,'CCD_3_ORDER_71'],
-                [r'CaII triplet 8542.0910',8542.0910,101,'CCD_3_ORDER_72'],
-                [r'CaII triplet 8498.0230',8498.0230,101,'CCD_3_ORDER_72'],
-                [r'MgI 8806.7570',8806.7570,103,'CCD_3_ORDER_70'],
-                [r'NiI 7788.9299',7788.9299,94,'CCD_3_ORDER_79'],
-                [r'FeI 7511.0187',7511.0187,91,'CCD_3_ORDER_82'],
-                [r'$\mathrm{H_\alpha}$ 6562.7970',6562.7970,80,'CCD_3_ORDER_93'],
-                [r'$\mathrm{H_\alpha}$ 6562.7970',6562.7970,79,'CCD_3_ORDER_94'],
-                # [r'FeI 5324.1787',5324.1787,57,'CCD_2_ORDER_114'],
-                # [r'FeI 5324.1787',5324.1787,56,'CCD_2_ORDER_115'],
+        # Independent measured-neighbour blend check.
+        y_values = np.asarray(peak_table["y"][indices], dtype=float)
+        sort_index = np.argsort(y_values)
+        sorted_indices = indices[sort_index]
+        sorted_y = y_values[sort_index]
+
+        nearest = np.full(len(sorted_indices), np.inf)
+
+        if len(sorted_indices) > 1:
+            separation = np.diff(sorted_y)
+            nearest[:-1] = np.minimum(nearest[:-1], separation)
+            nearest[1:] = np.minimum(nearest[1:], separation)
+
+        for local_i, table_i in enumerate(sorted_indices):
+            peak_table["nearest_peak_distance_pixel"][table_i] = nearest[
+                local_i
             ]
 
-            f, gs = plt.subplots(2,int(np.ceil(len(lines_air_and_orders_for_rv)/2)),figsize=(15,7),sharey=True)
-            gs = gs.flatten()
-            gs[0].set_ylabel('Flux')
+            fwhm = float(peak_table["fwhm"][table_i])
 
-            rv_estimates = []
-            rv_estimates_upper = []
-            rv_estimates_lower = []
-            rv_from_8662 = None
-
-            for index, (line_name, line_centre, order, order_name) in enumerate(lines_air_and_orders_for_rv):
-                ax = gs[index]
-                ax.set_title(line_name+r'$\,\mathrm{\AA}$'+'\n'+order_name.replace('_',' '))
-                ax.set_xlabel(r'Wavelength $\lambda_\mathrm{air}~/~\mathrm{\AA}$')
-
-                if file[order].header['EXTNAME'] != order_name: print('  --> Warning: '+file[order].header['EXTNAME']+' != '+order_name)
-
-                # Restrice fitting region to +- 600 km/s around line centre
-                close_to_line_centre = (
-                    (file[order].data['WAVE_AIR'] > line_centre * (1 - 600/299792.458)) &
-                    (file[order].data['WAVE_AIR'] < line_centre * (1 + 600/299792.458))
-                )
-                # Estimate the wavelength of the pixel with the lowest flux value within +- 300 km/s around the line centre
-                line_within_300_kms = (
-                    (file[order].data['WAVE_AIR'] > line_centre * (1 - 300/299792.458)) &
-                    (file[order].data['WAVE_AIR'] < line_centre * (1 + 300/299792.458))
-                )
-                flux_index_within_300_kms = np.argmin(file[order].data['SCIENCE'][line_within_300_kms])
-                wavelength_with_lowest_flux_within_300_kms = file[order].data['WAVE_AIR'][line_within_300_kms][flux_index_within_300_kms]
-
-                # Let's make use of the 8662.1410 line as initial RV estimate for the other lines
-                if line_centre == 8662.1410:
-                    initial_centre_wavelength = wavelength_with_lowest_flux_within_300_kms
-                else:
-                    if rv_from_8662 is not None:
-                        initial_centre_wavelength = (rv_from_8662 / 299792.4658 + 1.0 )* line_centre
-                    else:
-                        initial_centre_wavelength = wavelength_with_lowest_flux_within_300_kms
-
-                wavelength_to_fit = file[order].data['WAVE_AIR'][close_to_line_centre]
-                flux_to_fit = file[order].data['SCIENCE'][close_to_line_centre]
-
-                # Avoid outlier pixels and renormalise locally
-                # Estimate 90th percentile and clip all values above 2*90th percentile
-                local_90th_percentile = np.nanpercentile(flux_to_fit,q=90)
-                flux_to_fit[flux_to_fit > 2*local_90th_percentile] = local_90th_percentile
-                # Then renormalise to 95th percentile
-                flux_to_fit /= np.nanpercentile(flux_to_fit,q=95)
-
-                ax.plot(
-                    wavelength_to_fit,
-                    flux_to_fit,
-                    c = 'C0',
-                    zorder = 1,
-                    label = 'Veloce'
+            if (
+                np.isfinite(fwhm)
+                and nearest[local_i]
+                < config.measured_blend_fwhm_factor * fwhm
+            ):
+                peak_table["quality_flag"][table_i] = int(
+                    int(peak_table["quality_flag"][table_i])
+                    | int(CalibrationPeakFlag.BLEND_CANDIDATE)
                 )
 
-                # Make sure that broad lines can be fitted with larger sigmas and gammas
-                if line_centre in [6562.7970, 8498.0230, 8542.0910, 8662.1410]:
-                    sigma_gamma_max = 5.0
-                # But for narrow lines, allow only small sigmas and gammas
-                else:
-                    sigma_gamma_max = 2.0
+    peak_table["used_for_wavelength_fit"] = (
+        np.asarray(peak_table["quality_flag"], dtype=np.int64) == 0
+    )
 
-                voigt_profile_parameters, voigt_profile_covariances = fit_voigt_absorption_profile(
-                    wavelength_to_fit,
-                    flux_to_fit,
-                    # initial_guess: [line_centre, offset, amplitude, sigma, gamma]
-                    initial_guess = [initial_centre_wavelength, np.median(flux_to_fit).clip(min=0.5,max=1.0), 0.5, 0.5, 0.5],
-                    # Let's assume an absolute RV below 500 km/s and otherwise (hopefully) reasonable estimates for the line profile.
-                    bounds = (
-                        [line_centre * (1-500./299792.), 0.1, 0.05, 0.0, 0.0],
-                        [line_centre * (1+500./299792.), 1.2, 1.0, sigma_gamma_max, sigma_gamma_max]
-                    )
-                )
 
-                if abs(radial_velocity_from_line_shift(voigt_profile_parameters[0], line_centre)) > 500.:
-                    print('  --> Warning: Voigt profile fit for '+str(line_centre)+' hit boundary of 400 km/s. Resetting RV to 0 km/s.')
-                    voigt_profile_parameters[0] = line_centre
-                if voigt_profile_parameters[-2] == sigma_gamma_max:
-                    print('  --> Warning: Voigt profile fit for '+str(line_centre)+' hit upper boundary ('+str(sigma_gamma_max)+') for sigma')
-                if voigt_profile_parameters[-1] == sigma_gamma_max:
-                    print('  --> Warning: Voigt profile fit for '+str(line_centre)+' hit upper boundary ('+str(sigma_gamma_max)+') for gamma')
+# -----------------------------------------------------------------------------
+# Diagnostic plots
+# -----------------------------------------------------------------------------
 
-                rv_voigt = radial_velocity_from_line_shift(voigt_profile_parameters[0], line_centre)
-                e_line_centre = np.sqrt(np.diag(voigt_profile_covariances))[0]
-                rv_upper_voigt = radial_velocity_from_line_shift(voigt_profile_parameters[0]+e_line_centre, line_centre)
-                rv_lower_voigt = radial_velocity_from_line_shift(voigt_profile_parameters[0]-e_line_centre, line_centre)
 
-                # Let's remember the radial velocity estimate for the 8662.1410 line
-                if line_centre == 8662.1410: rv_from_8662 = rv_voigt
+def _plot_calibration_order_diagnostic(
+    counts: np.ndarray,
+    background: np.ndarray,
+    detection_snr: np.ndarray,
+    candidate_pixels: np.ndarray,
+    order_table: Table,
+    *,
+    config: CalibrationPeakConfig,
+    calibration_type: str,
+    ccd: str,
+    exposure_index: int,
+    order: int,
+):
+    """Create one full-diagnostic page for a single echelle order."""
 
-                if line_centre != 6562.7970:
-                    # Estimate equivalent width of the line
-                    x_min = voigt_profile_parameters[0] * (1 - 600./299792.458)
-                    x_max = voigt_profile_parameters[0] * (1 + 600./299792.458)
-                    line_equivalent_width, _ = quad(lambda x: voigt_profile_parameters[1] - voigt_absorption_profile(x, *voigt_profile_parameters), x_min, x_max)
+    y = np.arange(len(counts), dtype=float)
+    good = np.asarray(order_table["used_for_wavelength_fit"], dtype=bool)
 
-                    if line_equivalent_width > 0.1:
-                        rv_estimates.append(rv_voigt)
-                        rv_estimates_upper.append(rv_upper_voigt)
-                        rv_estimates_lower.append(rv_lower_voigt)
-                    else:
-                        print('  --> Neglecting RV estimate for '+line_name+' due to weak line (EW '+str(int(np.round(100*line_equivalent_width)))+' < 100 mÅ).')
-                elif order == 79:
-                    print('  --> Fitting Halpha, but neglecting for RV estimate.')
+    fig, axes = plt.subplots(
+        4,
+        1,
+        figsize=(14, 10),
+        sharex=True,
+        gridspec_kw={"height_ratios": [3.0, 1.2, 1.2, 1.2]},
+    )
 
-                ax.plot(
-                    wavelength_to_fit,
-                    voigt_absorption_profile(wavelength_to_fit, *voigt_profile_parameters),
-                    c = 'C1',
-                    label = 'Voigt\n'+str(np.round(rv_voigt,1))+' km/s'
-                )
+    # Extracted spectrum and fitted centroids.
+    ax = axes[0]
+    ax.plot(y, counts, lw=0.7, label="Extracted spectrum")
+    ax.plot(y, background, lw=0.8, label="Detection background")
+    if calibration_type.lower() in {"simth", "fibth"}:
+        ax.set_yscale("log")
 
-                ax.axvline(line_centre, lw = 1, ls = 'dashed', c = 'C3', zorder = 3)
-                ax.legend(fontsize=8,handlelength=1)
-                ax.set_ylim(-0.1,1.1)
+    if np.any(good):
+        ax.scatter(
+            order_table["y"][good],
+            np.interp(order_table["y"][good], y, counts),
+            s=12,
+            label="Accepted",
+            zorder=5,
+        )
 
-            rv_estimates = np.array(rv_estimates)
-            rv_mean = np.round(np.mean(rv_estimates),2)
+    if np.any(~good):
+        ax.scatter(
+            order_table["y"][~good],
+            np.interp(order_table["y"][~good], y, counts),
+            marker="x",
+            s=28,
+            label="Rejected",
+            zorder=6,
+        )
 
-            def mad_based_outlier(points, thresh=3.5):
-                if len(points.shape) == 1: points = points[:,None]
-                median = np.median(points, axis=0)
-                diff = np.sum((points - median)**2, axis=-1)
-                diff = np.sqrt(diff)
-                med_abs_deviation = np.median(diff)
+    if config.maximum_signal is not None:
+        ax.axhline(
+            config.maximum_signal,
+            ls=":",
+            lw=1,
+            label="Maximum signal",
+        )
 
-                modified_z_score = 0.6745 * diff / med_abs_deviation
+    ax.set_ylabel("Counts")
+    ax.legend(loc="upper right", fontsize=8, ncols=2)
+    ax.set_title(
+        f"{calibration_type} | CCD {ccd} | exposure {exposure_index} | "
+        f"order {order}"
+    )
 
-                return modified_z_score > thresh
+    # Detection statistic.
+    ax = axes[1]
+    ax.plot(y, detection_snr, lw=0.7)
+    if len(candidate_pixels) > 0:
+        ax.scatter(
+            candidate_pixels,
+            detection_snr[candidate_pixels],
+            marker="x",
+            s=15,
+        )
+    if calibration_type.lower() in {"simth", "fibth"}:
+        ax.set_yscale("log")
+    ax.axhline(config.detection_snr, ls="--", lw=1)
+    ax.set_ylabel("Detection S/N")
 
-            # Identify and neglect outliers in the RV estimates (either based on MAD or on a threshold of 50 km/s with respect to RV 8662)
-            # But ensure at least 3 estimates remain.
-            outliers = mad_based_outlier(rv_estimates)
-            outliers[abs(rv_estimates - rv_from_8662) > 50] = True
-            if (len(np.where(outliers)[0]) > 0) & (len(rv_estimates) - len(np.where(outliers)[0]) >= 3):
-                print('  --> Neglecting '+str(np.sum(outliers))+' RV outlier(s): ',np.round(rv_estimates[outliers],2))
-                filtered_rv = rv_estimates[~outliers]
-            else:
-                print('  --> No RV outlier(s) identified.')
-                filtered_rv = rv_estimates
+    # FWHM versus detector position.
+    ax = axes[2]
+    if np.any(good):
+        ax.scatter(
+            order_table["y"][good],
+            order_table["fwhm"][good].clip(0,4),
+            s=10,
+            label="Accepted",
+        )
+    if np.any(~good):
+        ax.scatter(
+            order_table["y"][~good],
+            order_table["fwhm"][~good].clip(0,4),
+            marker="x",
+            s=20,
+            label="Rejected",
+        )
 
-            rv_mean = np.round(np.mean(filtered_rv),2)
-            rv_std  = np.round(np.std(filtered_rv),2)
-            rv_unc  = np.round(np.median(np.array(rv_estimates_upper)-np.array(rv_estimates_lower)),2)
-            print(r'  --> $v_\mathrm{rad}  = '+str(rv_mean)+r' \pm '+str(rv_std)+r' \pm '+str(rv_unc)+r'\,\mathrm{km\,s^{-1}}$ (mean, scatter, unc.) based on '+str(len(filtered_rv))+' lines.')
-            
-            file[0].header['VRAD'] = rv_mean
-            file[0].header['E_VRAD'] = rv_std
+    width_reference = np.asarray(order_table["fwhm"][good], dtype=float)
+    if np.any(np.isfinite(width_reference)):
+        median_fwhm = np.nanmedian(width_reference)
+        ax.axhline(median_fwhm, ls="--", lw=1)
 
-            plt.tight_layout()
-            plt.savefig(input_output_directory+'/veloce_spectra_'+science_object+'_'+config.date+'_rough_rv_estimate.pdf',bbox_inches='tight')
-            if 'ipykernel' in sys.modules: plt.show()
-            plt.close()
+    ax.set_ylabel("FWHM [pixel]")
 
-    # Let's create an overview PDF if requested
-    if create_overview_pdf:
-        with PdfPages(input_output_directory+'/veloce_spectra_'+science_object+'_'+config.date+'_overview.pdf') as overview_pdf:
-            with fits.open(input_output_directory+'/veloce_spectra_'+science_object+'_'+config.date+'.fits') as file:
-                print('  --> Creating overview PDF. This may take some time for the '+str(len(file))+' orders.\n')
-                for order in range(1,len(file)):
-                    plot_wavelength_calibrated_order_data(order, science_object, file, overview_pdf)
-    else:
-        print('  --> Not creating overview PDF.\n')
+    # Centroid precision and fit RMS.
+    ax = axes[3]
+    if np.any(good):
+        ax.scatter(
+            order_table["y"][good],
+            order_table["y_uncertainty"][good].clip(0, 0.2),
+            s=10,
+            label=r"Accepted",
+        )
+    if np.any(~good):
+        ax.scatter(
+            order_table["y"][~good],
+            order_table["y_uncertainty"][~good].clip(0, 0.2),
+            marker="x",
+            s=20,
+            label=r"Rejected",
+        ) 
+    ax.axhline(config.maximum_y_uncertainty, ls="--", lw=1)
+    ax.set_ylabel(r"$\sigma_y$ [pixel]")
+    ax.set_xlabel(r"Dispersion pixel $y$")
 
-def fit_thxe_polynomial_coefficients(debug=False):
+    summary = _quality_summary(order_table)
+    fig.text(
+        0.99,
+        0.01,
+        (
+            f"candidates={len(candidate_pixels)} | fitted={len(order_table)} | "
+            f"accepted={summary['accepted']} | "
+            f"saturated={summary.get('saturated', 0)} | "
+            f"width={summary.get('width_outlier', 0)} | "
+            f"blend={summary.get('blend_candidate', 0)}"
+        ),
+        ha="right",
+        va="bottom",
+        fontsize=8,
+    )
+
+    fig.tight_layout(rect=(0, 0.025, 1, 1))
+    return fig
+
+
+def _plot_calibration_summary(
+    peak_table: Table,
+    *,
+    calibration_type: str,
+    ccd: str,
+    exposure_index: int,
+    filename: str | Path,
+) -> None:
+    """Save a compact CCD/exposure-level peak-measurement QA figure."""
+
+    if len(peak_table) == 0:
+        return
+
+    filename = Path(filename)
+    filename.parent.mkdir(parents=True, exist_ok=True)
+
+    good = np.asarray(peak_table["used_for_wavelength_fit"], dtype=bool)
+
+    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+
+    # FWHM over detector coordinates (y, m).
+    ax = axes[0, 0]
+    if np.any(good):
+        scatter = ax.scatter(
+            peak_table["y"][good],
+            peak_table["order"][good],
+            c=peak_table["fwhm"][good],
+            s=6,
+        )
+        fig.colorbar(scatter, ax=ax, label="FWHM [pixel]")
+    ax.set_xlabel(r"Dispersion pixel $y$")
+    ax.set_ylabel(r"Echelle order $m$")
+    ax.set_title("Line width")
+
+    # Centroid precision.
+    ax = axes[0, 1]
+    if np.any(good):
+        ax.scatter(
+            peak_table["y"][good],
+            peak_table["y_uncertainty"][good],
+            s=6,
+        )
+    ax.set_xlabel(r"Dispersion pixel $y$")
+    ax.set_ylabel(r"$\sigma_y$ [pixel]")
+    ax.set_title("Centroid precision")
+
+    # Fitted signal-to-noise.
+    ax = axes[1, 0]
+    if np.any(good):
+        ax.scatter(
+            peak_table["y"][good],
+            peak_table["signal_to_noise"][good],
+            s=6,
+        )
+    ax.set_xlabel(r"Dispersion pixel $y$")
+    ax.set_ylabel("Fitted line S/N")
+    ax.set_title("Line signal-to-noise")
+
+    # Pixel-phase distribution.
+    ax = axes[1, 1]
+    if np.any(good):
+        ax.hist(peak_table["pixel_phase"][good], bins=30)
+    ax.set_xlabel("Pixel phase")
+    ax.set_ylabel("Number of accepted lines")
+    ax.set_title("Sub-pixel centroid sampling")
+
+    summary = _quality_summary(peak_table)
+    fig.suptitle(
+        f"{calibration_type} | CCD {ccd} | exposure {exposure_index} | "
+        f"{summary['accepted']}/{summary['total']} accepted"
+    )
+
+    fig.tight_layout()
+    fig.savefig(filename, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _plot_worst_peak_fits(
+    counts: np.ndarray,
+    order_table: Table,
+    *,
+    config: CalibrationPeakConfig,
+    calibration_type: str,
+    ccd: str,
+    exposure_index: int,
+    order: int,
+    max_peaks: int = 8,
+):
+    """Plot local profiles for rejected or otherwise worst-fitting peaks.
+
+    This is used only in ``diagnostics='full'``. Rejected lines are preferred;
+    if an order has fewer rejected lines than ``max_peaks``, the remaining
+    panels are filled with the largest fit-RMS measurements.
     """
-    Fits a polynomial function to the pixel-to-wavelength relationship for the ThXe calibration lamp.
 
-    Parameters:
-        debug (bool, optional): If True, the function will print additional information and diagnostic output during execution.
+    if len(order_table) == 0:
+        return None
 
-    Returns:
-        None: The function saves the fitted polynomial coefficients to a text file for each order.
-    """
+    rejected = np.where(
+        ~np.asarray(order_table["used_for_wavelength_fit"], dtype=bool)
+    )[0]
 
-    # Create array of orders to loop through
-    orders = []
-    for ccd in ['1','2','3']:
-        if ccd == '1': orders.append(['ccd_1_order_'+str(x) for x in np.arange(167, 138-1, -1)])
-        if ccd == '2': orders.append(['ccd_2_order_'+str(x) for x in np.arange(140, 103-1, -1)])
-        if ccd == '3': orders.append(['ccd_3_order_'+str(x) for x in np.arange(104,  65-1, -1)])
-    orders = np.concatenate((orders))
+    fit_rms = np.asarray(order_table["fit_rms"], dtype=float)
+    ranking = np.argsort(np.nan_to_num(fit_rms, nan=-np.inf))[::-1]
 
-    for order in orders:
+    selected = list(rejected[:max_peaks])
+    for index in ranking:
+        if index not in selected:
+            selected.append(int(index))
+        if len(selected) >= max_peaks:
+            break
 
-        if debug: print('\n  --> Fitting ThXe coefficients for order '+order)
+    selected = selected[:max_peaks]
+    if len(selected) == 0:
+        return None
 
-        # Read in ThXe pixel and wavelength data
-        thxe_pixels_and_wavelengths = np.array(np.loadtxt(Path(__file__).resolve().parent / 'veloce_reference_data' / 'thxe_pixels_and_positions' / f'{order}_px_wl.txt'))
+    n_columns = 2
+    n_rows = int(np.ceil(len(selected) / n_columns))
+    fig, axes = plt.subplots(
+        n_rows,
+        n_columns,
+        figsize=(12, 3.0 * n_rows),
+        squeeze=False,
+    )
 
-        # Read in a previous wavelength solution
+    for ax in axes.ravel():
+        ax.set_visible(False)
+
+    for ax, table_index in zip(axes.ravel(), selected):
+        ax.set_visible(True)
+
+        candidate_pixel = int(order_table["candidate_pixel"][table_index])
         try:
-            initial_wavelength_coefficients = np.loadtxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_{order}_korg.txt')
-            if debug: print('      --> Initial solution from Korg:      ',[f"{number:.4e}" for number in initial_wavelength_coefficients])    
-        except:
+            fit = fit_calibration_peak(
+                counts,
+                candidate_pixel,
+                config=config,
+                return_diagnostics=True,
+            )
+        except Exception as error:
+            ax.text(0.5, 0.5, str(error), ha="center", va="center")
+            continue
+
+        ax.scatter(fit["fit_y"], fit["fit_observed"], s=20, label="data")
+        ax.plot(fit["fit_y"], fit["fit_model"], lw=1.2, label="fit")
+        ax.axvline(fit["y"], ls="--", lw=0.8)
+
+        flag_value = int(order_table["quality_flag"][table_index])
+        flag_names = [
+            flag.name
+            for flag in CalibrationPeakFlag
+            if flag != CalibrationPeakFlag.GOOD
+            and (flag_value & int(flag)) != 0
+        ]
+        flag_text = ", ".join(flag_names) if flag_names else "GOOD"
+
+        ax.set_title(
+            f"y={fit['y']:.3f}, FWHM={fit['fwhm']:.2f}, "
+            f"S/N={fit['signal_to_noise']:.1f}\n{flag_text}",
+            fontsize=9,
+        )
+        ax.set_xlabel(r"Dispersion pixel $y$")
+        ax.set_ylabel("Counts")
+
+    axes.ravel()[0].legend(fontsize=8)
+    fig.suptitle(
+        f"{calibration_type} | CCD {ccd} | exposure {exposure_index} | "
+        f"order {order}: rejected / worst local fits"
+    )
+    fig.tight_layout()
+    return fig
+
+
+# -----------------------------------------------------------------------------
+# Measure all peaks in one extracted calibration exposure
+# -----------------------------------------------------------------------------
+
+
+def measure_calibration_peaks(
+    counts: np.ndarray,
+    orders: np.ndarray,
+    *,
+    config: CalibrationPeakConfig | None = None,
+    calibration_type: str = "",
+    ccd: str | int = "",
+    exposure_index: int = 0,
+    diagnostics: str = "none",
+    diagnostic_pdf: str | Path | None = None,
+    log_level: str | int | None = None,
+) -> Table:
+    """Detect and fit all calibration peaks in one extracted exposure.
+
+    Parameters
+    ----------
+    counts
+        Array with shape ``(n_orders, n_dispersion_pixels)``.
+    orders
+        Physical echelle order corresponding to each row of ``counts``.
+    config
+        Peak measurement and quality-cut settings.
+    calibration_type, ccd, exposure_index
+        Labels used only for diagnostics and log output.
+    diagnostics
+        ``'none'``, ``'basic'`` or ``'full'``. Only ``'full'`` creates the
+        per-order PDF here; the exposure summary PNG is created by the nightly
+        wrapper after exposure metadata have been added.
+    diagnostic_pdf
+        Filename for the multi-page PDF used with ``diagnostics='full'``.
+    log_level
+        When ``'DEBUG'``, print detailed per-order fitting summaries.
+
+    Returns
+    -------
+    astropy.table.Table
+        One row per detected calibration peak. Rejected peaks are retained;
+        ``quality_flag`` describes the reason and ``used_for_wavelength_fit``
+        is True only for currently accepted peaks.
+    """
+
+    if config is None:
+        config = CalibrationPeakConfig()
+
+    diagnostics = _normalise_diagnostics(diagnostics)
+    debug = _debug_enabled(log_level)
+
+    counts = np.asarray(counts, dtype=float)
+    orders = np.asarray(orders, dtype=int)
+
+    if counts.ndim != 2:
+        raise ValueError(
+            "counts must have shape (n_orders, n_dispersion_pixels)"
+        )
+
+    if len(orders) != counts.shape[0]:
+        raise ValueError(
+            "orders must have one entry for every row in counts"
+        )
+
+    rows = []
+    order_diagnostics = {}
+
+    for order_index, order in enumerate(orders):
+        order_counts = counts[order_index]
+
+        (
+            candidate_pixels,
+            background,
+            detection_noise,
+            detection_snr,
+            _,
+        ) = detect_calibration_peaks(
+            order_counts,
+            config=config,
+        )
+
+        if debug:
+            print(
+                f"{calibration_type} CCD{ccd} exposure {exposure_index} "
+                f"order {order}: {len(candidate_pixels)} candidates"
+            )
+
+        n_fit_failed = 0
+
+        for candidate_pixel in candidate_pixels:
             try:
-                initial_wavelength_coefficients = np.loadtxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_{order}_lc.txt')
-                if debug: print('      --> Initial solution from LC:        ',[f"{number:.4e}" for number in initial_wavelength_coefficients])
-            except:
-                initial_wavelength_coefficients = np.loadtxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_{order}_thxe.txt')
-                if debug: print('      --> Initial solution from ThXe:      ',[f"{number:.4e}" for number in initial_wavelength_coefficients])
+                result = fit_calibration_peak(
+                    order_counts,
+                    int(candidate_pixel),
+                    background=background,
+                    config=config,
+                )
+            except Exception as error:
+                n_fit_failed += 1
+                logger.warning(
+                    "%s CCD%s exposure %s order %s: could not fit peak "
+                    "at y=%s: %s",
+                    calibration_type,
+                    ccd,
+                    exposure_index,
+                    order,
+                    candidate_pixel,
+                    error,
+                )
+                if debug:
+                    print(
+                        f"    fit failed at y={candidate_pixel}: {error}"
+                    )
+                continue
 
-        bounds = (
-            # lower bounds
-            [
-                initial_wavelength_coefficients[0] - 0.5,
-                initial_wavelength_coefficients[1] - 2e-04,
-                initial_wavelength_coefficients[2] - 2e-08,
-                initial_wavelength_coefficients[3] - 2e-12,
-                initial_wavelength_coefficients[4] - 2e-14,
-                initial_wavelength_coefficients[5] - 2e-16
-            ], 
-            # upper bounds
-            [
-                initial_wavelength_coefficients[0] + 0.5,
-                initial_wavelength_coefficients[1] + 2e-04,
-                initial_wavelength_coefficients[2] + 2e-08,
-                initial_wavelength_coefficients[3] + 2e-12,
-                initial_wavelength_coefficients[4] + 2e-14,
-                initial_wavelength_coefficients[5] + 2e-16
-            ]
+            rows.append(
+                dict(
+                    order=int(order),
+                    candidate_pixel=int(candidate_pixel),
+                    y=result["y"],
+                    y_uncertainty=result["y_uncertainty"],
+                    pixel_phase=result["pixel_phase"],
+                    fwhm=result["fwhm"],
+                    fwhm_uncertainty=result["fwhm_uncertainty"],
+                    integrated_counts=result["integrated_counts"],
+                    integrated_counts_uncertainty=result[
+                        "integrated_counts_uncertainty"
+                    ],
+                    maximum_signal=result["maximum_signal"],
+                    signal_to_noise=result["signal_to_noise"],
+                    background=result["background"],
+                    background_slope=result["background_slope"],
+                    fit_rms=result["fit_rms"],
+                    nearest_peak_distance_pixel=np.inf,
+                    quality_flag=int(result["quality_flag"]),
+                    used_for_wavelength_fit=False,
+                )
+            )
+
+        order_diagnostics[int(order)] = dict(
+            counts=order_counts,
+            background=background,
+            detection_noise=detection_noise,
+            detection_snr=detection_snr,
+            candidate_pixels=candidate_pixels,
+            n_fit_failed=n_fit_failed,
         )
 
-        # Fit a polynomial function to pixel and wavelength data
-        thxe_coefficients, _ = curve_fit(
-            polynomial_function,
-            thxe_pixels_and_wavelengths[:,0] - 2048,
-            thxe_pixels_and_wavelengths[:,1],
-            p0=initial_wavelength_coefficients,
-            bounds = bounds
+    peak_table = Table(rows=rows)
+
+    if len(peak_table) > 0:
+        _apply_ensemble_peak_flags(
+            peak_table,
+            config=config,
         )
 
-        if debug: print('      --> Result with previous solution:   ',[f"{number:.4e}" for number in thxe_coefficients])
+    # Per-order summaries are most useful after all ensemble flags have been
+    # applied, because accepted/rejected then represents the final state of the
+    # current peak-measurement stage.
+    if debug:
+        for order in orders:
+            order_mask = (
+                np.asarray(peak_table["order"], dtype=int) == int(order)
+                if len(peak_table) > 0
+                else np.array([], dtype=bool)
+            )
+            order_table = peak_table[order_mask]
+            diagnostic = order_diagnostics[int(order)]
 
-        # Save the fitted polynomial coefficients to a text file
-        np.savetxt(Path(__file__).resolve().parent / 'wavelength_coefficients' / f'wavelength_coefficients_{order}_thxe.txt', thxe_coefficients)
+            if len(order_table) == 0:
+                print(
+                    f"    order {order}: 0 fitted peaks "
+                    f"({diagnostic['n_fit_failed']} fit failures)"
+                )
+                continue
 
-# def compare_wavelength_solutions():
-#     """
-#     Read in Th NIST linelist and ThAr Atlas from Murphy et al. (2007) and compare with available wavelength solutions (tinney, thxe, lc, korg?)
-#     """
+            summary = _quality_summary(order_table)
+            print(
+                f"    order {order}: "
+                f"{summary['accepted']}/{summary['total']} accepted; "
+                f"median FWHM={np.nanmedian(order_table['fwhm']):.3f} pix; "
+                f"median sigma_y={np.nanmedian(order_table['y_uncertainty']):.4f} pix; "
+                f"median S/N={np.nanmedian(order_table['signal_to_noise']):.1f}; "
+                f"sat={summary.get('saturated', 0)}, "
+                f"width={summary.get('width_outlier', 0)}, "
+                f"blend={summary.get('blend_candidate', 0)}, "
+                f"lowS/N={summary.get('low_snr', 0)}"
+            )
 
-#     # ThAr atlas from Murphy et al. (2007)
-#     dtype = [
-#         ("wavenumber", float),
-#         ("wave_air", float),
-#         ("log10_intensity", float),
-#         ("element", "U10"),
-#         ("ion", "U10"),
-#         ("source", "U2"),
-#     ]
-#     thar_lines = Table(np.genfromtxt(
-#         Path(__file__).resolve().parent / 'veloce_reference_data' / 'thar_UVES_MM090311.dat',
-#         dtype=dtype,
-#         comments="#",
-#         autostrip=True
-#     ))
-#     thar_lines['wave_vac'] = wavelength_air_to_vac(thar_lines['wave_air'])
+    if diagnostics == "full" and diagnostic_pdf is not None:
+        diagnostic_pdf = Path(diagnostic_pdf)
+        diagnostic_pdf.parent.mkdir(parents=True, exist_ok=True)
 
-#     delta_wavelength = 0.05
-#     thar_lines_fine = dict()
-#     thar_lines_fine['wave_vac'] = np.arange(thar_lines['wave_vac'][0], thar_lines['wave_vac'][-1]+delta_wavelength, delta_wavelength)
-#     thar_lines_fine['wave_air'] = wavelength_vac_to_air(thar_lines_fine['wave_vac'])
-#     thar_lines_fine['intensity'] = np.zeros(len(thar_lines_fine['wave_vac']))
-#     for index in range(len(thar_lines_fine['wave_vac'])):
-#         thar_line_in_range = np.where((thar_lines['wave_vac']-0.5*delta_wavelength < thar_lines_fine['wave_vac'][index]) & (thar_lines_fine['wave_vac'][index] < thar_lines['wave_vac']+0.5*delta_wavelength))[0]
-#         if len(thar_line_in_range) > 0:
-#             thar_lines_fine['intensity'][index] = np.mean(10**thar_lines['log10_intensity'][thar_line_in_range])
+        with PdfPages(diagnostic_pdf) as pdf:
+            for order in orders:
+                order_mask = (
+                    np.asarray(peak_table["order"], dtype=int) == int(order)
+                    if len(peak_table) > 0
+                    else np.array([], dtype=bool)
+                )
+                order_table = peak_table[order_mask]
+                diagnostic = order_diagnostics[int(order)]
 
-#     nist_th_file = Path(__file__).resolve().parent / 'veloce_reference_data' / 'th_linelist_NIST.pickle'
-#     with open(nist_th_file, 'rb') as f:
-#         atomic_data_dict = pickle.load(f)
-#     th_lines = dict()
-#     th_lines['wave_air']  = atomic_data_dict['linelist']['obs_wl_air(nm)']*10
-#     th_lines['wave_vac']  = wavelength_air_to_vac(atomic_data_dict['linelist']['obs_wl_air(nm)']*10)
-#     th_lines['intensity'] = atomic_data_dict['linelist']['intens']
+                if len(order_table) == 0:
+                    continue
 
-#     delta_wavelength = 0.05
-#     th_lines_fine = dict()
-#     th_lines_fine['wave_vac'] = np.arange(th_lines['wave_vac'][0], th_lines['wave_vac'][-1]+delta_wavelength, delta_wavelength)
-#     th_lines_fine['wave_air'] = wavelength_vac_to_air(th_lines_fine['wave_vac'])
-#     th_lines_fine['intensity'] = np.zeros(len(th_lines_fine['wave_vac']))
-#     for index in range(len(th_lines_fine['wave_vac'])):
-#         th_line_in_range = np.where((th_lines['wave_vac']-0.5*delta_wavelength < th_lines_fine['wave_vac'][index]) & (th_lines_fine['wave_vac'][index] < th_lines['wave_vac']+0.5*delta_wavelength))[0]
-#         if len(th_line_in_range) > 0:
-#             th_lines_fine['intensity'][index] = np.mean(th_lines['intensity'][th_line_in_range])
+                fig = _plot_calibration_order_diagnostic(
+                    diagnostic["counts"],
+                    diagnostic["background"],
+                    diagnostic["detection_snr"],
+                    diagnostic["candidate_pixels"],
+                    order_table,
+                    config=config,
+                    calibration_type=calibration_type,
+                    ccd=str(ccd),
+                    exposure_index=exposure_index,
+                    order=int(order),
+                )
+                pdf.savefig(fig, bbox_inches="tight")
+                plt.close(fig)
 
-#     # Plot ThXe with solutions for 
-#     coeffs_tinney = read_in_wavelength_solution_coefficients_tinney()
-#     with fits.open(Path(__file__).resolve().parent / 'reduced_data/001122/HIP56343_0113/veloce_spectra_HIP56343_0113_001122.fits') as file:
-#         for index in range(1,len(file)):
-#             order_name = file[index].header['EXTNAME'].lower()
+                # A second page shows a small set of rejected/worst local fits.
+                fit_fig = _plot_worst_peak_fits(
+                    diagnostic["counts"],
+                    order_table,
+                    config=config,
+                    calibration_type=calibration_type,
+                    ccd=str(ccd),
+                    exposure_index=exposure_index,
+                    order=int(order),
+                )
+                if fit_fig is not None:
+                    pdf.savefig(fit_fig, bbox_inches="tight")
+                    plt.close(fit_fig)
 
-#             pixel_array = np.arange(4096)-2048
+        if debug:
+            print(f"    full diagnostics -> {diagnostic_pdf}")
 
-#             wavelength_solutions = dict()
-#             wavelength_solutions['tinney'] = polynomial_function(pixel_array, *coeffs_tinney[order_name][:-1])*10
+    return peak_table
 
-#             for source in ['thxe','lc','korg']:
-#                 try:
-#                     coefficients_source = np.loadtxt(Path(__file__).resolve().parent / 'velocereduction' / 'wavelength_coefficients' / 'wavelength_coefficients_'+order_name+'_'+source+'.txt')
-#                     wavelength_solutions[source] = polynomial_function(pixel_array, *coefficients_source)*10
-#                 except:
-#                     pass
 
-#             f, ax = plt.subplots(1,1,figsize=(20,5))
-            
-#             th_lines_in_order = (th_lines_fine['wave_vac'] > wavelength_solutions['tinney'][0]) & (th_lines_fine['wave_vac'] < wavelength_solutions['tinney'][-1])
-#             thar_lines_in_order = (thar_lines_fine['wave_vac'] > wavelength_solutions['tinney'][0]) & (thar_lines_fine['wave_vac'] < wavelength_solutions['tinney'][-1])
+# -----------------------------------------------------------------------------
+# High-level nightly interface used by reduce_night.py / reduce_night.ipynb
+# -----------------------------------------------------------------------------
 
-#             ax.plot(th_lines_fine['wave_vac'][th_lines_in_order]/10, -th_lines_fine['intensity'][th_lines_in_order] / np.max(th_lines_fine['intensity'][th_lines_in_order]), lw = 0.5, label = 'Flipped Th NIST')    
-#             ax.plot(thar_lines_fine['wave_vac'][thar_lines_in_order]/10, -thar_lines_fine['intensity'][thar_lines_in_order] / np.max(thar_lines_fine['intensity'][thar_lines_in_order]) - 0.1, lw = 0.5, label = 'Flipped ThAr Murphy - 0.25')    
-#             for source_index, source in enumerate(wavelength_solutions.keys()):
-#                 ax.plot(wavelength_solutions[source]/10, file[index].data['thxe'] / np.max(file[index].data['thxe']) + 0.1*source_index, lw = 0.5, label = 'Wavelength '+source)
-#                 ax.set_title(order_name+' from '+source, fontsize=15)
-#                 ax.set_xlabel('Wavelength $\lambda_\mathrm{vac}~/~\mathrm{\AA}$',fontsize=15)
-#                 ax.set_ylabel('Norm. Intensity', fontsize=15)
-#                 ax.legend(loc = 'upper left')
-                
-#             plt.tight_layout()
-#             plt.show()
-#             plt.close()
+
+def measure_calibration_peaks_for_night(
+    calibration_spectra: dict,
+    *,
+    output_dir: str | Path | None = None,
+    diagnostic_dir: str | Path | None = None,
+    calibration_types: tuple[str, ...] = ("SimLC", "SimTh", "FibTh"),
+    maximum_signal: dict[str, float | None] | float | None = None,
+    minimum_signal_to_noise: float = 10.0,
+    maximum_y_uncertainty: float = 0.10,
+    detection_snr: float = 5.0,
+    prominence_snr: float = 4.0,
+    minimum_peak_distance: int = 3,
+    fit_half_width: int = 4,
+    diagnostics: str = "basic",
+    log_level: str | int | None = None,
+    overwrite: bool = False,
+) -> dict[str, Table]:
+    """Measure calibration peaks for all requested exposures in one night.
+
+    This is the only peak-measurement function that should normally be called
+    from ``reduce_night.py`` or ``reduce_night.ipynb``.
+
+    It loops over calibration type, CCD, exposure, and echelle order; combines
+    the resulting measurements into one table per calibration type; optionally
+    saves those tables as FITS files; and returns them so later wavelength-
+    identification code can continue in memory.
+
+    Diagnostics
+    -----------
+    diagnostics='none'
+        No figures are created.
+    diagnostics='basic'
+        Save one summary PNG for every calibration type / CCD / exposure.
+    diagnostics='full'
+        Save the basic summary PNG plus a multi-page PDF containing an order
+        overview and rejected/worst local line fits for every order.
+
+    When ``log_level='DEBUG'`` a detailed per-order summary is printed while
+    the peak measurements are being made.
+    """
+
+    diagnostics = _normalise_diagnostics(diagnostics)
+    debug = _debug_enabled(log_level)
+
+    if output_dir is not None:
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+    if diagnostic_dir is not None:
+        diagnostic_dir = Path(diagnostic_dir)
+        diagnostic_dir.mkdir(parents=True, exist_ok=True)
+
+    peak_tables = {}
+
+    for calibration_type in calibration_types:
+        if calibration_type not in calibration_spectra:
+            continue
+
+        if isinstance(maximum_signal, dict):
+            calibration_maximum_signal = maximum_signal.get(
+                calibration_type,
+                None,
+            )
+        else:
+            calibration_maximum_signal = maximum_signal
+
+        config = CalibrationPeakConfig(
+            detection_snr=detection_snr,
+            prominence_snr=prominence_snr,
+            minimum_peak_distance=minimum_peak_distance,
+            fit_half_width=fit_half_width,
+            minimum_fit_snr=minimum_signal_to_noise,
+            maximum_y_uncertainty=maximum_y_uncertainty,
+            maximum_signal=calibration_maximum_signal,
+        )
+
+        calibration_tables = []
+
+        if debug:
+            print("\n" + "=" * 78)
+            print(f"Measuring {calibration_type} calibration peaks")
+            print(
+                f"  detection S/N >= {config.detection_snr:.1f}; "
+                f"prominence >= {config.prominence_snr:.1f}; "
+                f"fit S/N >= {config.minimum_fit_snr:.1f}; "
+                f"sigma_y <= {config.maximum_y_uncertainty:.3f} pix; "
+                f"maximum signal = {config.maximum_signal}"
+            )
+
+        for ccd, exposures in calibration_spectra[calibration_type].items():
+            ccd = str(ccd)
+
+            if ccd not in VELOCE_CCD_ORDERS:
+                raise ValueError(f'Unknown CCD "{ccd}"')
+
+            for exposure_index, exposure in enumerate(exposures):
+                counts = np.asarray(exposure["counts"], dtype=float)
+
+                orders = np.asarray(
+                    exposure.get("orders", VELOCE_CCD_ORDERS[ccd]),
+                    dtype=int,
+                )
+
+                if counts.ndim != 2:
+                    raise ValueError(
+                        f"{calibration_type}, CCD {ccd}, exposure "
+                        f"{exposure_index}: counts must be a 2D "
+                        "(n_orders, n_dispersion_pixels) array"
+                    )
+
+                if counts.shape[0] != len(orders):
+                    raise ValueError(
+                        f"{calibration_type}, CCD {ccd}, exposure "
+                        f"{exposure_index}: counts contains "
+                        f"{counts.shape[0]} orders but {len(orders)} order "
+                        "numbers were supplied"
+                    )
+
+                if debug:
+                    print(
+                        f"\n{calibration_type} CCD{ccd} exposure "
+                        f"{exposure_index}: {counts.shape[0]} orders x "
+                        f"{counts.shape[1]} dispersion pixels"
+                    )
+
+                diagnostic_pdf = None
+                if diagnostics == "full" and diagnostic_dir is not None:
+                    diagnostic_pdf = diagnostic_dir / (
+                        f"{calibration_type.lower()}_ccd{ccd}_"
+                        f"exposure{exposure_index:03d}_peaks.pdf"
+                    )
+
+                peak_table = measure_calibration_peaks(
+                    counts,
+                    orders,
+                    config=config,
+                    calibration_type=calibration_type,
+                    ccd=ccd,
+                    exposure_index=exposure_index,
+                    diagnostics=diagnostics,
+                    diagnostic_pdf=diagnostic_pdf,
+                    log_level=log_level,
+                )
+
+                if len(peak_table) == 0:
+                    logger.warning(
+                        "%s CCD%s exposure %s: no calibration peaks measured",
+                        calibration_type,
+                        ccd,
+                        exposure_index,
+                    )
+                    continue
+
+                n_peaks = len(peak_table)
+
+                # Exposure metadata needed to distinguish rows once all CCDs
+                # and exposures are stacked into one table.
+                peak_table["calibration_type"] = np.full(
+                    n_peaks,
+                    calibration_type,
+                    dtype="U8",
+                )
+                peak_table["ccd"] = np.full(
+                    n_peaks,
+                    int(ccd),
+                    dtype=int,
+                )
+                peak_table["exposure_index"] = np.full(
+                    n_peaks,
+                    exposure_index,
+                    dtype=int,
+                )
+
+                mjd_mid = exposure.get(
+                    "mjd_mid",
+                    exposure.get("mjd", np.nan),
+                )
+                peak_table["mjd_mid"] = np.full(
+                    n_peaks,
+                    float(mjd_mid),
+                    dtype=float,
+                )
+
+                calibration_tables.append(peak_table)
+
+                summary = _quality_summary(peak_table)
+
+                if debug:
+                    print(
+                        f"  CCD{ccd} exposure {exposure_index} total: "
+                        f"{summary['accepted']}/{summary['total']} accepted; "
+                        f"saturated={summary.get('saturated', 0)}, "
+                        f"width={summary.get('width_outlier', 0)}, "
+                        f"blend={summary.get('blend_candidate', 0)}, "
+                        f"lowS/N={summary.get('low_snr', 0)}, "
+                        f"large sigma_y={summary.get('large_centroid_error', 0)}"
+                    )
+
+                if diagnostics in {"basic", "full"} and diagnostic_dir is not None:
+                    summary_filename = diagnostic_dir / (
+                        f"{calibration_type.lower()}_ccd{ccd}_"
+                        f"exposure{exposure_index:03d}_summary.png"
+                    )
+                    _plot_calibration_summary(
+                        peak_table,
+                        calibration_type=calibration_type,
+                        ccd=ccd,
+                        exposure_index=exposure_index,
+                        filename=summary_filename,
+                    )
+                    if debug:
+                        print(f"    summary diagnostic -> {summary_filename}")
+
+        if len(calibration_tables) == 0:
+            peak_tables[calibration_type] = Table()
+            continue
+
+        combined_table = vstack(
+            calibration_tables,
+            metadata_conflicts="silent",
+        )
+
+        peak_tables[calibration_type] = combined_table
+
+        combined_summary = _quality_summary(combined_table)
+
+        if output_dir is not None:
+            filename = output_dir / f"{calibration_type.lower()}_peaks.fits"
+            combined_table.write(
+                filename,
+                format="fits",
+                overwrite=overwrite,
+            )
+
+            print(
+                f"{calibration_type}: {combined_summary['total']} peaks measured, "
+                f"{combined_summary['accepted']} pass quality cuts -> {filename}"
+            )
+        else:
+            print(
+                f"{calibration_type}: {combined_summary['total']} peaks measured, "
+                f"{combined_summary['accepted']} pass quality cuts"
+            )
+
+    return peak_tables

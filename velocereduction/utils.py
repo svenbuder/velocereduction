@@ -20,8 +20,8 @@
 # # scikit-image package
 # from skimage.registration import phase_cross_correlation
 
-# # Matplotlib package
-# import matplotlib.pyplot as plt
+# Matplotlib package
+import matplotlib.pyplot as plt
 
 # # Astropy package
 # from astropy.io import fits
@@ -1203,33 +1203,27 @@ def _robust_location_and_sigma(values):
 
     return median, sigma
 
-def subtract_overscan(full_image, metadata, debug_overscan = False):
+def subtract_overscan(full_image, metadata=None, debug_overscan = False):
     """
-    Subtracts the overscan from a given full astronomical image to correct for the CCD readout bias. This function 
-    utilizes metadata to identify the overscan region and calculates its median value and RMS (Root Mean Square) 
-    to adjust the image data accordingly. The corrected image is then trimmed to remove the overscan regions.
-
-    If the debug_overscan flag is set to True, debug plots showing the overscan region, the calculated median overscan,
-    and its effect on the image before and after subtraction will be displayed for visual inspection.
-
-    Parameters:
-        full_image (ndarray):   A 2D numpy array representing the full CCD image including overscan regions.
-        metadata (dict):        A dictionary containing metadata of the image, which should include keys for overscan 
-                                region coordinates and other necessary CCD characteristics.
-        debug_overscan (bool):  A boolean flag that, when set to True, enables the display of debug plots.
-
-    Returns:
-        tuple: A tuple containing:
-            - trimmed_image (ndarray):  The image after overscan subtraction, with overscan regions removed.
-            - median_overscan (float):  The median value of the overscan region used for the correction.
-            - overscan_rms (float):     The root mean square of the overscan region, indicating noise level.
-            - readout_mode (str):       The readout mode of the CCD as extracted from the metadata, indicating how the 
-                                        image data was read from the sensor.
+    Subtracts the overscan from a given full astronomical image
     """
 
     # Identify overscan region and subtract overscan while reporting median overscan and overscan root-mean-square
     overscan_median = dict()
     overscan_rms = dict()
+    metadata = dict()
+
+    nr_pixels_x, nr_pixels_y = full_image.shape
+
+    # Identify the readout mode based on the image dimensions
+    if nr_pixels_x == 4240 and nr_pixels_y == 4224:
+        metadata = {'READOUT': '4Amp'}
+    elif nr_pixels_x == 4176 and nr_pixels_y == 4224:
+        metadata = {'READOUT': '2Amp'}
+    else:
+        raise ValueError(
+            f'Unexpected image dimensions: {nr_pixels_x} x {nr_pixels_y} are not (4240,4224) for 4Amp readout or (4176,4224) for 2Amp readout'
+        )
     
     if debug_overscan:
         plt.figure(figsize=(10,10))
@@ -1713,36 +1707,36 @@ def apply_velocity_shift_to_wavelength_array(velocity_in_kms, wavelength_array):
 #         popt, pcov = curve_fit(gaussian_absorption_profile, wavelength, flux, p0=initial_guess)
 #     return (popt, pcov)
 
-# def calculate_barycentric_velocity_correction(fits_header):
-#     """
-#     Calculates the barycentric velocity correction for a given astronomical observation by taking into account
-#     the Earth's motion relative to the solar system's barycenter. This correction is computed based on the
-#     right ascension (RA) and declination (Dec) of the observed object, as well as the Universal Time (UT)
-#     expressed in Modified Julian Date (MJD), as specified in the header of a FITS file.
+def calculate_barycentric_velocity_correction(fits_header):
+    """
+    Calculates the barycentric velocity correction for a given astronomical observation by taking into account
+    the Earth's motion relative to the solar system's barycenter. This correction is computed based on the
+    right ascension (RA) and declination (Dec) of the observed object, as well as the Universal Time (UT)
+    expressed in Modified Julian Date (MJD), as specified in the header of a FITS file.
 
-#     This function uses astropy.coordinates.SkyCoord for celestial coordinate handling and astropy.time.Time
-#     for time format conversions, ensuring precise astronomical calculations. The Siding Spring Observatory (SSO)
-#     location should be predefined as an astropy EarthLocation object within the function.
+    This function uses astropy.coordinates.SkyCoord for celestial coordinate handling and astropy.time.Time
+    for time format conversions, ensuring precise astronomical calculations. The Siding Spring Observatory (SSO)
+    location should be predefined as an astropy EarthLocation object within the function.
 
-#     Parameters:
-#         fits_header (dict): Header from a Veloce FITS file that must include:
-#             - 'MEANRA': Mean right ascension of the observation in degrees.
-#             - 'MEANDEC': Mean declination of the observation in degrees.
-#             - 'UTMJD': Universal Time of the observation in Modified Julian Date format.
+    Parameters:
+        fits_header (dict): Header from a Veloce FITS file that must include:
+            - 'MEANRA': Mean right ascension of the observation in degrees.
+            - 'MEANDEC': Mean declination of the observation in degrees.
+            - 'UTMJD': Universal Time of the observation in Modified Julian Date format.
 
-#     Returns:
-#         float: The barycentric velocity correction in kilometers per second (km/s). This value represents the velocity
-#                necessary to adjust for the Earth's motion when analyzing spectral data, improving the accuracy of radial
-#                velocity measurements.
-#     """
+    Returns:
+        float: The barycentric velocity correction in kilometers per second (km/s). This value represents the velocity
+               necessary to adjust for the Earth's motion when analyzing spectral data, improving the accuracy of radial
+               velocity measurements.
+    """
 
-#     object_coordinates = SkyCoord(ra = fits_header['MEANRA'], dec = fits_header['MEANDEC'], frame="icrs", unit="deg")
-#     vbary_corr_kms = object_coordinates.radial_velocity_correction( 
-#         kind='barycentric', 
-#         obstime = Time(val=fits_header['UTMJD'],format='mjd', scale='utc'),
-#         location=SSO
-#     ).to(u.km/u.s).value
-#     return vbary_corr_kms
+    object_coordinates = SkyCoord(ra = fits_header['MEANRA'], dec = fits_header['MEANDEC'], frame="icrs", unit="deg")
+    vbary_corr_kms = object_coordinates.radial_velocity_correction( 
+        kind='barycentric', 
+        obstime = Time(val=fits_header['UTMJD'],format='mjd', scale='utc'),
+        location=SSO
+    ).to(u.km/u.s).value
+    return vbary_corr_kms
 
 # def match_month_to_date(date):
 #     """

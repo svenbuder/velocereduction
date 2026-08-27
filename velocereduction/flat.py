@@ -520,11 +520,9 @@ def _create_blaze(
         ]
     )
 
-    m = (
-        np.arange(
-            2 * half_window
-        )
-        - half_window
+    m = np.arange(
+        -half_window,
+        half_window + 1,
     )
 
     science_begin = float(

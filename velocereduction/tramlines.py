@@ -6,6 +6,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from astropy.table import Table
+from astropy.io import fits
 
 from numpy.polynomial import Polynomial
 
@@ -628,7 +629,7 @@ def _plot_tramline_diagnostic(
             extracted,
             profile,
             m,
-        ) = _extract_order_profile(
+        ) = extract_order_profile(
             image,
             row,
         )
@@ -1683,7 +1684,7 @@ def _find_bright_interval(
         True,
     )
 
-def _extract_order_profile(
+def extract_order_profile(
     image,
     row,
 ):
@@ -1774,7 +1775,7 @@ def _measure_calibration_region(
         extracted,
         profile,
         m,
-    ) = _extract_order_profile(
+    ) = extract_order_profile(
         image,
         row,
     )
@@ -2916,3 +2917,161 @@ def show_summary(
 
     plt.show()
     plt.close(fig)
+
+def extract_summed_region(
+    image,
+    tramline_table,
+    ccd,
+    region,
+):
+    """
+    Sum a fitted tramline region for all orders on one CCD.
+
+    Parameters
+    ----------
+    image : ndarray
+        Preprocessed CCD image.
+
+    tramline_table : astropy.table.Table
+        Night-specific fitted tramlines.
+
+    ccd : str or int
+        CCD number.
+
+    region : str
+        E.g. 'SimLC', 'SimTh', 'FibTh'.
+
+    Returns
+    -------
+    orders : ndarray
+        Echelle order numbers.
+
+    counts : ndarray
+        Shape (n_orders, n_dispersion_pixels).
+    """
+
+    ccd = str(ccd)
+
+    orders = []
+    counts = []
+
+    for row in tramline_table:
+
+        order_name = str(row['order_name'])
+
+        if f'ccd_{ccd}_' not in order_name:
+            continue
+
+        if region == 'FibTh':
+            region = 'Science'
+        begin = row[f'{region}_begin']
+        end   = row[f'{region}_end']
+
+        if (
+            not np.isfinite(begin)
+            or not np.isfinite(end)
+        ):
+            continue
+
+        extracted, profile, m = extract_order_profile(
+            image,
+            row,
+        )
+
+        selection = (
+            (m >= begin)
+            & (m <= end)
+        )
+
+        if not np.any(selection):
+            continue
+
+        summed_counts = np.nansum(
+            extracted[:, selection],
+            axis=1,
+        )
+
+        order = int(
+            order_name.split('_')[-1]
+        )
+
+        orders.append(order)
+        counts.append(summed_counts)
+
+    return (
+        np.asarray(orders),
+        np.asarray(counts),
+    )
+
+
+def save_calibration_spectra(
+    calibration_data,
+    filename,
+    calibration_type,
+    overwrite=True,
+):
+
+    primary = fits.PrimaryHDU()
+
+    primary.header['CALTYPE'] = calibration_type
+
+    hdus = [primary]
+
+    ccds = ['1', '2', '3']
+    if calibration_type == 'SimLC':
+        ccds = ['2', '3']
+
+    for ccd in ccds:
+
+        for exposure_index, exposure in enumerate(
+            calibration_data[ccd]
+        ):
+
+            orders = exposure['orders']
+
+            counts = np.asarray(
+                exposure['counts'],
+                dtype=np.float32,
+            )
+
+            columns = [
+                fits.Column(
+                    name='ORDER',
+                    format='I',
+                    array=orders,
+                ),
+
+                fits.Column(
+                    name='COUNTS',
+                    format=f'{counts.shape[1]}E',
+                    array=counts,
+                ),
+            ]
+
+            hdu = fits.BinTableHDU.from_columns(
+                columns,
+                name=f'CCD{ccd}_{exposure_index:03d}',
+            )
+
+            hdu.header['CCD'] = int(ccd)
+
+            hdu.header['RUN'] = str(
+                exposure['run']
+            )
+
+            hdu.header['MJD-MID'] = (
+                exposure['mjd_mid']
+            )
+
+            hdu.header['EXPTIME'] = (
+                exposure['exptime']
+            )
+
+            hdus.append(hdu)
+
+    fits.HDUList(
+        hdus
+    ).writeto(
+        filename,
+        overwrite=overwrite,
+    )
