@@ -3075,3 +3075,93 @@ def save_calibration_spectra(
         filename,
         overwrite=overwrite,
     )
+
+def extract_calibration_spectra(
+    reduction_input,
+    nightly_tramlines,
+    config,
+    paths,
+):
+    """Extract calibration spectra for all calibration observations.
+
+    This function extracts the calibration spectra for all calibration
+    observations in the reduction input. The extracted spectra are stored
+    in a dictionary, which is returned.
+
+    Args:
+        reduction_input (astropy.table.Table): Table of observations to reduce.
+        nightly_tramlines (dict): Dictionary of tramline fits for each CCD.
+        config (ReductionConfig): Reduction configuration object.
+        paths (ReductionPaths): Reduction paths object.
+
+    Returns:
+        dict: Dictionary of extracted calibration spectra.
+    """
+
+    calibration_spectra = {
+        'SimLC': {'2': [], '3': []},
+        'SimTh': {'1': [], '2': [], '3': []},
+        'FibTh': {'1': [], '2': [], '3': []},
+    }
+
+    for calibration_type in [
+        'SimLC',
+        'SimTh',
+        'FibTh',
+    ]:
+
+        calibration_rows = reduction_input[
+            reduction_input['type'] == calibration_type
+        ]
+
+        for observation in calibration_rows:
+
+            if not observation['use']:
+                continue
+
+            for ccd in ['1', '2', '3']:
+
+                # This is the crucial selection.
+                #
+                # reduction_input already knows whether this particular
+                # observation should be used for this CCD.
+                if not observation[f'use_ccd{ccd}']:
+                    continue
+
+                filename = observation[f'file_ccd{ccd}']
+
+                if filename is None:
+                    continue
+
+                image, metadata, detector_info = (
+                    utils.preprocess_image(
+                        filename,
+                        ccd=ccd,
+                    )
+                )
+
+                orders, counts = (
+                    extract_summed_region(
+                        image=image,
+                        tramline_table=nightly_tramlines,
+                        ccd=ccd,
+                        region=calibration_type,
+                    )
+                )
+
+                calibration_spectra[
+                    calibration_type
+                ][ccd].append(
+                    {
+                        'run': observation['run'],
+                        'mjd_mid': float(
+                            observation['mjd_mid']
+                        ),
+                        'exptime': float(
+                            observation['exptime']
+                        ),
+                        'orders': orders,
+                        'counts': counts,
+                    }
+                )
+    return calibration_spectra

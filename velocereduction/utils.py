@@ -1992,47 +1992,47 @@ def polynomial_function(x, *coeffs):
 #     interpolation_function = interp1d(wavelength, flux, bounds_error=False, fill_value=(1.0,1.0), kind='cubic')
 #     return interpolation_function(target_wavelength)
 
-# def lasercomb_wavelength_from_numbers(n, repeat_frequency_ghz = 25.00000000, offset_frequency_ghz = 9.56000000000):
-#     """
-#     Calculates the wavelength of a laser comb (LC) line based on its mode number, repeat frequency,
-#     and offset frequency using the formula:
+def lasercomb_wavelength_from_numbers(n, repeat_frequency_ghz = 25.00000000, offset_frequency_ghz = 9.56000000000):
+    """
+    Calculates the wavelength of a laser comb (LC) line based on its mode number, repeat frequency,
+    and offset frequency using the formula:
     
-#     lambda_n = speed_of_light / (n * f_repeat + f_offset)
+    lambda_n = speed_of_light / (n * f_repeat + f_offset)
     
-#     Here, we are using the LC mode frequency f_n = n * f_repeat + f_offset.
-#     For ease, we use speed_of_light already in units of ÅGHz, i.e. c = 2.9979246 * 10**9 ÅGHz.
+    Here, we are using the LC mode frequency f_n = n * f_repeat + f_offset.
+    For ease, we use speed_of_light already in units of ÅGHz, i.e. c = 2.9979246 * 10**9 ÅGHz.
 
-#     Parameters:
-#         n (int or array-like): The mode number(s) of the LC line.
-#         repeat_frequency_ghz (float): The repeat frequency of the laser comb in GHz. Default is 25.0 GHz.
-#         offset_frequency_ghz (float): The offset frequency of the laser comb in GHz. Default is 9.56 GHz.
+    Parameters:
+        n (int or array-like): The mode number(s) of the LC line.
+        repeat_frequency_ghz (float): The repeat frequency of the laser comb in GHz. Default is 25.0 GHz.
+        offset_frequency_ghz (float): The offset frequency of the laser comb in GHz. Default is 9.56 GHz.
 
-#     Returns:
-#         float or ndarray: The calculated wavelength(s) in Angstroms (Å).
-#     """
+    Returns:
+        float or ndarray: The calculated wavelength(s) in Angstroms (Å).
+    """
     
-#     return(2.9979246 * 10**9 / (n * repeat_frequency_ghz + offset_frequency_ghz))
+    return(2.9979246 * 10**9 / (n * repeat_frequency_ghz + offset_frequency_ghz))
 
-# def lasercomb_numbers_from_wavelength(wavelength_aangstroem, repeat_frequency_ghz = 25.00000000, offset_frequency_ghz = 9.56000000000):
-#     """
-#     Calculates the mode number of a laser comb (LC) line based on a wavelength, repeat frequency,
-#     and offset frequency using the formula:
+def lasercomb_numbers_from_wavelength(wavelength_aangstroem, repeat_frequency_ghz = 25.00000000, offset_frequency_ghz = 9.56000000000):
+    """
+    Calculates the mode number of a laser comb (LC) line based on a wavelength, repeat frequency,
+    and offset frequency using the formula:
     
-#     n  = (speed_of_light / lambda_n - f_offset) / f_repeat
+    n  = (speed_of_light / lambda_n - f_offset) / f_repeat
 
-#     Here, we are using the LC mode frequency f_n = n * f_repeat + f_offset.
-#     For ease, we use speed_of_light already in units of ÅGHz, i.e. c = 2.9979246 * 10**9 ÅGHz.
+    Here, we are using the LC mode frequency f_n = n * f_repeat + f_offset.
+    For ease, we use speed_of_light already in units of ÅGHz, i.e. c = 2.9979246 * 10**9 ÅGHz.
 
-#     Parameters:
-#         wavelength_aangstroem (float or array-like): The wavelength(s) of the LC line in Ångström.
-#         repeat_frequency_ghz (float): The repeat frequency of the laser comb in GHz. Default is 25.0 GHz.
-#         offset_frequency_ghz (float): The offset frequency of the laser comb in GHz. Default is 9.56 GHz.
+    Parameters:
+        wavelength_aangstroem (float or array-like): The wavelength(s) of the LC line in Ångström.
+        repeat_frequency_ghz (float): The repeat frequency of the laser comb in GHz. Default is 25.0 GHz.
+        offset_frequency_ghz (float): The offset frequency of the laser comb in GHz. Default is 9.56 GHz.
 
-#     Returns:
-#         float or ndarray: The calculated mode number(s). Note: These are floats, not integers!
-#     """
+    Returns:
+        float or ndarray: The calculated mode number(s). Note: These are floats, not integers!
+    """
 
-#     return(((2.9979246*10**9 / wavelength_aangstroem) - offset_frequency_ghz) / repeat_frequency_ghz)
+    return(((2.9979246*10**9 / wavelength_aangstroem) - offset_frequency_ghz) / repeat_frequency_ghz)
 
 # def read_in_wavelength_solution_coefficients_tinney():
 #     """

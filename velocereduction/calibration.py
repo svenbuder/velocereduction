@@ -1277,6 +1277,19 @@ def measure_calibration_peaks_for_night(
     diagnostics = _normalise_diagnostics(diagnostics)
     debug = _debug_enabled(log_level)
 
+    if overwrite == False:
+        try:
+            calibration_peak_tables = {}
+            for calibration_type in ['SimTh','SimLC','FibTh']:
+                calibration_peak_tables[calibration_type] = Table.read(
+                    output_dir / f'{calibration_type.lower()}_peaks.fits',
+                    1,
+                )
+            print(f'Read in existing peak tables from {output_dir}, skipping peak measurement')
+            return(calibration_peak_tables)
+        except:
+            print(f'Could not find SimTh_peaks.fits, SimLC_peaks.fits and/or FibTh_peaks.fits in {output_dir}, measuring peaks from scratch')
+
     if output_dir is not None:
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
