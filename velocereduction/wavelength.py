@@ -505,15 +505,23 @@ def fit_wavelength_surface(
     """
     Fit m*lambda(y,m) with a 2D Legendre surface.
 
-    SimLC wavelengths are assumed to be stored in Angstrom in
-    ``closest_lc_wavelength`` and are converted internally to nm.
-
     Returns
     -------
     result : dict
         Surface coefficients, normalization, per-line residuals,
         fit mask, statistics and per-order coefficients.
     """
+
+    if calibration_type == 'SimLC':
+        closet_wavelength_column = 'closest_lc_wavelength'
+    elif calibration_type == 'FibTh':
+        closet_wavelength_column = 'closest_th_wavelength'
+    elif calibration_type == 'SimTh':
+        closet_wavelength_column = 'closest_th_wavelength'
+    else:
+        raise ValueError(
+            f"Unknown calibration_type {calibration_type}"
+        )
 
     input_peaks = (
         (peak_table["ccd"] == ccd)
@@ -542,7 +550,7 @@ def fit_wavelength_surface(
         )
         & np.isfinite(
             peak_table[
-                "closest_lc_wavelength"
+                closet_wavelength_column
             ]
         )
     )
@@ -572,7 +580,7 @@ def fit_wavelength_surface(
     wavelength_nm = (
         np.asarray(
             peak_data[
-                "closest_lc_wavelength"
+                closet_wavelength_column
             ],
             dtype=float,
         )
