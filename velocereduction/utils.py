@@ -70,6 +70,55 @@ from astropy.time import Time
 
 logger = logging.getLogger(__name__)
 
+slit_order = [
+    "ThXe",
+    "S5",
+    "S2",
+    "Blank",
+
+    7, 18, 17, 6, 16, 15, 5, 14, 13, 1,
+    12, 11, 4, 10, 9, 3, 8, 19, 2,
+
+    "Blank",
+    "S4",
+    "S3",
+    "S1",
+    "LC",
+]
+
+
+def is_science_fibre(fibre):
+    return isinstance(fibre, int)
+
+
+def is_sky_fibre(fibre):
+    return isinstance(fibre, str) and fibre.startswith("S")
+
+
+science_fibres = [
+    fibre for fibre in slit_order
+    if is_science_fibre(fibre)
+]
+
+sky_fibres = [
+    fibre for fibre in slit_order
+    if is_sky_fibre(fibre)
+]
+
+science_sky_slit_order = [
+    fibre for fibre in slit_order
+    if is_science_fibre(fibre) or is_sky_fibre(fibre)
+]
+
+science_sky_slit_indices = [
+    i for i, fibre in enumerate(slit_order)
+    if is_science_fibre(fibre) or is_sky_fibre(fibre)
+]
+
+fibre_to_index = {
+    fibre: i
+    for i, fibre in enumerate(science_sky_slit_order)
+}
 
 def _as_float(value, default=np.nan):
     try:

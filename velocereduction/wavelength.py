@@ -1926,3 +1926,27 @@ def fit_and_save_wavelength_surface(
     )
 
     return result
+
+def load_th_reference_lines(paths, th_reference = 'murphy'):
+
+    if th_reference == 'murphy':
+        # ThAr atlas from Murphy et al. (2007) with update from 090311
+        dtype = [
+            ("wavenumber", float),
+            ("wave_air", float),
+            ("log10_intensity", float),
+            ("element", "U10"),
+            ("ion", "U10"),
+            ("source", "U2"),
+        ]
+        thar_lines = Table(np.genfromtxt(paths.repository / 'velocereduction/veloce_reference_data/thar_UVES_MM090311.dat',
+            dtype=dtype,
+            comments="#",
+            autostrip=True
+        ))
+        th_lines = thar_lines[thar_lines['element'] == 'Th']
+        th_lines['wave_vac'] = utils.wavelength_air_to_vac(th_lines['wave_air'])
+    else:
+        raise ValueError(f"Currently, only th_reference='murphy' is supported. Got {th_reference} instead.")
+
+    return(th_lines)

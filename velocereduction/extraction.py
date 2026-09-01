@@ -1,6 +1,295 @@
+from dataclasses import dataclass
 import numpy as np
 
+from .utils import (
+    is_science_fibre,
+    is_sky_fibre,
+)
 
+
+@dataclass
+class ExtractionResult:
+    """
+    Detector-pixel-space spectral extraction for one echelle order.
+
+    Axis convention
+    ---------------
+    axis 0 : dispersion pixel
+    axis 1 : extracted component
+
+    Examples
+    --------
+    summed mode:
+        flux.shape == (4112, 1)
+        components == ("Science",)
+
+    fibre mode:
+        flux.shape == (4112, 24)
+        components == (
+            "S5", "S2",
+            7, 18, 17, 6, 16, 15, 5, 14, 13, 1,
+            12, 11, 4, 10, 9, 3, 8, 19, 2,
+            "S4", "S3", "S1",
+        )
+    """
+
+    flux: np.ndarray
+    variance: np.ndarray
+    components: tuple
+    extraction_mode: str
+
+    def __post_init__(self):
+
+        self.flux = np.asarray(
+            self.flux,
+            dtype=float,
+        )
+
+        self.variance = np.asarray(
+            self.variance,
+            dtype=float,
+        )
+
+        if self.flux.ndim != 2:
+            raise ValueError(
+                "flux must have shape "
+                "(n_dispersion, n_components)"
+            )
+
+        if self.variance.shape != self.flux.shape:
+            raise ValueError(
+                "variance must have the same shape as flux"
+            )
+
+        if self.flux.shape[1] != len(self.components):
+            raise ValueError(
+                "Number of components does not match "
+                "second axis of flux"
+            )
+
+        if self.extraction_mode not in {
+            "summed",
+            "fibre",
+        }:
+            raise ValueError(
+                f"Unknown extraction mode: "
+                f"{self.extraction_mode}"
+            )
+
+    @property
+    def n_pixels(self):
+        return self.flux.shape[0]
+
+    @property
+    def n_components(self):
+        return self.flux.shape[1]
+
+    @property
+    def science_indices(self):
+
+        if self.extraction_mode == "summed":
+            return np.array(
+                [0],
+                dtype=int,
+            )
+
+        return np.array([
+            i
+            for i, component in enumerate(self.components)
+            if is_science_fibre(component)
+        ])
+
+    @property
+    def sky_indices(self):
+
+        if self.extraction_mode == "summed":
+            return np.array(
+                [],
+                dtype=int,
+            )
+
+        return np.array([
+            i
+            for i, component in enumerate(self.components)
+            if is_sky_fibre(component)
+        ])
+
+    @property
+    def science_flux(self):
+        return self.flux[
+            :,
+            self.science_indices
+        ]
+
+    @property
+    def science_variance(self):
+        return self.variance[
+            :,
+            self.science_indices
+        ]
+
+    @property
+    def sky_flux(self):
+        return self.flux[
+            :,
+            self.sky_indices
+        ]
+
+    @property
+    def sky_variance(self):
+        return self.variance[
+            :,
+            self.sky_indices
+        ]
+
+    def component_index(self, component):
+        """
+        Return the column corresponding to a named fibre/component.
+        """
+        return self.components.index(component)
+
+    def component_flux(self, component):
+
+        i = self.component_index(component)
+
+        return self.flux[:, i]
+
+    def component_variance(self, component):
+
+        i = self.component_index(component)
+
+        return self.variance[:, i]
+
+def extract_summed_order(
+    order_matrix,
+    variance_matrix,
+    science_begin,
+    science_end,
+):
+    """
+    Sum the Science aperture of one 4112 x N order matrix.
+
+    Parameters
+    ----------
+    order_matrix : ndarray
+        Shape (n_dispersion, n_crossdispersion).
+
+    variance_matrix : ndarray
+        Pixel variances with the same shape as order_matrix.
+
+    science_begin, science_end : float
+        Science aperture limits in pixels relative to the
+        central tramline pixel.
+
+    Returns
+    -------
+    ExtractionResult
+    """
+
+    order_matrix = np.asarray(
+        order_matrix,
+        dtype=float,
+    )
+
+    variance_matrix = np.asarray(
+        variance_matrix,
+        dtype=float,
+    )
+
+    if variance_matrix.shape != order_matrix.shape:
+        raise ValueError(
+            "variance_matrix must have the same shape "
+            "as order_matrix"
+        )
+
+    n_crossdispersion = order_matrix.shape[1]
+
+    half_window = (
+        n_crossdispersion - 1
+    ) // 2
+
+    m = np.arange(
+        n_crossdispersion
+    ) - half_window
+
+    science_mask = (
+        (m >= science_begin)
+        & (m <= science_end)
+    )
+
+    if not np.any(science_mask):
+        raise ValueError(
+            "Science aperture contains no pixels"
+        )
+
+    flux = np.nansum(
+        order_matrix[
+            :,
+            science_mask
+        ],
+        axis=1,
+    )
+
+    variance = np.nansum(
+        variance_matrix[
+            :,
+            science_mask
+        ],
+        axis=1,
+    )
+
+    return ExtractionResult(
+        flux=flux[:, None],
+        variance=variance[:, None],
+        components=("Science",),
+        extraction_mode="summed",
+    )
+
+def extract_order(
+    order_matrix,
+    variance_matrix,
+    extraction_mode,
+    *,
+    science_begin=None,
+    science_end=None,
+    fibre_geometry=None,
+):
+    """
+    Extract one order according to the selected extraction mode.
+    """
+
+    if extraction_mode == "summed":
+
+        if science_begin is None or science_end is None:
+            raise ValueError(
+                "science_begin and science_end are required "
+                "for summed extraction"
+            )
+
+        return extract_summed_order(
+            order_matrix=order_matrix,
+            variance_matrix=variance_matrix,
+            science_begin=science_begin,
+            science_end=science_end,
+        )
+
+    if extraction_mode == "fibre":
+
+        if fibre_geometry is None:
+            raise ValueError(
+                "fibre_geometry is required "
+                "for fibre extraction"
+            )
+
+        return extract_fibre_order(
+            order_matrix=order_matrix,
+            variance_matrix=variance_matrix,
+            fibre_geometry=fibre_geometry,
+        )
+
+    raise ValueError(
+        f"Unknown extraction mode: {extraction_mode}"
+    )
 
 # import sys
 # from pathlib import Path
