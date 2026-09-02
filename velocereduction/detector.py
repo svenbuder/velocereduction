@@ -15,12 +15,20 @@ DEFAULT_GAIN_FILE = Path(__file__).resolve().parent / "veloce_reference_data" / 
 
 
 def _robust_sigma(values):
+    """Return a robust 1-sigma scatter estimate (1.4826 x MAD), ignoring non-finite values."""
     values = np.asarray(values, float)
     values = values[np.isfinite(values)]
     return np.nan if values.size == 0 else 1.4826 * np.nanmedian(np.abs(values - np.nanmedian(values)))
 
 
 def _amplifier(block, border=OVERSCAN_BORDER):
+    """
+    Overscan-subtract one raw amplifier block and return its science pixels.
+    
+    The amplifier is assumed to have a 32-pixel overscan border on all four sides;
+    this border is removed after its median and robust RMS are measured.
+    Adjacent 32-pixel borders therefore form the 64-pixel central overscan bands in the full raw detector.
+    """
     mask = np.zeros(block.shape, bool)
     mask[:border] = mask[-border:] = True
     mask[:, :border] = mask[:, -border:] = True
@@ -30,6 +38,12 @@ def _amplifier(block, border=OVERSCAN_BORDER):
 
 
 def _raw_amplifier_blocks(raw):
+    """
+    Split a raw Veloce CCD image into its physical amplifier blocks.
+    
+    4Amp data (4240 x 4224) are split into four 2120 x 2112 blocks and 2Amp data (4176 x 4224) into two 4176 x 2112 halves.
+    Each returned block still contains its own 32-pixel overscan border on every edge.
+    """
     if raw.shape == (4240, 4224):
         return {
             "q2": raw[:2120, :2112], "q1": raw[2120:, :2112],
@@ -41,6 +55,12 @@ def _raw_amplifier_blocks(raw):
 
 
 def subtract_overscan(raw):
+    """
+    Overscan-subtract every amplifier and reconstruct the 4112 x 4096 science image.
+    
+    Each amplifier loses its 32-pixel border, that is the frame as well as
+    the cross (4Amp) and vertical line (2Amp), respectively.
+    """
     blocks, readout = _raw_amplifier_blocks(np.asarray(raw))
     result, medians, rms = {}, {}, {}
     for amp, block in blocks.items():
@@ -54,6 +74,12 @@ def subtract_overscan(raw):
 
 
 def amplifier_slices(shape, readout_mode):
+    """
+    Return the science-image slice belonging to each amplifier after overscan trimming.
+    
+    The mapping matches the reassembly performed by `subtract_overscan()` and is used to
+    apply amplifier-specific gains/read-noise variances to the final 4112 x 4096 image.
+    """
     nx, ny = shape
     if readout_mode == "4Amp":
         nx2, ny2 = nx // 2, ny // 2
@@ -71,10 +97,12 @@ def amplifier_slices(shape, readout_mode):
 
 @lru_cache(maxsize=8)
 def _load_gain_table_cached(filename):
+    """Read and cache the persistent ECSV detector-gain calibration table to avoid repeated disk I/O."""
     return Table.read(filename, format="ascii.ecsv")
 
 
 def load_detector_gains(filename=None):
+    """Load a copy of the detector-gain calibration table, using the packaged reference table by default."""
     path = str(Path(filename or DEFAULT_GAIN_FILE).resolve())
     table = _load_gain_table_cached(path).copy()
     logger.debug("Loaded %d detector gain entries from %s", len(table), path)
@@ -82,6 +110,7 @@ def load_detector_gains(filename=None):
 
 
 def gain_for_amplifier(gains, ccd, readout_mode, amplifier):
+    """Return the characterised gain (e-/ADU) for one CCD, readout mode, and amplifier."""
     use = (
         (np.asarray(gains["ccd"]).astype(str) == str(ccd))
         & (np.asarray(gains["readout_mode"]).astype(str) == str(readout_mode))
@@ -93,6 +122,12 @@ def gain_for_amplifier(gains, ccd, readout_mode, amplifier):
 
 
 def variance_image(image, overscan_rms, ccd, readout_mode, gains=None, include_poisson=True):
+    """
+    Build the per-pixel variance image in ADU^2 for an overscan-subtracted CCD.
+    
+    Read variance comes from that exposure's amplifier overscan RMS;
+    photon variance is `max(counts, 0) / gain` using the persistent amplifier gain calibration.
+    """
     image = np.asarray(image, float)
     gains = load_detector_gains() if gains is None else gains
     variance = np.empty(image.shape, np.float32)
@@ -105,6 +140,13 @@ def variance_image(image, overscan_rms, ccd, readout_mode, gains=None, include_p
 
 
 def preprocess_image(filename, ccd, config=None, gains=None):
+    """
+    Read one raw CCD exposure, subtract overscan, and construct its variance image.
+    
+    Negative overscan-subtracted counts are retained (not clipped);
+    only the photon-noise term clips negative counts to zero.
+    Returns a `DetectorFrame` containing image, variance, header, readout mode, and overscan statistics.
+    """
     with fits.open(filename, memmap=False) as hdul:
         raw = np.asarray(hdul[0].data, float)
         header = hdul[0].header.copy()
@@ -123,6 +165,12 @@ def preprocess_image(filename, ccd, config=None, gains=None):
 
 
 def apply_response(image, variance, response):
+    """
+    Divide an image by a response map and propagate its variance.
+    
+    For flux `f/r`, the variance becomes `V/r^2`;
+    invalid or non-positive response pixels are returned as NaN.
+    """
     image, variance, response = map(lambda x: np.asarray(x, float), (image, variance, response))
     valid = np.isfinite(response) & (response > 0)
     flux = np.full_like(image, np.nan)
@@ -135,6 +183,7 @@ def apply_response(image, variance, response):
 # ---- Optional detector characterisation; not part of the nightly reduction. ----
 
 def _read_amplifiers(filename):
+    """Read one raw FITS file and return each amplifier as an overscan-subtracted science image plus overscan statistics."""
     with fits.open(filename, memmap=False) as hdul:
         raw = np.asarray(hdul[0].data, float)
         header = hdul[0].header.copy()
@@ -152,6 +201,7 @@ def _read_amplifiers(filename):
 
 
 def _file_metadata(filename):
+    """Read only the metadata needed to group and order Flat files for gain characterisation."""
     with fits.open(filename, memmap=True) as hdul:
         header, shape = hdul[0].header, hdul[0].shape
     if shape == (4240, 4224):
@@ -168,6 +218,11 @@ def _file_metadata(filename):
 
 
 def _pair_files(flat_files):
+    """
+    Group Flats by readout mode/exposure time and pair consecutive exposures.
+    
+    Files are sorted by MJD, then RUN/name; an unpaired final Flat is ignored with a warning.
+    """
     groups = defaultdict(list)
     for row in map(_file_metadata, flat_files):
         groups[(row["readout_mode"], round(row["exptime"], 6))].append(row)
@@ -183,6 +238,12 @@ def _pair_files(flat_files):
 
 
 def _pair_binned_statistics(image1, image2, n_bins=30, signal_range=(1000, 50000), max_level_difference=0.05, min_pixels=500):
+    """
+    Measure photon-transfer points from one pair of amplifier Flats.
+    
+    The second Flat is scaled to the first to tolerate small lamp changes, pixels are binned by mean signal, 
+    and robust difference variances are measured after outlier rejection.
+    """
     image1, image2 = np.asarray(image1, float), np.asarray(image2, float)
     preliminary = 0.5 * (image1 + image2)
     valid = np.isfinite(image1) & np.isfinite(image2) & (image1 > 0) & (image2 > 0)
@@ -216,6 +277,12 @@ def _pair_binned_statistics(image1, image2, n_bins=30, signal_range=(1000, 50000
 
 
 def _fit_gain(points):
+    """
+    Fit amplifier gain and read noise to binned Flat-pair statistics.
+    
+    Uses `Var(F1-rF2) = S(1+r)/gain + RN^2(1+r^2)`, so the fitted slope gives gain
+    while the intercept gives a detector-characterisation read-noise estimate.
+    """
     signal = np.array([p["signal_adu"] for p in points], float)
     variance = np.array([p["variance_difference_adu2"] for p in points], float)
     ratio = np.array([p["pair_scale"] for p in points], float)
@@ -247,6 +314,12 @@ def _fit_gain(points):
 
 
 def characterise_detector_gain(flat_files, ccd, output_file=None, n_bins=30, signal_range=(1000, 50000), max_level_difference=0.05, min_pixels=500):
+    """
+    Characterise every amplifier represented by a list of raw Flat FITS files.
+    
+    Pairs consecutive Flats, fits gain/read noise separately for each 2Amp/4Amp amplifier, optionally writes an ECSV calibration table,
+    and returns plotting diagnostics. This is an occasional detector-calibration task, not part of the nightly reduction.
+    """
     points, overscan, n_pairs = defaultdict(list), defaultdict(list), defaultdict(int)
     for meta1, meta2 in _pair_files(flat_files):
         a, b = _read_amplifiers(meta1["filename"]), _read_amplifiers(meta2["filename"])
@@ -298,6 +371,7 @@ def characterise_detector_gain(flat_files, ccd, output_file=None, n_bins=30, sig
 
 
 def plot_gain_characterisation(diagnostics, ccd, output_directory=None):
+    """Plot the photon-transfer measurements and fitted relation for each characterised amplifier, optionally saving PNG diagnostics."""
     import matplotlib.pyplot as plt
     output_directory = Path(output_directory) if output_directory else None
     if output_directory:
