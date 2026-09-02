@@ -1,0 +1,26 @@
+# %ECSV 1.0
+# ---
+# datatype:
+# - {name: ccd, datatype: string}
+# - {name: readout_mode, datatype: string}
+# - {name: amplifier, datatype: string}
+# - {name: gain_e_per_adu, datatype: float64}
+# - {name: gain_err_e_per_adu, datatype: float64}
+# - {name: read_noise_adu, datatype: float64}
+# - {name: read_noise_err_adu, datatype: float64}
+# - {name: read_noise_e, datatype: float64}
+# - {name: overscan_rms_adu, datatype: float64}
+# - {name: n_pairs, datatype: int64}
+# - {name: n_bins, datatype: int64}
+# - {name: signal_min_adu, datatype: float64}
+# - {name: signal_max_adu, datatype: float64}
+# - {name: median_pair_scale, datatype: float64}
+# - {name: reduced_chi2, datatype: float64}
+# meta: !!omap
+# - {description: Veloce amplifier photon-transfer characterisation}
+# - source_files: [../../../observations/240219/ccd_2/19feb20016.fits, ../../../observations/240219/ccd_2/19feb20017.fits, ../../../observations/240219/ccd_2/19feb20018.fits,
+#     ../../../observations/240219/ccd_2/19feb20019.fits, ../../../observations/240219/ccd_2/19feb20020.fits, ../../../observations/240219/ccd_2/19feb20021.fits]
+# schema: astropy-2.0
+ccd readout_mode amplifier gain_e_per_adu gain_err_e_per_adu read_noise_adu read_noise_err_adu read_noise_e overscan_rms_adu n_pairs n_bins signal_min_adu signal_max_adu median_pair_scale reduced_chi2
+2 2Amp q1 1.0169900652905537 0.0014023299434368034 5.070508196937085 0.3661633753980955 5.156656462259334 2.9652 3 90 1055.8007751937985 20709.313708653775 0.9866348092287016 2.934470155476409
+2 2Amp q2 1.0389946700454595 0.004175460754433283 2.3765019236652543 1.2873148345682563 2.469172832040981 2.9652 3 90 1006.1648936170213 4585.946998722861 0.9851281345112246 3.232599549360802

@@ -1,0 +1,28 @@
+# %ECSV 1.0
+# ---
+# datatype:
+# - {name: ccd, datatype: string}
+# - {name: readout_mode, datatype: string}
+# - {name: amplifier, datatype: string}
+# - {name: gain_e_per_adu, datatype: float64}
+# - {name: gain_err_e_per_adu, datatype: float64}
+# - {name: read_noise_adu, datatype: float64}
+# - {name: read_noise_err_adu, datatype: float64}
+# - {name: read_noise_e, datatype: float64}
+# - {name: overscan_rms_adu, datatype: float64}
+# - {name: n_pairs, datatype: int64}
+# - {name: n_bins, datatype: int64}
+# - {name: signal_min_adu, datatype: float64}
+# - {name: signal_max_adu, datatype: float64}
+# - {name: median_pair_scale, datatype: float64}
+# - {name: reduced_chi2, datatype: float64}
+# meta: !!omap
+# - {description: Veloce amplifier photon-transfer characterisation}
+# - source_files: [../../../observations/260703/ccd_1/03jul10035.fits, ../../../observations/260703/ccd_1/03jul10036.fits, ../../../observations/260703/ccd_1/03jul10037.fits,
+#     ../../../observations/260703/ccd_1/03jul10038.fits, ../../../observations/260703/ccd_1/03jul10039.fits, ../../../observations/260703/ccd_1/03jul10040.fits]
+# schema: astropy-2.0
+ccd readout_mode amplifier gain_e_per_adu gain_err_e_per_adu read_noise_adu read_noise_err_adu read_noise_e overscan_rms_adu n_pairs n_bins signal_min_adu signal_max_adu median_pair_scale reduced_chi2
+1 4Amp q1 0.9621821535312188 0.0020675942191366817 3.423529987757645 0.6782890828466493 3.294059456299358 2.9652 3 90 1019.6993937352644 18967.76876936233 0.9950016480072943 2.7124326158345866
+1 4Amp q2 0.9699875255994977 0.0024337699138859124 8.040207087699031e-10 3058372797.213416 7.798900578304727e-10 2.9652 3 90 1011.4178115208483 18067.094829428104 0.9950172938686641 2.8437115950297303
+1 4Amp q3 1.0125148034002411 0.008819237693089772 5.658621082274461 1.341962588860537 5.729437612635586 2.9652 3 90 1010.4088257671824 6482.907655286259 0.9947662247034194 3.2158038157765354
+1 4Amp q4 0.984520616617604 0.007576501633851135 1.4457067145265388 4.816543149535525 1.4233280660338783 2.9652 3 90 1017.7138554969395 6182.81590370955 0.994620143647519 2.9948227957253146
