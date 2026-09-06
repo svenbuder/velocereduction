@@ -11,6 +11,8 @@ from .models import DetectorFrame
 
 logger = logging.getLogger(__name__)
 OVERSCAN_BORDER = 32
+RAW_16BIT_MAX = np.iinfo(np.uint16).max
+MASK_SATURATED = np.uint16(1 << 0)
 DEFAULT_GAIN_FILE = Path(__file__).resolve().parent / "veloce_reference_data" / "detector_gains.ecsv"
 
 
@@ -21,21 +23,77 @@ def _robust_sigma(values):
     return np.nan if values.size == 0 else 1.4826 * np.nanmedian(np.abs(values - np.nanmedian(values)))
 
 
+def _overscan_strips(block, border=OVERSCAN_BORDER):
+    """
+    Return the four non-overlapping overscan strips surrounding an amplifier.
+
+    Corners are excluded so every overscan pixel is used once. Left/right strips
+    sample each science row; top/bottom strips sample each science column.
+    """
+    block = np.asarray(block, float)
+    if min(block.shape) <= 2 * border:
+        raise ValueError(f"Amplifier block {block.shape} is too small for a {border}-pixel overscan border")
+    return (
+        block[border:-border, :border],
+        block[border:-border, -border:],
+        block[:border, border:-border],
+        block[-border:, border:-border],
+    )
+
+
+def _overscan_statistics(block, border=OVERSCAN_BORDER, clip_sigma=5.0):
+    """
+    Measure amplifier bias level and read noise from its overscan border.
+
+    The bias level is the median of all overscan strips. For the read noise,
+    row medians are removed from the left/right strips and column medians from
+    the top/bottom strips. A global MAD estimate only defines a robust outlier
+    clip; the final read noise is sqrt(mean(local sample variances)).
+    """
+    left, right, top, bottom = _overscan_strips(block, border)
+    overscan = np.concatenate([x.ravel() for x in (left, right, top, bottom)])
+    finite = overscan[np.isfinite(overscan)]
+    bias = float(np.median(finite)) if finite.size else np.nan
+
+    local = []
+    residuals = []
+    for strip, axis in ((left, 1), (right, 1), (top, 0), (bottom, 0)):
+        centre = np.nanmedian(strip, axis=axis, keepdims=True)
+        residual = strip - centre
+        residuals.append(residual.ravel())
+        local.extend(np.moveaxis(residual, axis, -1).reshape(-1, residual.shape[axis]))
+
+    residuals = np.concatenate(residuals)
+    residuals = residuals[np.isfinite(residuals)]
+    if residuals.size < 2:
+        return bias, np.nan
+
+    robust = _robust_sigma(residuals)
+    variances = []
+    for values in local:
+        values = np.asarray(values, float)
+        good = np.isfinite(values)
+        if np.isfinite(robust) and robust > 0:
+            good &= np.abs(values) < clip_sigma * robust
+        if good.sum() >= 2:
+            variances.append(np.var(values[good], ddof=1))
+
+    read_noise = float(np.sqrt(np.mean(variances))) if variances else np.nan
+    return bias, read_noise
+
+
 def _amplifier(block, border=OVERSCAN_BORDER):
     """
-    Overscan-subtract one raw amplifier block and return its science pixels.
-    
-    The amplifier is assumed to have a 32-pixel overscan border on all four sides;
-    this border is removed after its median and robust RMS are measured.
-    Adjacent 32-pixel borders therefore form the 64-pixel central overscan bands in the full raw detector.
-    """
-    mask = np.zeros(block.shape, bool)
-    mask[:border] = mask[-border:] = True
-    mask[:, :border] = mask[:, -border:] = True
-    overscan = np.asarray(block, float)[mask]
-    median, rms = float(np.nanmedian(overscan)), _robust_sigma(overscan)
-    return np.asarray(block[border:-border, border:-border], float) - median, median, float(rms)
+    Overscan-subtract one amplifier and return science pixels, bias, and read noise.
 
+    Each amplifier has a 32-pixel overscan border on every edge. The science
+    region is corrected by one robust amplifier bias level; read noise is
+    measured from locally de-trended overscan rows/columns, not from the global
+    scatter of the complete border.
+    """
+    median, rms = _overscan_statistics(block, border)
+    science = np.asarray(block[border:-border, border:-border], float) - median
+    return science, median, rms
 
 def _raw_amplifier_blocks(raw):
     """
@@ -46,12 +104,43 @@ def _raw_amplifier_blocks(raw):
     """
     if raw.shape == (4240, 4224):
         return {
-            "q2": raw[:2120, :2112], "q1": raw[2120:, :2112],
+            "q1": raw[:2120, :2112], "q2": raw[2120:, :2112],
             "q3": raw[:2120, 2112:], "q4": raw[2120:, 2112:],
         }, "4Amp"
     if raw.shape == (4176, 4224):
         return {"q1": raw[:, :2112], "q2": raw[:, 2112:]}, "2Amp"
     raise ValueError(f"Unexpected Veloce raw CCD shape: {raw.shape}")
+
+
+def _reassemble_amplifiers(result, readout):
+    """Reassemble trimmed amplifier arrays in the same physical orientation as the science CCD."""
+    if readout == "4Amp":
+        return np.hstack((
+            np.vstack((result["q1"], result["q2"])),
+            np.vstack((result["q3"], result["q4"])),
+        ))
+    if readout == "2Amp":
+        return np.hstack((result["q1"], result["q2"]))
+    raise ValueError(f"Unknown readout mode: {readout}")
+
+
+def quality_mask_from_raw(raw, border=OVERSCAN_BORDER, saturation_level=RAW_16BIT_MAX):
+    """
+    Build the detector quality bitmask from raw pixels before overscan subtraction.
+
+    Bit `MASK_SATURATED` is set where a science pixel reaches the 16-bit ceiling
+    (65535 by default). The mask is uint16 so additional quality bits can be
+    added later without changing the data model; zero always means unflagged.
+    """
+    blocks, readout = _raw_amplifier_blocks(np.asarray(raw))
+    masks = {}
+    for amp, block in blocks.items():
+        science = np.asarray(block[border:-border, border:-border])
+        mask = np.zeros(science.shape, dtype=np.uint16)
+        saturated = np.isfinite(science) & (science >= saturation_level)
+        mask[saturated] |= MASK_SATURATED
+        masks[amp] = mask
+    return _reassemble_amplifiers(masks, readout)
 
 
 def subtract_overscan(raw):
@@ -66,10 +155,7 @@ def subtract_overscan(raw):
     for amp, block in blocks.items():
         result[amp], medians[amp], rms[amp] = _amplifier(block)
 
-    if readout == "4Amp":
-        image = np.hstack((np.vstack((result["q2"], result["q1"])), np.vstack((result["q3"], result["q4"]))))
-    else:
-        image = np.hstack((result["q1"], result["q2"]))
+    image = _reassemble_amplifiers(result, readout)
     return image.astype(np.float32), medians, rms, readout
 
 
@@ -84,8 +170,8 @@ def amplifier_slices(shape, readout_mode):
     if readout_mode == "4Amp":
         nx2, ny2 = nx // 2, ny // 2
         return {
-            "q2": (slice(0, nx2), slice(0, ny2)),
-            "q1": (slice(nx2, nx), slice(0, ny2)),
+            "q1": (slice(0, nx2), slice(0, ny2)),
+            "q2": (slice(nx2, nx), slice(0, ny2)),
             "q3": (slice(0, nx2), slice(ny2, ny)),
             "q4": (slice(nx2, nx), slice(ny2, ny)),
         }
@@ -141,28 +227,37 @@ def variance_image(image, overscan_rms, ccd, readout_mode, gains=None, include_p
 
 def preprocess_image(filename, ccd, config=None, gains=None):
     """
-    Read one raw CCD exposure, subtract overscan, and construct its variance image.
-    
-    Negative overscan-subtracted counts are retained (not clipped);
-    only the photon-noise term clips negative counts to zero.
-    Returns a `DetectorFrame` containing image, variance, header, readout mode, and overscan statistics.
+    Read one raw exposure, overscan-correct it, and build variance and quality mask.
+
+    Saturation is identified from raw science pixels before bias subtraction.
+    Flagged pixels retain their measured counts but receive infinite variance,
+    so downstream variance-weighted/summed extraction excludes them naturally.
     """
     with fits.open(filename, memmap=False) as hdul:
-        raw = np.asarray(hdul[0].data, float)
+        raw = np.asarray(hdul[0].data)
         header = hdul[0].header.copy()
+
+    quality_mask = quality_mask_from_raw(raw)
     image, medians, rms, readout = subtract_overscan(raw)
     include_poisson = True if config is None else config.use_poisson_variance
     if gains is None and include_poisson:
         gain_file = None if config is None else config.gain_file
         gains = load_detector_gains(gain_file)
-    variance = variance_image(image, rms, ccd, readout, gains=gains, include_poisson=include_poisson)
-    logger.debug(
-        "CCD%s %s: readout=%s; overscan RMS [%s] ADU; Poisson variance=%s",
-        ccd, Path(filename).name, readout,
-        ", ".join(f"{amp}={rms[amp]:.2f}" for amp in sorted(rms)), include_poisson,
-    )
-    return DetectorFrame(image, variance, header, str(ccd), readout, medians, rms)
 
+    variance = variance_image(image, rms, ccd, readout, gains=gains, include_poisson=include_poisson)
+    variance[quality_mask != 0] = np.inf
+
+    n_saturated = int(np.count_nonzero(quality_mask & MASK_SATURATED))
+    logger.debug(
+        "CCD%s %s: readout=%s; overscan RMS [%s] ADU; Poisson variance=%s; saturated=%d",
+        ccd, Path(filename).name, readout,
+        ", ".join(f"{amp}={rms[amp]:.2f}" for amp in sorted(rms)),
+        include_poisson, n_saturated,
+    )
+    if n_saturated:
+        logger.warning("CCD%s %s: %d science pixels reached the 16-bit maximum", ccd, Path(filename).name, n_saturated)
+
+    return DetectorFrame(image, variance, header, str(ccd), readout, medians, rms, quality_mask)
 
 def apply_response(image, variance, response):
     """
@@ -191,7 +286,15 @@ def _read_amplifiers(filename):
     amplifiers = {}
     for amp, block in blocks.items():
         image, median, rms = _amplifier(block)
-        amplifiers[amp] = {"image": image, "overscan_median": median, "overscan_rms": rms}
+        raw_science = np.asarray(block[OVERSCAN_BORDER:-OVERSCAN_BORDER, OVERSCAN_BORDER:-OVERSCAN_BORDER])
+        quality_mask = np.zeros(raw_science.shape, dtype=np.uint16)
+        quality_mask[np.isfinite(raw_science) & (raw_science >= RAW_16BIT_MAX)] |= MASK_SATURATED
+        image = image.copy()
+        image[quality_mask != 0] = np.nan
+        amplifiers[amp] = {
+            "image": image, "overscan_median": median, "overscan_rms": rms,
+            "quality_mask": quality_mask,
+        }
     return {
         "filename": Path(filename), "readout_mode": readout,
         "exptime": float(header.get("EXPTIME", np.nan)),
@@ -276,7 +379,7 @@ def _pair_binned_statistics(image1, image2, n_bins=30, signal_range=(1000, 50000
     return rows
 
 
-def _fit_gain(points):
+def _fit_gain(points, overscan_rms):
     """
     Fit amplifier gain and read noise to binned Flat-pair statistics.
     
@@ -289,14 +392,13 @@ def _fit_gain(points):
     n_pixels = np.array([p["n_pixels"] for p in points], float)
     design = np.column_stack((signal * (1 + ratio), 1 + ratio ** 2))
     uncertainty = np.maximum(variance * np.sqrt(2 / np.maximum(n_pixels - 1, 1)), np.nanmedian(variance) * 1e-4)
-    initial, *_ = np.linalg.lstsq(design, variance, rcond=None)
-    initial = np.maximum(initial, [1e-8, 0])
+    initial = [1.0, overscan_rms]
     residual = lambda p: (design @ p - variance) / uncertainty
-    robust = least_squares(residual, initial, bounds=([1e-8, 0], [np.inf, np.inf]), loss="soft_l1")
+    robust = least_squares(residual, initial, bounds=([0.5, 0.1*overscan_rms], [1.5, 4*overscan_rms]), loss="soft_l1")
     keep = np.abs(residual(robust.x)) < 5
     if keep.sum() < 4:
         keep[:] = True
-    final = least_squares(lambda p: residual(p)[keep], robust.x, bounds=([1e-8, 0], [np.inf, np.inf]))
+    final = least_squares(lambda p: residual(p)[keep], robust.x, bounds=([0.5, 0.1*overscan_rms], [1.5, 4*overscan_rms]))
     inverse_gain, read_noise2 = final.x
     gain, read_noise = 1 / inverse_gain, np.sqrt(read_noise2)
     dof = max(keep.sum() - 2, 1)
@@ -341,17 +443,18 @@ def characterise_detector_gain(flat_files, ccd, output_file=None, n_bins=30, sig
     for (readout, amp), data in sorted(points.items()):
         if len(data) < 4:
             continue
-        fit = _fit_gain(data)
+        overscan_rms = float(np.nanmedian(overscan[(readout, amp)]))
+        fit = _fit_gain(data, overscan_rms)
         signal = np.array([p["signal_adu"] for p in data])
         ratio = np.array([p["pair_scale"] for p in data])
         rows.append({
             "ccd": str(ccd), "readout_mode": readout, "amplifier": amp,
-            "gain_e_per_adu": fit["gain_e_per_adu"], "gain_err_e_per_adu": fit["gain_err_e_per_adu"],
-            "read_noise_adu": fit["read_noise_adu"], "read_noise_err_adu": fit["read_noise_err_adu"],
-            "read_noise_e": fit["read_noise_e"], "overscan_rms_adu": float(np.nanmedian(overscan[(readout, amp)])),
+            "gain_e_per_adu": np.round(fit["gain_e_per_adu"],4), "gain_err_e_per_adu": np.round(fit["gain_err_e_per_adu"],4),
+            "read_noise_adu": np.round(fit["read_noise_adu"],1), "read_noise_err_adu": np.round(fit["read_noise_err_adu"],1),
+            "read_noise_e": np.round(fit["read_noise_e"],1), "overscan_rms_adu": np.round(overscan_rms,1),
             "n_pairs": n_pairs[(readout, amp)], "n_bins": len(data),
-            "signal_min_adu": float(signal.min()), "signal_max_adu": float(signal.max()),
-            "median_pair_scale": float(np.nanmedian(ratio)), "reduced_chi2": fit["reduced_chi2"],
+            "signal_min_adu": int(signal.min()), "signal_max_adu": int(signal.max()),
+            "median_pair_scale": np.round(float(np.nanmedian(ratio)), 4), "reduced_chi2": np.round(fit["reduced_chi2"], 1),
         })
         diagnostics[(readout, amp)] = {
             "signal_adu": signal,
@@ -370,7 +473,7 @@ def characterise_detector_gain(flat_files, ccd, output_file=None, n_bins=30, sig
     return table, diagnostics
 
 
-def plot_gain_characterisation(diagnostics, ccd, output_directory=None):
+def plot_gain_characterisation(diagnostics, ccd, date, texp, files, output_directory=None):
     """Plot the photon-transfer measurements and fitted relation for each characterised amplifier, optionally saving PNG diagnostics."""
     import matplotlib.pyplot as plt
     output_directory = Path(output_directory) if output_directory else None
@@ -381,13 +484,13 @@ def plot_gain_characterisation(diagnostics, ccd, output_directory=None):
         order = np.argsort(d["signal_adu"])
         scale = 1 + d["pair_scale"]
         fig, ax = plt.subplots(figsize=(6, 4))
-        ax.plot(d["signal_adu"], d["variance_difference_adu2"] / scale, ".", label="Flat pairs")
-        ax.plot(d["signal_adu"][order], d["model_variance_difference_adu2"][order] / scale[order], label="fit")
+        ax.plot(d["signal_adu"], d["variance_difference_adu2"] / scale, ".", label="Flat pairs (runs "+str(files[0])+'-'+str(files[-1])+")")
+        ax.plot(d["signal_adu"][order], d["model_variance_difference_adu2"][order] / scale[order], label="Fit: "+rf"gain $g="+"{:.4f}".format(d["gain_e_per_adu"])+r" \pm "+f"{d['gain_err_e_per_adu']:.4f}"+r"\,\mathrm{{e^-\,ADU^{-1}}}$"+",\n"+rf"read noise $\sigma_\mathrm{{read}}="+f"{d['read_noise_adu']:.1f}"+r" \pm "+f"{d['read_noise_err_adu']:.1f}"+r"\,\mathrm{{ADU}}$")
         ax.set(xlabel="Mean signal / ADU", ylabel="Difference variance / ADU$^2$",
-               title=f"CCD{ccd} {readout} {amp}: {d['gain_e_per_adu']:.3f} e-/ADU")
-        ax.legend()
+               title=f"CCD{ccd} {readout} Region {amp} {texp}s")
+        ax.legend(loc='upper left')
         figures.append(fig)
         if output_directory:
-            fig.savefig(output_directory / f"gain_ccd{ccd}_{readout}_{amp}.png", dpi=150, bbox_inches="tight")
+            fig.savefig(output_directory / f"gain_ccd{ccd}_{readout}_{amp}_{texp}s.png", dpi=150, bbox_inches="tight")
             plt.close(fig)
     return figures
