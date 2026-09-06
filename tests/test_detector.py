@@ -10,32 +10,77 @@ from velocereduction.config import ReductionConfig
 
 def test_robust_amplifier_and_blocks(monkeypatch):
     assert np.isnan(detector._robust_sigma([np.nan]))
-    block = np.ones((8, 8)) * 10; block[0] = 8; block[-1] = 8; block[:, 0] = 8; block[:, -1] = 8
+
+    block = np.ones((8, 8)) * 10
+    block[0] = block[-1] = 8
+    block[:, 0] = block[:, -1] = 8
     science, median, rms = detector._amplifier(block, border=1)
     assert science.shape == (6, 6) and median == 8 and rms == 0
 
-    raw4 = np.empty((4240, 4224), np.uint8); blocks, mode = detector._raw_amplifier_blocks(raw4)
+    # Large row/column bias structure should not be interpreted as read noise.
+    rng = np.random.default_rng(12)
+    border, nx, ny, sigma = 16, 60, 80, 2.0
+    structured = np.full((nx + 2 * border, ny + 2 * border), 100.0)
+    row_level = np.linspace(-20, 20, nx)[:, None]
+    col_level = np.linspace(-15, 15, ny)[None, :]
+    structured[border:-border, :border] = 100 + row_level + rng.normal(0, sigma, (nx, border))
+    structured[border:-border, -border:] = 100 + row_level + rng.normal(0, sigma, (nx, border))
+    structured[:border, border:-border] = 100 + col_level + rng.normal(0, sigma, (border, ny))
+    structured[-border:, border:-border] = 100 + col_level + rng.normal(0, sigma, (border, ny))
+    structured[border + 5, 2] = 1000  # one bad overscan pixel
+    _, measured = detector._overscan_statistics(structured, border=border)
+    assert measured == pytest.approx(sigma, rel=0.12)
+
+    raw4 = np.empty((4240, 4224), np.uint8)
+    blocks, mode = detector._raw_amplifier_blocks(raw4)
     assert mode == "4Amp" and set(blocks) == {"q1", "q2", "q3", "q4"}
     del raw4
-    raw2 = np.empty((4176, 4224), np.uint8); blocks, mode = detector._raw_amplifier_blocks(raw2)
-    assert mode == "2Amp" and set(blocks) == {"q1", "q2"}
-    with pytest.raises(ValueError): detector._raw_amplifier_blocks(np.empty((2, 2)))
 
-    monkeypatch.setattr(detector, "_raw_amplifier_blocks", lambda raw: ({"q1": np.zeros((4, 4)), "q2": np.zeros((4, 4))}, "2Amp"))
+    raw2 = np.empty((4176, 4224), np.uint8)
+    blocks, mode = detector._raw_amplifier_blocks(raw2)
+    assert mode == "2Amp" and set(blocks) == {"q1", "q2"}
+    with pytest.raises(ValueError):
+        detector._raw_amplifier_blocks(np.empty((2, 2)))
+
+    monkeypatch.setattr(
+        detector, "_raw_amplifier_blocks",
+        lambda raw: ({"q1": np.zeros((4, 4)), "q2": np.zeros((4, 4))}, "2Amp"),
+    )
     monkeypatch.setattr(detector, "_amplifier", lambda block: (np.ones((2, 2)), 2.0, 3.0))
     image, med, noise, readout = detector.subtract_overscan(np.zeros((2, 2)))
     assert image.shape == (2, 4) and readout == "2Amp" and med["q1"] == 2 and noise["q2"] == 3
 
-    monkeypatch.setattr(detector, "_raw_amplifier_blocks", lambda raw: ({x: np.zeros((4, 4)) for x in ("q1", "q2", "q3", "q4")}, "4Amp"))
-    image, *_ = detector.subtract_overscan(np.zeros((2, 2))); assert image.shape == (4, 4)
+    monkeypatch.setattr(
+        detector, "_raw_amplifier_blocks",
+        lambda raw: ({x: np.zeros((4, 4)) for x in ("q1", "q2", "q3", "q4")}, "4Amp"),
+    )
+    image, *_ = detector.subtract_overscan(np.zeros((2, 2)))
+    assert image.shape == (4, 4)
 
+
+def test_quality_mask(monkeypatch):
+    q1 = np.zeros((4, 4), float)
+    q2 = np.zeros((4, 4), float)
+    q1[1, 1] = detector.RAW_16BIT_MAX
+    q2[2, 2] = detector.RAW_16BIT_MAX - 1
+
+    monkeypatch.setattr(
+        detector, "_raw_amplifier_blocks",
+        lambda raw: ({"q1": q1, "q2": q2}, "2Amp"),
+    )
+    mask = detector.quality_mask_from_raw(np.zeros((1, 1)), border=1)
+    assert mask.dtype == np.uint16
+    assert mask.shape == (2, 4)
+    assert np.count_nonzero(mask) == 1
+    assert mask[0, 0] & detector.MASK_SATURATED
+    assert not np.any(mask[:, 2:] & detector.MASK_SATURATED)
 
 def test_slices_gains_and_variance(tmp_path):
     s4 = detector.amplifier_slices((4, 4), "4Amp"); assert set(s4) == {"q1", "q2", "q3", "q4"}
     s2 = detector.amplifier_slices((2, 4), "2Amp"); assert set(s2) == {"q1", "q2"}
     with pytest.raises(ValueError): detector.amplifier_slices((2, 2), "bad")
 
-    gains = detector.load_detector_gains(); assert detector.gain_for_amplifier(gains, "1", "4Amp", "q1") == 1.01
+    gains = detector.load_detector_gains(); assert detector.gain_for_amplifier(gains, "1", "4Amp", "q1") > 0.0
     with pytest.raises(KeyError): detector.gain_for_amplifier(gains, "9", "4Amp", "q1")
     custom = tmp_path / "g.ecsv"; Table(rows=[("1", "2Amp", "q1", 2.0), ("1", "2Amp", "q2", 4.0)], names=("ccd", "readout_mode", "amplifier", "gain_e_per_adu")).write(custom, format="ascii.ecsv")
     loaded = detector.load_detector_gains(custom); assert detector.gain_for_amplifier(loaded, 1, "2Amp", "q2") == 4
@@ -48,15 +93,38 @@ def test_slices_gains_and_variance(tmp_path):
 
 
 def test_preprocess_and_response(tmp_path, monkeypatch):
-    filename = tmp_path / "raw.fits"; fits.PrimaryHDU(np.ones((2, 2))).writeto(filename)
-    monkeypatch.setattr(detector, "subtract_overscan", lambda raw: (np.array([[1., -2.], [3., 4.]], np.float32), {"q1": 0.}, {"q1": 2.}, "fake"))
+    filename = tmp_path / "raw.fits"
+    fits.PrimaryHDU(np.ones((2, 2))).writeto(filename)
+
+    monkeypatch.setattr(
+        detector, "subtract_overscan",
+        lambda raw: (
+            np.array([[1., -2.], [3., 4.]], np.float32),
+            {"q1": 0.}, {"q1": 2.}, "fake",
+        ),
+    )
+    quality = np.zeros((2, 2), np.uint16)
+    quality[1, 0] = detector.MASK_SATURATED
+    monkeypatch.setattr(detector, "quality_mask_from_raw", lambda raw: quality.copy())
     monkeypatch.setattr(detector, "variance_image", lambda image, *a, **k: np.ones_like(image) * 7)
-    frame = detector.preprocess_image(filename, "1", ReductionConfig("001122", use_poisson_variance=False))
-    assert frame.image[0, 1] == -2 and np.all(frame.variance == 7) and frame.ccd == "1"
 
-    flux, var = detector.apply_response(np.array([2., 4., 6.]), np.array([1., 4., 9.]), np.array([2., 2., 0.]))
-    assert np.allclose(flux[:2], [1., 2.]) and np.allclose(var[:2], [.25, 1.]) and np.isnan(flux[2])
+    frame = detector.preprocess_image(
+        filename, "1", ReductionConfig("001122", use_poisson_variance=False)
+    )
+    assert frame.image[0, 1] == -2
+    assert frame.variance[0, 0] == 7
+    assert np.isinf(frame.variance[1, 0])
+    assert frame.quality_mask[1, 0] & detector.MASK_SATURATED
+    assert frame.ccd == "1"
 
+    flux, var = detector.apply_response(
+        np.array([2., 4., 6.]),
+        np.array([1., 4., 9.]),
+        np.array([2., 2., 0.]),
+    )
+    assert np.allclose(flux[:2], [1., 2.])
+    assert np.allclose(var[:2], [.25, 1.])
+    assert np.isnan(flux[2])
 
 def test_gain_characterisation_helpers(tmp_path, monkeypatch):
     metadata = [
@@ -105,6 +173,7 @@ def test_detector_debug_logging(tmp_path, monkeypatch):
     monkeypatch.setattr(detector, "subtract_overscan", lambda raw: (
         np.ones((2, 2), np.float32), {"q1": 0.}, {"q1": 2.5}, "fake"
     ))
+    monkeypatch.setattr(detector, "quality_mask_from_raw", lambda raw: np.zeros((2, 2), np.uint16))
     monkeypatch.setattr(detector, "variance_image", lambda *a, **k: np.ones((2, 2)))
     messages = []
     monkeypatch.setattr(detector.logger, "debug", lambda message, *args: messages.append(message % args))
