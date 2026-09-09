@@ -1,2677 +1,1168 @@
+import logging
 from dataclasses import dataclass
-import numpy as np
 
-from .utils import (
-    is_science_fibre,
-    is_sky_fibre,
+import numpy as np
+from astropy.io import fits
+from scipy.ndimage import gaussian_filter1d
+from scipy.optimize import least_squares
+from scipy.special import erf
+
+from velocereduction import detector, tramlines, utils
+from velocereduction.models import ExtractionResult, FibreGeometry
+
+logger = logging.getLogger(__name__)
+
+# Canonical Veloce slit geometry. Local utils.slit_order wins if present.
+SLIT_ORDER = getattr(utils, "slit_order", [
+    "ThXe", "S5", "S2", "Blank",
+    7, 18, 17, 6, 16, 15, 5, 14, 13, 1, 12, 11, 4, 10, 9, 3, 8, 19, 2,
+    "Blank", "S4", "S3", "S1", "LC",
+])
+FIBRE_COMPONENTS = tuple(
+    v for v in SLIT_ORDER
+    if isinstance(v, int) or (isinstance(v, str) and v.startswith("S"))
+)
+SCIENCE_COMPONENTS = tuple(v for v in FIBRE_COMPONENTS if isinstance(v, int))
+SKY_COMPONENTS = tuple(v for v in FIBRE_COMPONENTS if isinstance(v, str) and v.startswith("S"))
+CENTRAL_SLIT_INDEX = SLIT_ORDER.index(1)
+FIBRE_SLOTS = np.array(
+    [SLIT_ORDER.index(v) - CENTRAL_SLIT_INDEX for v in FIBRE_COMPONENTS],
+    dtype=float,
 )
 
 
-@dataclass
-class ExtractionResult:
+def aperture_weights(m, begin, end):
+    """Return fractional overlap of cross-dispersion pixels with an aperture.
+
+    Pixel ``m`` spans [m-0.5, m+0.5], so edge pixels can contribute fractions
+    between zero and one instead of being included/excluded as Boolean pixels.
     """
-    Detector-pixel-space spectral extraction for one echelle order.
+    m = np.asarray(m, dtype=float)
+    return np.clip(
+        np.minimum(m + 0.5, end) - np.maximum(m - 0.5, begin),
+        0.0, 1.0,
+    )
 
-    Axis convention
-    ---------------
-    axis 0 : dispersion pixel
-    axis 1 : extracted component
 
-    Examples
-    --------
-    summed mode:
-        flux.shape == (4112, 1)
-        components == ("Science",)
+def extract_apertures(order, variance, m, apertures):
+    """Extract one or more continuous apertures with variance propagation.
 
-    fibre mode:
-        flux.shape == (4112, 24)
-        components == (
-            "S5", "S2",
-            7, 18, 17, 6, 16, 15, 5, 14, 13, 1,
-            12, 11, 4, 10, 9, 3, 8, 19, 2,
-            "S4", "S3", "S1",
-        )
+    Flux uses ``sum(w * D)`` and variance uses ``sum(w**2 * V)``.  Pixels with
+    non-finite data or variance are ignored; arrays remain dispersion-first.
     """
+    order, variance = np.asarray(order, float), np.asarray(variance, float)
+    flux = np.full((order.shape[0], len(apertures)), np.nan)
+    var = np.full_like(flux, np.nan)
 
-    flux: np.ndarray
-    variance: np.ndarray
-    components: tuple
-    extraction_mode: str
-
-    def __post_init__(self):
-
-        self.flux = np.asarray(
-            self.flux,
-            dtype=float,
+    for j, (_, begin, end) in enumerate(apertures):
+        w = aperture_weights(m, float(begin), float(end))
+        good = np.isfinite(order) & np.isfinite(variance)
+        flux[:, j] = np.nansum(np.where(good, order * w[None, :], np.nan), axis=1)
+        var[:, j] = np.nansum(
+            np.where(good, variance * w[None, :] ** 2, np.nan),
+            axis=1,
         )
-
-        self.variance = np.asarray(
-            self.variance,
-            dtype=float,
-        )
-
-        if self.flux.ndim != 2:
-            raise ValueError(
-                "flux must have shape "
-                "(n_dispersion, n_components)"
-            )
-
-        if self.variance.shape != self.flux.shape:
-            raise ValueError(
-                "variance must have the same shape as flux"
-            )
-
-        if self.flux.shape[1] != len(self.components):
-            raise ValueError(
-                "Number of components does not match "
-                "second axis of flux"
-            )
-
-        if self.extraction_mode not in {
-            "summed",
-            "fibre",
-        }:
-            raise ValueError(
-                f"Unknown extraction mode: "
-                f"{self.extraction_mode}"
-            )
-
-    @property
-    def n_pixels(self):
-        return self.flux.shape[0]
-
-    @property
-    def n_components(self):
-        return self.flux.shape[1]
-
-    @property
-    def science_indices(self):
-
-        if self.extraction_mode == "summed":
-            return np.array(
-                [0],
-                dtype=int,
-            )
-
-        return np.array([
-            i
-            for i, component in enumerate(self.components)
-            if is_science_fibre(component)
-        ])
-
-    @property
-    def sky_indices(self):
-
-        if self.extraction_mode == "summed":
-            return np.array(
-                [],
-                dtype=int,
-            )
-
-        return np.array([
-            i
-            for i, component in enumerate(self.components)
-            if is_sky_fibre(component)
-        ])
-
-    @property
-    def science_flux(self):
-        return self.flux[
-            :,
-            self.science_indices
-        ]
-
-    @property
-    def science_variance(self):
-        return self.variance[
-            :,
-            self.science_indices
-        ]
-
-    @property
-    def sky_flux(self):
-        return self.flux[
-            :,
-            self.sky_indices
-        ]
-
-    @property
-    def sky_variance(self):
-        return self.variance[
-            :,
-            self.sky_indices
-        ]
-
-    def component_index(self, component):
-        """
-        Return the column corresponding to a named fibre/component.
-        """
-        return self.components.index(component)
-
-    def component_flux(self, component):
-
-        i = self.component_index(component)
-
-        return self.flux[:, i]
-
-    def component_variance(self, component):
-
-        i = self.component_index(component)
-
-        return self.variance[:, i]
-
-def extract_summed_order(
-    order_matrix,
-    variance_matrix,
-    science_begin,
-    science_end,
-):
-    """
-    Sum the Science aperture of one 4112 x N order matrix.
-
-    Parameters
-    ----------
-    order_matrix : ndarray
-        Shape (n_dispersion, n_crossdispersion).
-
-    variance_matrix : ndarray
-        Pixel variances with the same shape as order_matrix.
-
-    science_begin, science_end : float
-        Science aperture limits in pixels relative to the
-        central tramline pixel.
-
-    Returns
-    -------
-    ExtractionResult
-    """
-
-    order_matrix = np.asarray(
-        order_matrix,
-        dtype=float,
-    )
-
-    variance_matrix = np.asarray(
-        variance_matrix,
-        dtype=float,
-    )
-
-    if variance_matrix.shape != order_matrix.shape:
-        raise ValueError(
-            "variance_matrix must have the same shape "
-            "as order_matrix"
-        )
-
-    n_crossdispersion = order_matrix.shape[1]
-
-    half_window = (
-        n_crossdispersion - 1
-    ) // 2
-
-    m = np.arange(
-        n_crossdispersion
-    ) - half_window
-
-    science_mask = (
-        (m >= science_begin)
-        & (m <= science_end)
-    )
-
-    if not np.any(science_mask):
-        raise ValueError(
-            "Science aperture contains no pixels"
-        )
-
-    flux = np.nansum(
-        order_matrix[
-            :,
-            science_mask
-        ],
-        axis=1,
-    )
-
-    variance = np.nansum(
-        variance_matrix[
-            :,
-            science_mask
-        ],
-        axis=1,
-    )
 
     return ExtractionResult(
-        flux=flux[:, None],
-        variance=variance[:, None],
-        components=("Science",),
+        flux=flux,
+        variance=var,
+        components=tuple(a[0] for a in apertures),
         extraction_mode="summed",
     )
 
-def extract_order(
-    order_matrix,
-    variance_matrix,
-    extraction_mode,
-    *,
-    science_begin=None,
-    science_end=None,
-    fibre_geometry=None,
+
+def extract_summed_order(order, variance, row, regions=("Science", "Sky_1", "Sky_2")):
+    """Extract the robust summed Science/Sky apertures from one order matrix."""
+    half = int(row["extraction_half_window"])
+    m = np.arange(-half, half + 1, dtype=float)
+    apertures = [
+        (r, row[f"{r}_begin"], row[f"{r}_end"])
+        for r in regions
+        if np.isfinite(row[f"{r}_begin"]) and np.isfinite(row[f"{r}_end"])
+    ]
+    return extract_apertures(order, variance, m, apertures)
+
+
+def _integrated_gaussians(m, centres, sigma, normalise=True):
+    """Evaluate Gaussian fibre profiles integrated over detector-pixel areas.
+
+    Returns a matrix with shape (cross-dispersion pixel, fibre).  Integrating
+    across pixel boundaries is important because the Veloce fibre profiles are
+    only sampled by a few detector pixels.
+    """
+    m = np.asarray(m, float)[:, None]
+    centres = np.asarray(centres, float)[None, :]
+    s = np.sqrt(2.0) * float(sigma)
+    p = 0.5 * (
+        erf((m + 0.5 - centres) / s)
+        - erf((m - 0.5 - centres) / s)
+    )
+    if normalise:
+        norm = p.sum(axis=0)
+        p[:, norm > 0] /= norm[norm > 0]
+    return p
+
+
+def _gaussian_model(m, background, amplitudes, centres, sigma):
+    """Return a constant background plus the sum of pixel-integrated fibres."""
+    return background + _integrated_gaussians(m, centres, sigma) @ amplitudes
+
+
+def _fit_regular_profile(
+    profile,
+    m,
+    slots,
+    separation0=2.4,
+    sigma0=0.85,
+    label=None,
 ):
+    """Fit a regular fibre grid to a collapsed cross-dispersion Flat profile.
+
+    This first-pass fit solves for background, bundle centre, common separation,
+    common Gaussian sigma, and one non-negative amplitude per illuminated fibre.
+    It provides the starting geometry for the more flexible fibre-centre fit.
     """
-    Extract one order according to the selected extraction mode.
-    """
+    background0 = float(np.nanmedian(np.r_[profile[:8], profile[-8:]]))
+    centres0 = separation0 * slots
+    profile_scale = np.nanmax(profile) - background0
+    amplitudes0 = np.maximum(
+        np.interp(centres0, m, profile) - background0,
+        1e-3 * profile_scale,
+    )
+    p0 = np.r_[background0, 0.0, separation0, sigma0, amplitudes0]
 
-    if extraction_mode == "summed":
+    def residual(p):
+        centres = p[1] + p[2] * slots
+        return _gaussian_model(m, p[0], p[4:], centres, p[3]) - profile
 
-        if science_begin is None or science_end is None:
-            raise ValueError(
-                "science_begin and science_end are required "
-                "for summed extraction"
-            )
-
-        return extract_summed_order(
-            order_matrix=order_matrix,
-            variance_matrix=variance_matrix,
-            science_begin=science_begin,
-            science_end=science_end,
-        )
-
-    if extraction_mode == "fibre":
-
-        if fibre_geometry is None:
-            raise ValueError(
-                "fibre_geometry is required "
-                "for fibre extraction"
-            )
-
-        return extract_fibre_order(
-            order_matrix=order_matrix,
-            variance_matrix=variance_matrix,
-            fibre_geometry=fibre_geometry,
-        )
-
-    raise ValueError(
-        f"Unknown extraction mode: {extraction_mode}"
+    lower = np.r_[-np.inf, -1.5, 1.8, 0.3, np.zeros(len(slots))]
+    upper = np.r_[np.inf, 1.5, 3.0, 1.8, np.full(len(slots), np.inf)]
+    fit = least_squares(
+        residual, p0, bounds=(lower, upper), max_nfev=30000
     )
 
-# import sys
-# from pathlib import Path
-# import warnings
-
-# import numpy as np
-# from numpy.polynomial import Polynomial
-
-# import matplotlib.pyplot as plt
-# from matplotlib.colors import LogNorm
-
-# from scipy.optimize import curve_fit
-# from scipy.ndimage import median_filter, gaussian_filter1d
-# from scipy.signal import find_peaks
-
-# from . import config
-# from .utils import read_veloce_fits_image_and_metadata, match_month_to_date, polynomial_function, calculate_barycentric_velocity_correction, phase_correlation_shift, robust_sigma, shifted_coefficients
-
-# POLY_DEGREE = 4
-# N_COEFF = POLY_DEGREE + 1
+    logger.debug(
+        "%sregular fibre fit: initial d=%.3f sigma=%.3f -> "
+        "d=%.3f sigma=%.3f; cost=%.3g; nfev=%d; success=%s",
+        f"{label}: " if label else "",
+        separation0, sigma0, fit.x[2], fit.x[3],
+        fit.cost, fit.nfev, fit.success,
+    )
+    return fit
 
 
-# def substract_overscan(full_image, metadata, debug_overscan = False):
-#     """
-#     Subtracts the overscan from a given full astronomical image to correct for the CCD readout bias. This function 
-#     utilizes metadata to identify the overscan region and calculates its median value and RMS (Root Mean Square) 
-#     to adjust the image data accordingly. The corrected image is then trimmed to remove the overscan regions.
+def fit_collapsed_fibre_profile(
+    extracted_flat,
+    separation0=2.4,
+    sigma0=0.85,
+    maximum_centre_shift=0.4,
+    label=None,
+):
+    """Fit the mean fibre geometry from the Flat collapsed along dispersion.
 
-#     If the debug_overscan flag is set to True, debug plots showing the overscan region, the calculated median overscan,
-#     and its effect on the image before and after subtraction will be displayed for visual inspection.
+    A regular-grid fit supplies the initial separation and width, after which
+    individual fibre centres may move by ``maximum_centre_shift`` pixels.  The
+    resulting small fibre-specific offsets are then kept fixed in local fits.
+    """
+    profile = np.nanmedian(np.asarray(extracted_flat, float), axis=0)
+    m = np.arange(profile.size) - (profile.size - 1) / 2
+    first = _fit_regular_profile(
+        profile, m, FIBRE_SLOTS,
+        separation0=separation0, sigma0=sigma0, label=label,
+    )
 
-#     Parameters:
-#         full_image (ndarray):   A 2D numpy array representing the full CCD image including overscan regions.
-#         metadata (dict):        A dictionary containing metadata of the image, which should include keys for overscan 
-#                                 region coordinates and other necessary CCD characteristics.
-#         debug_overscan (bool):  A boolean flag that, when set to True, enables the display of debug plots.
+    background, x0, separation, sigma = first.x[:4]
+    amplitudes = first.x[4:]
+    regular_centres = x0 + separation * FIBRE_SLOTS
+    n = len(FIBRE_SLOTS)
+    p0 = np.r_[background, sigma, amplitudes, regular_centres]
 
-#     Returns:
-#         tuple: A tuple containing:
-#             - trimmed_image (ndarray):  The image after overscan subtraction, with overscan regions removed.
-#             - median_overscan (float):  The median value of the overscan region used for the correction.
-#             - overscan_rms (float):     The root mean square of the overscan region, indicating noise level.
-#             - readout_mode (str):       The readout mode of the CCD as extracted from the metadata, indicating how the 
-#                                         image data was read from the sensor.
-#     """
+    def residual(p):
+        amplitudes = p[2:2+n]
+        centres = p[2+n:]
+        return _gaussian_model(m, p[0], amplitudes, centres, p[1]) - profile
 
-#     # Identify overscan region and subtract overscan while reporting median overscan and overscan root-mean-square
-#     overscan_median = dict()
-#     overscan_rms = dict()
+    lower = np.r_[
+        -np.inf, 0.3, np.zeros(n),
+        regular_centres - maximum_centre_shift,
+    ]
+    upper = np.r_[
+        np.inf, 1.8, np.full(n, np.inf),
+        regular_centres + maximum_centre_shift,
+    ]
+    fit = least_squares(
+        residual, p0, bounds=(lower, upper), max_nfev=50000
+    )
+
+    centres = fit.x[2+n:]
+    separation, x0 = np.polyfit(FIBRE_SLOTS, centres, 1)
+    offsets = centres - (x0 + separation * FIBRE_SLOTS)
+
+    rms = float(np.sqrt(np.nanmean(residual(fit.x) ** 2)))
+    logger.debug(
+        "%scollapsed fibre profile: d=%.3f px; sigma=%.3f px; "
+        "centre=%.3f px; RMS=%.2f counts; max fibre offset=%.3f px",
+        f"{label}: " if label else "",
+        separation, fit.x[1], x0, rms,
+        float(np.nanmax(np.abs(offsets))),
+    )
+    return {
+        "profile": profile,
+        "m": m,
+        "background": fit.x[0],
+        "sigma": fit.x[1],
+        "amplitudes": fit.x[2:2+n],
+        "centres": centres,
+        "x0": x0,
+        "separation": separation,
+        "fibre_offsets": offsets,
+        "rms": rms,
+    }
+
+
+def _fit_flat_row(profile, m, trace_offset, collapsed):
+    """Fit local bundle centre, separation, and width at one dispersion sample.
+
+    Fibre-specific offsets measured from the collapsed profile remain fixed, so
+    local fits only track smooth changes of the whole fibre bundle.
+    """
+    slots, offsets = FIBRE_SLOTS, collapsed["fibre_offsets"]
+    n = len(slots)
+    background0 = float(np.nanmedian(np.r_[profile[:6], profile[-6:]]))
+    x00 = trace_offset + collapsed["x0"]
+    separation0, sigma0 = collapsed["separation"], collapsed["sigma"]
+    centres0 = x00 + separation0 * slots + offsets
+    profile_scale = np.nanmax(profile) - background0
+    amplitudes0 = np.maximum(
+        np.interp(centres0, m, profile) - background0,
+        1e-3 * profile_scale,
+    )
+    p0 = np.r_[background0, x00, separation0, sigma0, amplitudes0]
+
+    def residual(p):
+        centres = p[1] + p[2] * slots + offsets
+        return _gaussian_model(m, p[0], p[4:], centres, p[3]) - profile
+
+    lower = np.r_[
+        -np.inf, x00 - 0.6, separation0 - 0.3,
+        max(0.3, sigma0 - 0.35), np.zeros(n),
+    ]
+    upper = np.r_[
+        np.inf, x00 + 0.6, separation0 + 0.3,
+        min(1.8, sigma0 + 0.35), np.full(n, np.inf),
+    ]
+    fit = least_squares(
+        residual, p0, bounds=(lower, upper), max_nfev=10000
+    )
+    return fit.x[1], fit.x[2], fit.x[3]
+
+
+def _robust_poly(x, y, x_all, degree=3, clip=4.0, iterations=4):
+    """Robustly interpolate sparse geometry samples with an iteratively clipped polynomial."""
+    good = np.isfinite(x) & np.isfinite(y)
+    if good.sum() == 0:
+        return np.full_like(x_all, np.nan, dtype=float)
+
+    degree = min(degree, max(0, good.sum() - 1))
+    if degree == 0:
+        return np.full_like(x_all, np.nanmedian(y[good]), dtype=float)
+
+    use = good.copy()
+    for _ in range(iterations):
+        coeff = np.polyfit(x[use], y[use], degree)
+        resid = y - np.polyval(coeff, x)
+        centre = np.nanmedian(resid[use])
+        sigma = 1.4826 * np.nanmedian(np.abs(resid[use] - centre))
+        if not np.isfinite(sigma) or sigma == 0:
+            break
+        new_use = good & (np.abs(resid - centre) < clip * sigma)
+        if new_use.sum() <= degree:
+            break
+        use = new_use
+
+    return np.polyval(np.polyfit(x[use], y[use], degree), x_all)
+
+
+def fit_fibre_geometry(
+    extracted_flat,
+    trace_offset,
+    sample_step=16,
+    sample_half_width=4,
+    polynomial_degree=3,
+    separation0=None,
+    sigma0=None,
+    label=None,
+):
+    """Fit smoothly varying fibre separation, width, and bundle position."""
+
+    if separation0 is None or sigma0 is None:
+        if label is not None and "ccd_1_" in label:
+            default_separation = 2.40
+            default_sigma = 1.20
+        elif label is not None and "ccd_2_" in label:
+            default_separation = 2.35
+            default_sigma = 0.85
+        elif label is not None and "ccd_3_" in label:
+            default_separation = 2.10
+            default_sigma = 0.70
+        else:
+            default_separation = 2.20
+            default_sigma = 0.8
+
+        if separation0 is None:
+            separation0 = default_separation
+        if sigma0 is None:
+            sigma0 = default_sigma
+
+    logger.debug(
+        "%s fibre geometry initial guess: separation=%.3f px, sigma=%.3f px",
+        label or "order",
+        separation0,
+        sigma0,
+    )
+
+    extracted_flat = np.asarray(extracted_flat, float)
+    trace_offset = np.asarray(trace_offset, float)
+
+    collapsed = fit_collapsed_fibre_profile(
+        extracted_flat,
+        separation0=separation0,
+        sigma0=sigma0,
+        label=label,
+    )
+
+    nx, nm = extracted_flat.shape
+    m = np.arange(nm) - (nm - 1) / 2
+    sampled_x = np.arange(
+        sample_half_width, nx - sample_half_width, sample_step, dtype=int
+    )
+    x0s = np.full(sampled_x.size, np.nan)
+    seps = np.full_like(x0s, np.nan)
+    sigmas = np.full_like(x0s, np.nan)
+
+    low_signal = 0
+    failed = 0
+    bound_like = 0
+    for j, x in enumerate(sampled_x):
+        # Median a short section along dispersion to improve S/N without
+        # allowing the geometry to vary appreciably within the sample.
+        profile = np.nanmedian(
+            extracted_flat[x-sample_half_width:x+sample_half_width+1],
+            axis=0,
+        )
+        edge = np.nanmedian(np.r_[profile[:6], profile[-6:]])
+        peak = np.nanmax(profile)
+        contrast = peak - edge
+        if (
+            not np.isfinite(contrast)
+            or contrast <= 0
+            or contrast / max(abs(peak), 1e-12) < 0.05
+        ):
+            continue
+        try:
+            x0s[j], seps[j], sigmas[j] = _fit_flat_row(
+                profile, m, trace_offset[x], collapsed
+            )
+            # A result very close to a local bound is useful debug information:
+            # it can identify an order trapped on an incorrect solution branch.
+            if (
+                abs(seps[j] - (collapsed["separation"] - 0.3)) < 0.01
+                or abs(seps[j] - (collapsed["separation"] + 0.3)) < 0.01
+                or abs(sigmas[j] - max(0.3, collapsed["sigma"] - 0.35)) < 0.01
+                or abs(sigmas[j] - min(1.8, collapsed["sigma"] + 0.35)) < 0.01
+            ):
+                bound_like += 1
+        except (ValueError, np.linalg.LinAlgError):
+            failed += 1
+            continue
+
+    bundle_samples = x0s - trace_offset[sampled_x]
+    x_all = np.arange(nx, dtype=float)
+    bundle = _robust_poly(
+        sampled_x, bundle_samples, x_all, polynomial_degree
+    )
+    separation = _robust_poly(
+        sampled_x, seps, x_all, polynomial_degree
+    )
+    sigma = _robust_poly(
+        sampled_x, sigmas, x_all, polynomial_degree
+    )
+
+    centres = (
+        (trace_offset + bundle)[:, None]
+        + separation[:, None] * FIBRE_SLOTS[None, :]
+        + collapsed["fibre_offsets"][None, :]
+    )
+
+    valid = np.isfinite(seps) & np.isfinite(sigmas)
+    if valid.any():
+        logger.debug(
+            "%sfibre geometry: local fits %d/%d successful "
+            "(low signal=%d, failed=%d, near bounds=%d); "
+            "d median=%.3f [%.3f, %.3f] px; "
+            "sigma median=%.3f [%.3f, %.3f] px",
+            f"{label}: " if label else "",
+            int(valid.sum()), len(sampled_x), low_signal, failed, bound_like,
+            float(np.nanmedian(seps[valid])),
+            float(np.nanpercentile(seps[valid], 16)),
+            float(np.nanpercentile(seps[valid], 84)),
+            float(np.nanmedian(sigmas[valid])),
+            float(np.nanpercentile(sigmas[valid], 16)),
+            float(np.nanpercentile(sigmas[valid], 84)),
+        )
+    else:
+        logger.warning("%sno usable local fibre-geometry fits", f"{label}: " if label else "")
+
+    return FibreGeometry(
+        FIBRE_COMPONENTS,
+        FIBRE_SLOTS.copy(),
+        centres,
+        sigma,
+        separation,
+        bundle,
+        collapsed["fibre_offsets"].copy(),
+        sampled_x,
+        sigmas,
+        seps,
+        bundle_samples,
+    )
+
+
+def extract_fibre_order(
+    order,
+    variance,
+    geometry,
+    fit_background=True,
+    return_covariance=False,
+    label=None,
+):
+    """Simultaneously deblend all illuminated fibres in one detector order.
+
+    At each dispersion pixel the Flat-derived geometry is held fixed and only
+    fibre amplitudes (plus an optional constant background) are solved by
+    weighted linear least squares.  This prevents noisy science data from
+    perturbing the fibre positions or widths.  The covariance matrix can be
+    retained because neighbouring deblended fibre amplitudes are correlated.
+    """
+    order, variance = np.asarray(order, float), np.asarray(variance, float)
+    nx, nm = order.shape
+    m = np.arange(nm) - (nm - 1) / 2
+    nf = len(geometry.components)
+
+    flux = np.full((nx, nf), np.nan)
+    var = np.full_like(flux, np.nan)
     
-#     if debug_overscan:
-#         plt.figure(figsize=(10,10))
-#         s = plt.imshow(full_image, vmin=975, vmax = 1025)
-#         plt.colorbar(s)
-#         if 'ipykernel' in sys.modules: plt.show()
-#         plt.close()
-
-#     if metadata['READOUT'] == '4Amp':
-
-#         # Initial dimensions: (4240, 4224)
-#         # Trimmed dimensions: (4112, 4096)
-
-#         # We report the median overscan
-#         # And we calculate a robust standard deviation, i.e.,
-#         # half the difference between 16th and 84th percentile
-
-#         overscan_size = 32
-
-#         # Lower-left Quadrant 1: 2120: and :2112
-#         quadrant1 = np.array(full_image[2120+32:-32,32:2112-32],dtype=int)
-#         overscan = np.zeros(np.shape(full_image),dtype=bool)
-#         overscan[2120:, :2112][:overscan_size, :] = True  # Top edge
-#         overscan[2120:, :2112][:, :overscan_size] = True  # Left edge
-#         overscan[2120:, :2112][-overscan_size:, :] = True  # Bottom edge
-#         overscan[2120:, :2112][:, -overscan_size:] = True  # Right edge
-#         overscan = full_image[overscan]
-
-#         if debug_overscan:
-#             plt.figure()
-#             plt.hist(overscan.flatten(),bins=np.arange(975,1050),label = 'q1', histtype='step', ls='dashed')
-
-#         overscan_median['q1'] = int(np.median(overscan))
-#         overscan_rms['q1'] = np.diff(np.percentile(overscan,q=[16,84]))/2
-#         quadrant1 = (quadrant1 - overscan_median['q1'])
-
-#         # Upper-left Quadrant 2: :2120 and :2112
-#         quadrant2 = np.array(full_image[32:2120-32,32:2112-32],dtype=int)
-#         overscan = np.zeros(np.shape(full_image),dtype=bool)
-#         overscan[:2120, :2112][:overscan_size, :] = True  # Top edge
-#         overscan[:2120, :2112][:, :overscan_size] = True  # Left edge
-#         overscan[:2120, :2112][-overscan_size:, :] = True  # Bottom edge
-#         overscan[:2120, :2112][:, -overscan_size:] = True  # Right edge
-#         overscan = full_image[overscan]
-
-#         if debug_overscan:
-#             plt.hist(overscan.flatten(),bins=np.arange(975,1050),label = 'q2', histtype='step', ls='dashed')
-        
-#         overscan_median['q2'] = int(np.median(overscan))
-#         overscan_rms['q2'] = np.diff(np.percentile(overscan,q=[16,84]))/2
-#         quadrant2 -= overscan_median['q2']
-
-#         # Upper-right Quadrant 3: :2120 and 2112:
-#         quadrant3 = np.array(full_image[32:2120-32,2112+32:-32],dtype=int)
-#         overscan = np.zeros(np.shape(full_image),dtype=bool)
-#         overscan[:2120, 2112:][:overscan_size, :] = True  # Top edge
-#         overscan[:2120, 2112:][:, :overscan_size] = True  # Left edge
-#         overscan[:2120, 2112:][-overscan_size:, :] = True  # Bottom edge
-#         overscan[:2120, 2112:][:, -overscan_size:] = True  # Right edge
-#         overscan = full_image[overscan]
-
-#         if debug_overscan:
-#             plt.hist(overscan.flatten(),bins=np.arange(975,1050),label = 'q3', histtype='step', ls='dashed')
-
-#         overscan_median['q3'] = int(np.median(overscan))
-#         overscan_rms['q3'] = np.diff(np.percentile(overscan,q=[16,84]))/2
-#         quadrant3 -= overscan_median['q3']
-
-#         # Lower-right Quadrant 4: 2120: and 2112:
-#         quadrant4 = np.array(full_image[2120+32:-32,2112+32:-32],dtype=int)
-#         overscan = np.zeros(np.shape(full_image),dtype=bool)
-#         overscan[2120:, 2112:][:overscan_size, :] = True  # Top edge
-#         overscan[2120:, 2112:][:, :overscan_size] = True  # Left edge
-#         overscan[2120:, 2112:][-overscan_size:, :] = True  # Bottom edge
-#         overscan[2120:, 2112:][:, -overscan_size:] = True  # Right edge
-#         overscan = full_image[overscan]
-
-#         overscan_median['q4'] = int(np.median(overscan))
-#         overscan_rms['q4'] = np.diff(np.percentile(overscan,q=[16,84]))/2
-#         quadrant4 -= overscan_median['q4']
-
-#         if debug_overscan:
-#             plt.hist(overscan.flatten(),bins=np.arange(975,1050),label = 'q4', histtype='step', ls='dashed')
-#             plt.legend()
-#             if 'ipykernel' in sys.modules: plt.show()
-#             plt.close()
-
-#         trimmed_image = np.hstack([np.vstack([quadrant2,quadrant1]),np.vstack([quadrant3,quadrant4])]).clip(min=0.0)
-
-#     if metadata['READOUT'] == '2Amp':
-
-#         # Initial dimensions: (4176, 4224)
-#         # Trimmed dimensions: (4112, 4096)
-
-#         overscan_size = 32
-
-#         # Quadrant 1: :2088 and :
-#         quadrant1 = np.array(full_image[32:-32,32:2112-32],dtype=int)
-#         overscan = np.zeros(np.shape(full_image),dtype=bool)
-#         overscan[:, :2112][:overscan_size, :] = True  # Top edge
-#         overscan[:, :2112][-overscan_size:, :] = True  # Bottom edge
-#         overscan[:, :2112][:, :overscan_size] = True  # Left edge
-#         overscan[:, :2112][:, -overscan_size:] = True  # Inner edge near split
-#         overscan = full_image[overscan]
-
-#         overscan_median['q1'] = int(np.median(overscan))
-#         overscan_rms['q1'] = np.diff(np.percentile(overscan,q=[16,84]))/2
-#         quadrant1 -= overscan_median['q1']
-
-#         # Quadrant 2: 2088:
-#         quadrant2 = np.array(full_image[32:-32,2112+32:-32],dtype=int)
-#         overscan = np.zeros(np.shape(full_image),dtype=bool)
-#         overscan[:, 2112:][:overscan_size, :] = True  # Top edge
-#         overscan[:, 2112:][-overscan_size:, :] = True  # Bottom edge
-#         overscan[:, 2112:][:, :overscan_size] = True  # Inner edge near split
-#         overscan[:, 2112:][:, -overscan_size:] = True  # Right edge
-#         overscan = full_image[overscan]
-
-#         overscan_median['q2'] = int(np.median(overscan))
-#         overscan_rms['q2'] = np.diff(np.percentile(overscan,q=[16,84]))/2
-#         quadrant2 = (quadrant2 - overscan_median['q2'])
-
-#         trimmed_image = np.hstack([quadrant1,quadrant2]).clip(min=0.0)
-
-#     if debug_overscan:
-#         plt.figure(figsize=(10,10))
-#         s = plt.imshow(trimmed_image, vmin = -5, vmax = 100)
-#         plt.colorbar(s)
-#         if 'ipykernel' in sys.modules: plt.show()
-#         plt.close()
-        
-#     if debug_overscan: print('      -->',np.shape(trimmed_image),overscan_median, overscan_rms, metadata['READOUT'])
-        
-#     return(trimmed_image, overscan_median, overscan_rms, metadata['READOUT'])
-
-# def read_image_noise_and_metadata(image_type, ccd1_runs, ccd2_runs, ccd3_runs, debug_overscan = False):
-#     """
-#     Reads in images from CCDs 1-3, performs overscan subtraction, and returns the processed images along with their noise and metadata.
-#     """
-
-#     # Extract Images from CCDs 1-3
-#     images = dict()
-#     images_noise = dict()
-#     images_metadata = dict()
-
-#     # Read in, overscan subtract and append images to array
-#     for ccd in [1,2,3]:
-        
-#         images['ccd_'+str(ccd)] = []
-#         images_noise['ccd_'+str(ccd)] = []
-#         if ccd == 1: runs = ccd1_runs
-#         if ccd == 2: runs = ccd2_runs
-#         if ccd == 3: runs = ccd3_runs
-
-#         for run in runs:
-
-#             # There is not LC flux in CCD1, so we create mock ones with unit flux.
-#             if (image_type == 'SimLC') & (ccd == 1):
-#                 trimmed_image = np.ones((4112,4096),dtype=float)
-#                 os_median = {'q1':0,'q2':0}
-#                 os_rms = {'q1':0,'q2':0}
-#                 readout_mode = 'None'
-#             else:
-#                 full_image, metadata = read_veloce_fits_image_and_metadata(config.working_directory+'observations/'+config.date+'/ccd_'+str(ccd)+'/'+config.date[-2:]+match_month_to_date(config.date)+str(ccd)+run+'.fits')
-#                 trimmed_image, os_median, os_rms, readout_mode = substract_overscan(full_image, metadata, debug_overscan)
-
-#             # Add check if CURE mirror folded in: We expect strong signals for Flat and ThXe.
-#             use_this_image = True
-#             if image_type == 'Flat':
-#                 # Residual from implementing CURE mirror monitoring
-#                 #ax.hist(trimmed_image.flatten(),bins = np.linspace(0,65535,100), histtype='step', ls='dashed', label = 'Flat '+str(run))
-#                 nanmed = np.nanpercentile(trimmed_image,99)
-#                 expectation = 5000
-#                 if nanmed < expectation:
-#                     print('  --> Flat image '+str(run)+' for CCD '+str(ccd)+' has not enough signal in 99th percentile ('+str(nanmed)+'<'+str(expectation)+'). Ignoring. Was CURE mirror maybe not folded in?')
-#                     use_this_image = False
-        
-#             if use_this_image:
-#                 images['ccd_'+str(ccd)].append(trimmed_image)
-#             elif (run == runs[-1]) & len(images['ccd_'+str(ccd)]) == 0:
-#                 print('  --> No good Flat or ThXe available for CCD '+str(ccd)+'. Be careful!')
-#                 images['ccd_'+str(ccd)].append(trimmed_image)
-
-#         try:
-#             images_metadata['readout_mode'] = readout_mode
-#             images_metadata['ccd_'+str(ccd)+'_rms'] = os_rms
-#         except:
-#             pass
-
-#     return(images, images_noise, images_metadata)
-
-# def estimate_detector_shifts(date, calibration_runs, max_deviation_from_reference=0.5):
-#     """
-#     Estimate pixel shifts in x and y directions with respect to reference frames (from 001122).
-
-#     The following reference frames are used:
-#     - CCD1: SimTh_180.0
-#     - CCD2: SimTh_60.0 and SimLC
-#     - CCD3: SimTh_15.0 and SimLC
-
-#     Neglecting FibTh frames, because while SimTh and SimLC shifts were similar,
-#     FibTh differed.
-
-#     Parameters
-#     ----------
-#     date : str
-#         Date in YYMMDD format.
-#     calibration_runs : dict
-#         Dictionary containing calibration runs for each calibration type.
-#     max_deviation_from_reference : float, optional
-#         Maximum allowed deviation in pixels from the reference shift.
-#         If exceeded, the corresponding x or y shift is replaced by the reference value.
-
-#     Returns
-#     -------
-#     pixel_shifts_wrt_reference : dict
-#         Dictionary like:
-#         {
-#             'ccd_1': (dx, dy),
-#             'ccd_2': (dx, dy),
-#             'ccd_3': (dx, dy)
-#         }
-#     """
-#     pixel_shifts_wrt_reference = {}
-
-#     if date == '001122':
-#         pixel_shifts_wrt_reference = {
-#             'ccd_1': (0.0, 0.0),
-#             'ccd_2': (0.0, 0.0),
-#             'ccd_3': (0.0, 0.0)
-#         }
-#         print('  --> Reference night. Using default (0,0)')
-#         return pixel_shifts_wrt_reference
-
-#     # Identify the relevant reference shift regime
-#     if int(date) < 231120:
-#         # We actually have no reference before 20 Nov 2023.
-#         # So the best we can do is trust the actual estimate is working.
-#         reference_ccd_shifts = None
-#     elif int(date) <= 240518:
-#         # 20 Nov 2023 - 18 May 2024
-#         # 18 May: Thermal cycle of spectrograph
-#         reference_ccd_shifts = {
-#             'ccd_1': (0.00, 0.00),
-#             'ccd_2': (0.00, 0.00),
-#             'ccd_3': (0.01, -0.01)
-#         }
-#     elif int(date) <= 241106:
-#         # 19 May 2024 - 6 Nov 2024
-#         # 1-6 November 2024: Warm up, Pump and Bake, Cooldown
-#         reference_ccd_shifts = {
-#             'ccd_1': (-0.89, 7.02),
-#             'ccd_2': (-3.86, 3.10),
-#             'ccd_3': (3.08, 1.80)
-#         }
-#     elif int(date) <= 250507:
-#         # 7 Nov 2024 - 7 May 2025
-#         # 7 May 2025: Cryostat Ring Boards replacement
-#         reference_ccd_shifts = {
-#             'ccd_1': (-0.74, 8.13),
-#             'ccd_2': (-3.58, 4.06),
-#             'ccd_3': (3.09, 2.91)
-#         }
-#     elif int(date) <= 250823:
-#         # 8 May 2025 - 23 Aug 2025
-#         # 23 Aug 2025 chosen because no observations between 15 Jul 2025 and 1 Oct 2025 available, but small drift happened within this time.
-#         reference_ccd_shifts = {
-#             'ccd_1': (-6.15, 1.11),
-#             'ccd_2': (-8.75, 2.80),
-#             'ccd_3': (2.51, 0.22)
-#         }
-#     elif int(date) <= 260303:
-#         # 24 Aug 2025 - 3 Mar 2026
-#         # Last science run so far
-#         reference_ccd_shifts = {
-#             'ccd_1': (-6.08, 1.41),
-#             'ccd_2': (-8.76, 2.88),
-#             'ccd_3': (2.72, 0.34)
-#         }
-#     else:
-#         # Again we have no good reference to compare to, so fingers crossed the shift estimate works.
-#         reference_ccd_shifts = None
-
-#     for ccd in [1, 2, 3]:
-#         ccd_key = f'ccd_{ccd}'
-#         print(f'  --> Estimating pixel shifts for CCD{ccd}')
-
-#         pixel_shift_x = []
-#         pixel_shift_y = []
-
-#         # Which calibrations of the reference night will we actually use?
-#         if ccd == 1:
-#             calibrations_to_compare = [
-#                 ['SimTh_180.0', '0001'],
-#                 # ['FibTh_180.0','0004']
-#             ]
-#         elif ccd == 2:
-#             calibrations_to_compare = [
-#                 ['SimTh_60.0', '0002'],
-#                 # ['FibTh_60.0','0005'],
-#                 ['SimLC', '0007']
-#             ]
-#         elif ccd == 3:
-#             calibrations_to_compare = [
-#                 ['SimTh_15.0', '0003'],
-#                 # ['FibTh_15.0','0006'],
-#                 ['SimLC', '0007']
-#             ]
-
-#         for calibration_type, reference_run in calibrations_to_compare:
-#             if calibration_type not in calibration_runs or len(calibration_runs[calibration_type]) == 0:
-#                 print(f"  --> No calibration runs found for {calibration_type} on CCD{ccd}. Skipping shift estimate for this type.")
-#                 continue
-
-#             # a) Reference frame
-#             full_image, metadata = read_veloce_fits_image_and_metadata(
-#                 config.working_directory +
-#                 f'observations/001122/ccd_{ccd}/22nov{ccd}{reference_run}.fits'
-#             )
-#             reference_image, _, _, _ = substract_overscan(full_image, metadata, debug_overscan=False)
-
-#             # b) Median of frames of the night
-#             images = []
-#             for run in calibration_runs[calibration_type]:
-#                 frame_path = (
-#                     config.working_directory +
-#                     f'observations/{config.date}/ccd_{ccd}/'
-#                     f'{config.date[-2:]}{match_month_to_date(config.date)}{ccd}{run}.fits'
-#                 )
-#                 image, metadata = read_veloce_fits_image_and_metadata(frame_path)
-#                 trimmed_image, _, _, _ = substract_overscan(image, metadata, debug_overscan=False)
-#                 images.append(trimmed_image)
-
-#             median_image = np.median(np.array(images), axis=0)
-
-#             # c) Estimate shifts
-#             dx, dy, error = phase_correlation_shift(reference_image, median_image)
-#             print(f"  --> Shift CCD{ccd} (from {calibration_type}): dx={dx:+.2f}, dy={dy:+.2f}, error={error}")
-#             pixel_shift_x.append(dx)
-#             pixel_shift_y.append(dy)
-
-#         # Combine x estimates
-#         if len(pixel_shift_x) > 0:
-#             pixel_shift_x_mean = float(np.mean(pixel_shift_x))
-#             if len(pixel_shift_x) > 1:
-#                 pixel_shift_x_std = float(np.std(pixel_shift_x))
-#                 if pixel_shift_x_std > 0.1:
-#                     print(f'  --> dX estimated to be {pixel_shift_x_mean:+.2f} +/- {pixel_shift_x_std:.2f} pixels for CCD{ccd}. Large scatter! Using only first available calibration.')
-#                     pixel_shift_x_mean = float(pixel_shift_x[0])
-#                     pixel_shift_x_std = np.nan
-#             else:
-#                 pixel_shift_x_std = np.nan
-#         else:
-#             if reference_ccd_shifts is not None:
-#                 pixel_shift_x_mean = reference_ccd_shifts[ccd_key][0]
-#                 print(f'  --> Could not estimate pixel shift in X for CCD{ccd}. Using reference value {pixel_shift_x_mean:+.2f}')
-#             else:
-#                 pixel_shift_x_mean = 0.0
-#                 print(f'  --> Could not estimate pixel shift in X for CCD{ccd}. Setting to 0.0')
-#             pixel_shift_x_std = np.nan
-
-#         # Combine y estimates
-#         if len(pixel_shift_y) > 0:
-#             pixel_shift_y_mean = float(np.mean(pixel_shift_y))
-#             if len(pixel_shift_y) > 1:
-#                 pixel_shift_y_std = float(np.std(pixel_shift_y))
-#                 if pixel_shift_y_std > 0.1:
-#                     print(f'  --> dY estimated to be {pixel_shift_y_mean:+.2f} +/- {pixel_shift_y_std:.2f} pixels for CCD{ccd}. Large scatter! Using only first available calibration.')
-#                     pixel_shift_y_mean = float(pixel_shift_y[0])
-#                     pixel_shift_y_std = np.nan
-#             else:
-#                 pixel_shift_y_std = np.nan
-#         else:
-#             if reference_ccd_shifts is not None:
-#                 pixel_shift_y_mean = reference_ccd_shifts[ccd_key][1]
-#                 print(f'  --> Could not estimate pixel shift in Y for CCD{ccd}. Using reference value {pixel_shift_y_mean:+.2f}')
-#             else:
-#                 pixel_shift_y_mean = 0.0
-#                 print(f'  --> Could not estimate pixel shift in Y for CCD{ccd}. Setting to 0.0')
-#             pixel_shift_y_std = np.nan
-
-#         # Compare against reference and clip back if deviation is too large
-#         if reference_ccd_shifts is not None:
-#             ref_dx, ref_dy = reference_ccd_shifts[ccd_key]
-
-#             if np.abs(pixel_shift_x_mean - ref_dx) > max_deviation_from_reference:
-#                 print(
-#                     f'  --> WARNING: CCD{ccd} dX={pixel_shift_x_mean:+.2f} differs by '
-#                     f'{np.abs(pixel_shift_x_mean - ref_dx):.2f} px from reference {ref_dx:+.2f}. '
-#                     f'Using reference value instead.'
-#                 )
-#                 pixel_shift_x_mean = ref_dx
-
-#             if np.abs(pixel_shift_y_mean - ref_dy) > max_deviation_from_reference:
-#                 print(
-#                     f'  --> WARNING: CCD{ccd} dY={pixel_shift_y_mean:+.2f} differs by '
-#                     f'{np.abs(pixel_shift_y_mean - ref_dy):.2f} px from reference {ref_dy:+.2f}. '
-#                     f'Using reference value instead.'
-#                 )
-#                 pixel_shift_y_mean = ref_dy
-
-#         pixel_shifts_wrt_reference[ccd_key] = (
-#             np.round(pixel_shift_x_mean, 2),
-#             np.round(pixel_shift_y_mean, 2)
-#         )
-
-#         print(f'  --> Recommended shift estimate for CCD{ccd}:')
-#         print(f'      dX {pixel_shift_x_mean:+.2f} +/- {pixel_shift_x_std:.2f} and dY {pixel_shift_y_mean:+.2f} +/- {pixel_shift_y_std:.2f}')
-
-#     return pixel_shifts_wrt_reference
-
-
-# def extract_trace(image, trace, half_window):
-#     """
-#     Extract a fixed-width region around a tramline.
-
-#     Pixels outside the CCD are returned as NaN.
-#     """
-#     nx, ny = image.shape
-#     centres = np.rint(trace).astype(int)
-#     extracted = np.full((nx, 2 * half_window), np.nan)
-
-#     for x, centre in enumerate(centres):
-#         y0, y1 = centre - half_window, centre + half_window
-#         source0, source1 = max(0, y0), min(ny, y1)
-
-#         if source0 < source1:
-#             destination0 = source0 - y0
-#             extracted[x, destination0:destination0 + source1-source0] = \
-#                 image[x, source0:source1]
-
-#     return extracted, centres
-
-
-# def collapsed_profile(extracted):
-#     """
-#     Collapse an extracted order along dispersion.
-
-#     Corrects for CCD-edge regions where different numbers of valid
-#     dispersion pixels contribute.
-#     """
-#     valid = np.isfinite(extracted)
-#     n_valid = valid.sum(axis=0)
-#     summed = np.nansum(extracted, axis=0)
-
-#     profile = np.full(extracted.shape[1], np.nan)
-#     good = n_valid > 0
-
-#     if np.any(good):
-#         profile[good] = (
-#             summed[good] / n_valid[good] * np.nanmedian(n_valid[good])
-#         )
-
-#     return profile
-
-
-
-# def _find_trough(profile, m, expected, radius=6, smooth=1.5,
-#                  min_prominence=5., prominence_fraction=0.05):
-#     """Find a dark minimum near its expected position."""
-
-#     use = np.isfinite(profile) & (np.abs(m - expected) <= radius)
-
-#     if use.sum() < 5:
-#         return np.nan
-
-#     x = m[use]
-#     y = gaussian_filter1d(profile[use], smooth)
-
-#     dynamic = np.nanpercentile(y, 95) - np.nanpercentile(y, 5)
-#     prominence = max(min_prominence, prominence_fraction * dynamic)
-
-#     peaks, _ = find_peaks(-y, prominence=prominence)
-
-#     if len(peaks) == 0:
-#         return np.nan
-
-#     i = peaks[np.argmin(np.abs(x[peaks] - expected))]
-
-#     # Sub-pixel parabolic minimum.
-#     if 0 < i < len(x) - 1:
-#         a, b, _ = np.polyfit(x[i-1:i+2], y[i-1:i+2], 2)
-
-#         if a > 0:
-#             position = -b / (2 * a)
-
-#             if x[i-1] <= position <= x[i+1]:
-#                 return position
-
-#     return x[i]
-
-
-# def _fit_flat_trace(x, left, right, sigma_clip=4., iterations=5):
-#     """
-#     Fit the midpoint of the two Flat minima with a 4th-order polynomial.
-
-#     Also requires their half-separation to remain approximately constant
-#     along a given order.
-#     """
-#     centre = 0.5 * (left + right)
-#     width = 0.5 * (right - left)
-
-#     good = (
-#         np.isfinite(x)
-#         & np.isfinite(centre)
-#         & np.isfinite(width)
-#         & (width > 0)
-#     )
-
-#     if good.sum() < N_COEFF + 1:
-#         raise RuntimeError('Too few Flat gap measurements')
-
-#     for _ in range(iterations):
-
-#         p = Polynomial.fit(
-#             x[good], centre[good], POLY_DEGREE
-#         ).convert()
-
-#         centre_residual = centre - p(x)
-#         width_residual = width - np.nanmedian(width[good])
-
-#         centre_sigma = robust_sigma(centre_residual[good])
-#         width_sigma = robust_sigma(width_residual[good])
-
-#         new_good = good.copy()
-
-#         if np.isfinite(centre_sigma) and centre_sigma > 0:
-#             new_good &= np.abs(centre_residual) < sigma_clip * centre_sigma
-
-#         if np.isfinite(width_sigma) and width_sigma > 0:
-#             new_good &= np.abs(width_residual) < sigma_clip * width_sigma
-
-#         if np.array_equal(new_good, good):
-#             break
-
-#         good = new_good
-
-#     if good.sum() < N_COEFF + 1:
-#         raise RuntimeError('Too few Flat measurements after clipping')
-
-#     p = Polynomial.fit(
-#         x[good], centre[good], POLY_DEGREE
-#     ).convert()
-
-#     coeffs = np.zeros(N_COEFF)
-#     coeffs[:len(p.coef)] = p.coef
-
-#     half_width = np.nanmedian(width[good])
-#     rms = np.sqrt(np.nanmean((centre[good] - p(x[good]))**2))
-
-#     return coeffs, half_width, good, rms
-
-
-# def _find_outer_edge(profile, m, expected, bright_side, radius,
-#                      smooth=1.5, threshold_fraction=0.20, min_snr=2.5):
-#     """Find the outer beginning/end of a Sky region."""
-
-#     use = np.isfinite(profile) & (np.abs(m - expected) <= radius)
-
-#     if use.sum() < 7:
-#         return np.nan
-
-#     x = m[use]
-#     raw = profile[use]
-#     y = gaussian_filter1d(raw, smooth)
-
-#     left = y[x < expected - 1]
-#     right = y[x > expected + 1]
-
-#     if len(left) < 2 or len(right) < 2:
-#         return np.nan
-
-#     left_level = np.nanmedian(left)
-#     right_level = np.nanmedian(right)
-
-#     if bright_side == 'right':
-#         dark, bright, direction = left_level, right_level, +1
-#     else:
-#         bright, dark, direction = left_level, right_level, -1
-
-#     contrast = bright - dark
-#     noise = robust_sigma(raw - y)
-
-#     if contrast <= 0:
-#         return np.nan
-
-#     if np.isfinite(noise) and noise > 0 and contrast < min_snr * noise:
-#         return np.nan
-
-#     threshold = dark + threshold_fraction * contrast
-#     crossings = []
-
-#     for i in range(len(x) - 1):
-
-#         crosses = (
-#             (y[i] - threshold)
-#             * (y[i+1] - threshold)
-#             <= 0
-#         )
-
-#         correct_direction = direction * (y[i+1] - y[i]) > 0
-
-#         if crosses and correct_direction:
-
-#             if y[i+1] == y[i]:
-#                 position = 0.5 * (x[i] + x[i+1])
-#             else:
-#                 position = x[i] + (
-#                     (threshold - y[i])
-#                     * (x[i+1] - x[i])
-#                     / (y[i+1] - y[i])
-#                 )
-
-#             crossings.append(position)
-
-#     return (
-#         min(crossings, key=lambda value: abs(value - expected))
-#         if crossings else np.nan
-#     )
-
-
-# def _find_bright_interval(profile, m, begin0, end0,
-#                           smooth=1.5,
-#                           threshold_fraction=0.20,
-#                           min_snr=6.):
-#     """
-#     Find the illuminated SimTh/SimLC interval.
-
-#     Search padding scales with its reference width, while the measured
-#     width itself is free to vary.
-#     """
-
-#     width0 = max(abs(end0 - begin0), 1.)
-#     padding = max(6., width0)
-
-#     use = (
-#         np.isfinite(profile)
-#         & (m >= begin0 - padding)
-#         & (m <= end0 + padding)
-#     )
-
-#     if use.sum() < 7:
-#         return np.nan, np.nan, False
-
-#     x = m[use]
-#     raw = profile[use]
-#     y = gaussian_filter1d(raw, smooth)
-
-#     low, high = np.nanpercentile(y, [10, 95])
-#     amplitude = high - low
-#     noise = robust_sigma(raw - y)
-
-#     # Reject absent calibration signal.
-#     if not np.isfinite(amplitude) or amplitude <= 0:
-#         return np.nan, np.nan, False
-
-#     if np.isfinite(noise) and noise > 0 and amplitude < min_snr * noise:
-#         return np.nan, np.nan, False
-
-#     threshold = low + threshold_fraction * amplitude
-#     bright = y > threshold
-
-#     changes = np.diff(
-#         np.r_[False, bright, False].astype(int)
-#     )
-
-#     starts = np.where(changes == 1)[0]
-#     ends = np.where(changes == -1)[0] - 1
-
-#     if len(starts) == 0:
-#         return np.nan, np.nan, False
-
-#     # Prefer a component overlapping the old interval;
-#     # otherwise select the nearest one.
-#     expected = 0.5 * (begin0 + end0)
-#     candidates = []
-
-#     for start, end in zip(starts, ends):
-
-#         overlap = max(
-#             0.,
-#             min(x[end], end0) - max(x[start], begin0)
-#         )
-
-#         distance = abs(
-#             0.5 * (x[start] + x[end]) - expected
-#         )
-
-#         candidates.append(
-#             (overlap, -distance, start, end)
-#         )
-
-#     _, _, start, end = max(candidates)
-
-#     begin = x[start]
-#     finish = x[end]
-
-#     # Sub-pixel threshold crossings.
-#     if start > 0 and y[start] != y[start-1]:
-#         begin = x[start-1] + (
-#             (threshold-y[start-1])
-#             * (x[start]-x[start-1])
-#             / (y[start]-y[start-1])
-#         )
-
-#     if end < len(x)-1 and y[end+1] != y[end]:
-#         finish = x[end] + (
-#             (threshold-y[end])
-#             * (x[end+1]-x[end])
-#             / (y[end+1]-y[end])
-#         )
-
-#     if finish <= begin:
-#         return np.nan, np.nan, False
-
-#     return begin, finish, True
-
-# def update_tramline_order(image, image_type, row,
-#                           dx=0., dy=0., debug=False):
-#     """
-#     Update tramline information for one order.
-
-#     Flat:
-#         fit current 4th-order tramline from Sky/Science minima;
-#         Science extraction goes minimum-to-minimum.
-
-#     SimTh / SimLC:
-#         keep tramline fixed and only determine begin/end of signal.
-
-#     Science:
-#         no geometry update.
-#     """
-
-#     order = (
-#         row['order_name'].decode()
-#         if isinstance(row['order_name'], bytes)
-#         else str(row['order_name'])
-#     )
-
-#     ccd = order[4]
-#     half_window = int(row['extraction_half_window'])
-
-#     x = np.arange(image.shape[0], dtype=float)
-#     m = np.arange(2 * half_window) - half_window
-
-#     # Current predicted trace
-#     coeffs = np.array([
-#         float(row[f'tramline_coeff_{i}'])
-#         for i in range(N_COEFF)
-#     ])
-
-#     coeffs = shifted_coefficients(coeffs, dx, dy)
-#     trace = Polynomial(coeffs)(x)
-
-#     extracted, centres = extract_trace(
-#         image, trace, half_window
-#     )
-
-#     # FLAT
-#     if image_type == 'Flat':
-
-#         old_left = 0.5 * (
-#             float(row['Sky_1_end'])
-#             + float(row['Science_begin'])
-#         )
-
-#         old_right = 0.5 * (
-#             float(row['Science_end'])
-#             + float(row['Sky_2_begin'])
-#         )
-
-#         # Measure minima along dispersion.
-        
-#         measurements = []
-
-#         for x0 in range(0, len(extracted), 4):
-
-#             lo = max(0, x0 - 2)
-#             hi = min(len(extracted), x0 + 3)
-
-#             with warnings.catch_warnings():
-#                 warnings.simplefilter('ignore', RuntimeWarning)
-#                 profile = np.nanmedian(
-#                     extracted[lo:hi],
-#                     axis=0
-#                 )
-
-#             # Account for integer centring of extracted array.
-#             fractional_offset = trace[x0] - centres[x0]
-
-#             left = _find_trough(
-#                 profile,
-#                 m,
-#                 old_left + fractional_offset
-#             )
-
-#             right = _find_trough(
-#                 profile,
-#                 m,
-#                 old_right + fractional_offset
-#             )
-
-#             if (
-#                 np.isfinite(left)
-#                 and np.isfinite(right)
-#                 and right > left
-#             ):
-#                 measurements.append((
-#                     x0,
-#                     centres[x0] + left,
-#                     centres[x0] + right
-#                 ))
-
-#         # Fit trace, falling back to shifted reference for faint orders.
-        
-#         left_gap = old_left
-#         right_gap = old_right
-
-#         n_good = 0
-#         rms = np.nan
-#         trace_status = 'shifted reference'
-
-#         if len(measurements) >= 20:
-
-#             measured_x, left, right = np.asarray(measurements).T
-
-#             try:
-#                 coeffs, half_width, good, rms = _fit_flat_trace(
-#                     measured_x,
-#                     left,
-#                     right
-#                 )
-
-#                 left_gap = -half_width
-#                 right_gap = +half_width
-
-#                 n_good = good.sum()
-#                 trace_status = 'fitted'
-
-#             except RuntimeError:
-#                 pass
-
-#         # Save adopted CURRENT detector polynomial.
-#         for i, value in enumerate(coeffs):
-#             row[f'tramline_coeff_{i}'] = value
-
-#         # Re-extract around final adopted trace.
-#         trace = Polynomial(coeffs)(x)
-
-#         extracted, centres = extract_trace(
-#             image,
-#             trace,
-#             half_window
-#         )
-
-#         profile = collapsed_profile(extracted)
-
-#         # Confirm/refine minima using collapsed profile.
-        
-#         profile_left = _find_trough(
-#             profile,
-#             m,
-#             left_gap,
-#             radius=4,
-#             min_prominence=0.,
-#             prominence_fraction=0.02
-#         )
-
-#         profile_right = _find_trough(
-#             profile,
-#             m,
-#             right_gap,
-#             radius=4,
-#             min_prominence=0.,
-#             prominence_fraction=0.02
-#         )
-
-#         minima_measured = 0
-
-#         if (
-#             np.isfinite(profile_left)
-#             and abs(profile_left - left_gap) < 3
-#         ):
-#             left_gap = profile_left
-#             minima_measured += 1
-
-#         if (
-#             np.isfinite(profile_right)
-#             and abs(profile_right - right_gap) < 3
-#         ):
-#             right_gap = profile_right
-#             minima_measured += 1
-
-#         # Science runs minimum-to-minimum.
-#         # Sky outer boundaries may have varying widths.
-        
-#         old_sky1_begin = float(row['Sky_1_begin'])
-#         old_sky2_end = float(row['Sky_2_end'])
-
-#         old_sky1_width = abs(
-#             float(row['Sky_1_end'])
-#             - old_sky1_begin
-#         )
-
-#         old_sky2_width = abs(
-#             old_sky2_end
-#             - float(row['Sky_2_begin'])
-#         )
-
-#         sky1_begin = old_sky1_begin + (left_gap - old_left)
-#         sky2_end = old_sky2_end + (right_gap - old_right)
-
-#         measured_sky1 = _find_outer_edge(
-#             profile,
-#             m,
-#             sky1_begin,
-#             bright_side='right',
-#             radius=max(6., old_sky1_width)
-#         )
-
-#         measured_sky2 = _find_outer_edge(
-#             profile,
-#             m,
-#             sky2_end,
-#             bright_side='left',
-#             radius=max(6., old_sky2_width)
-#         )
-
-#         outer_measured = 0
-
-#         if (
-#             np.isfinite(measured_sky1)
-#             and measured_sky1 < left_gap
-#             and abs(measured_sky1-sky1_begin)
-#                 < max(4., old_sky1_width)
-#         ):
-#             sky1_begin = measured_sky1
-#             outer_measured += 1
-
-#         if (
-#             np.isfinite(measured_sky2)
-#             and measured_sky2 > right_gap
-#             and abs(measured_sky2-sky2_end)
-#                 < max(4., old_sky2_width)
-#         ):
-#             sky2_end = measured_sky2
-#             outer_measured += 1
-
-#         # Final extraction geometry.
-#         row['Sky_1_begin'] = sky1_begin
-#         row['Sky_1_end'] = left_gap
-
-#         row['Science_begin'] = left_gap
-#         row['Science_end'] = right_gap
-
-#         row['Sky_2_begin'] = right_gap
-#         row['Sky_2_end'] = sky2_end
-
-#         # Optional diagnostics.
-#         diagnostics = {
-#             'tramline_half_width': 0.5 * (right_gap-left_gap),
-#             'tramline_fit_rms': rms,
-#             'tramline_fit_npoints': n_good,
-#         }
-
-#         for name, value in diagnostics.items():
-#             if name in row.colnames:
-#                 row[name] = value
-
-#         rms_text = f'{rms:.3f}' if np.isfinite(rms) else '---'
-
-#         print(
-#             f'{order}: Flat | trace={trace_status} | '
-#             f'N={n_good} | RMS={rms_text} | '
-#             f'{minima_measured}/2 minima, '
-#             f'{outer_measured}/2 outer Sky edges'
-#         )
-
-#         print(
-#             f'    Sky_1   = '
-#             f'{float(row["Sky_1_begin"]):+.2f} : '
-#             f'{float(row["Sky_1_end"]):+.2f}'
-#         )
-
-#         print(
-#             f'    Science = '
-#             f'{float(row["Science_begin"]):+.2f} : '
-#             f'{float(row["Science_end"]):+.2f}'
-#         )
-
-#         print(
-#             f'    Sky_2   = '
-#             f'{float(row["Sky_2_begin"]):+.2f} : '
-#             f'{float(row["Sky_2_end"]):+.2f}'
-#         )
-
-#     # update tramline begin/end for SimTh or SimLC
-#     elif image_type in ('SimTh', 'SimLC'):
-
-#         region = image_type
-#         profile = collapsed_profile(extracted)
-
-#         begin0 = float(row[f'{region}_begin'])
-#         end0 = float(row[f'{region}_end'])
-
-#         # SimLC is known not to illuminate CCD1.
-#         if region == 'SimLC' and ccd == '1':
-#             detected = False
-#         else:
-#             begin, end, detected = _find_bright_interval(
-#                 profile,
-#                 m,
-#                 begin0,
-#                 end0
-#             )
-
-#             if detected:
-#                 row[f'{region}_begin'] = begin
-#                 row[f'{region}_end'] = end
-
-#         available_column = f'{region}_available'
-
-#         if available_column in row.colnames:
-#             row[available_column] = detected
-
-#         begin = float(row[f'{region}_begin'])
-#         end = float(row[f'{region}_end'])
-
-#         if detected:
-
-#             print(
-#                 f'{order}: {region} DETECTED | '
-#                 f'{region}_begin={begin:+.2f}, '
-#                 f'{region}_end={end:+.2f}, '
-#                 f'width={end-begin:.2f} px'
-#             )
-
-#         else:
-
-#             reason = (
-#                 'unavailable on CCD1'
-#                 if region == 'SimLC' and ccd == '1'
-#                 else 'no significant signal'
-#             )
-
-#             print(
-#                 f'{order}: {region} NOT DETECTED ({reason}) | '
-#                 f'retaining {begin:+.2f} : {end:+.2f}'
-#             )
-
-#     # SCIENCE
-#     elif image_type == 'Science':
-
-#         print(
-#             f'{order}: Science | '
-#             f'using Flat-derived extraction geometry'
-#         )
-
-#     else:
-#         raise ValueError(
-#             f'Unknown image_type: {image_type}'
-#         )
-
-#     if debug:
-#         plot_tramline(
-#             extracted,
-#             row,
-#             order,
-#             image_type
-#         )
-
-#     return row
-
-# def update_tramlines(images, tramline_references, image_type,
-#                      detector_shifts=None,
-#                      apply_detector_shift=False,
-#                      debug=False):
-#     """
-#     Update all tramlines for one image type.
-
-#     Parameters
-#     ----------
-#     images : dict
-#         images['ccd_1'][0], images['ccd_2'][0], images['ccd_3'][0]
-
-#     tramline_references : astropy.table.Table
-
-#     image_type : {'Flat', 'SimTh', 'SimLC', 'Science'}
-
-#     detector_shifts : dict, optional
-#         e.g. {'1': {'dx': ..., 'dy': ...}, ...}
-
-#     apply_detector_shift : bool
-#         True when starting from the long-term reference.
-#         False once the nightly Flat solution has been fitted.
-
-#     debug : bool
-#         Show diagnostic plots.
-#     """
-
-#     detector_shifts = detector_shifts or {}
-
-#     for i, row in enumerate(tramline_references):
-
-#         order = (
-#             row['order_name'].decode()
-#             if isinstance(row['order_name'], bytes)
-#             else str(row['order_name'])
-#         )
-
-#         ccd = order[4]
-
-#         shift = detector_shifts.get(
-#             ccd,
-#             {'dx': 0., 'dy': 0.}
-#         )
-
-#         dx = shift['dx'] if apply_detector_shift else 0.
-#         dy = shift['dy'] if apply_detector_shift else 0.
-
-#         try:
-
-#             tramline_references[i] = update_tramline_order(
-#                 images[f'ccd_{ccd}'][0],
-#                 image_type,
-#                 row,
-#                 dx=dx,
-#                 dy=dy,
-#                 debug=debug
-#             )
-
-#         except Exception as error:
-
-#             warnings.warn(
-#                 f'{order}: tramline update failed: {error}'
-#             )
-
-#     return tramline_references
-
-# def read_in_order_tramlines_tinney():
-#     """
-#     Reads in the optimized tramline information for each spectroscopic order from C. Tinney's data files.
-#     The tramline information specifies the pixel locations at the beginning and end of each order on the CCDs.
-
-#     CCD Files:
-#         - CCD1 (Azzurro): Orders 138-167 are read from 'azzurro-th-m138-167-all.txt'
-#         - CCD2 (Verde): Orders 104-139 are read from 'verde-th-m104-139-all.txt'
-#         - CCD3 (Rosso): Orders 65-104 are read from 'rosso-th-m65-104-all.txt'
-
-#     Each order's tramline information is stored in two dictionaries:
-#         - order_tramline_beginnings: Contains the beginning pixel of each order.
-#         - order_tramline_endings: Contains the ending pixel of each order.
-        
-#     The keys for these dictionaries are formatted as 'ccd_{ccd}_{order}', where:
-#         - {ccd} is the CCD identifier (1, 2, or 3).
-#         - {order} is the spectral order number.
-
-#     Returns:
-#         tuple: A tuple containing three dictionaries:
-#             - order_tramline_ranges: Contains the range (start and end) of tramlines for each order.
-#             - order_tramline_beginnings: Dictionary with starting tramline positions.
-#             - order_tramline_endings: Dictionary with ending tramline positions.
-#     """
-#     order_ranges = dict()
-#     order_beginning_coeffs = dict()
-#     order_ending_coeffs = dict()
-
-#     with open(Path(__file__).resolve().parent / 'veloce_reference_data' / 'azzurro-th-m138-167-all.txt') as fp:
-#         line = fp.readline()
-#         cnt = 0
-#         while line:
-#             if cnt % 4 == 0:
-#                 split_lines = line[:-1].split(' ')
-#                 order = int(split_lines[0])
-#                 order_ranges['ccd_1_order_'+ str(order)] = np.arange(int(split_lines[1]),int(split_lines[2]))
-#             if cnt % 4 == 1:
-#                 order_beginning_coeffs['ccd_1_order_'+ str(order)] = [float(coeff) for coeff in line[10:-1].split(' ')]
-#                 order_beginning_coeffs['ccd_1_order_'+ str(order)][0] -= 45
-#                 order_ending_coeffs['ccd_1_order_'+ str(order)] = [float(coeff) for coeff in line[10:-1].split(' ')]
-#             line = fp.readline()
-#             cnt += 1
-
-#     with open(Path(__file__).resolve().parent / 'veloce_reference_data' / 'verde-th-m104-139-all.txt') as fp:
-#         line = fp.readline()
-#         cnt = 0
-#         while line:
-#             if cnt % 4 == 0:
-#                 split_lines = line[:-1].split(' ')
-#                 order = int(split_lines[0])
-#                 order_ranges['ccd_2_order_'+ str(order)] = np.arange(int(split_lines[1]), int(split_lines[2]))
-#             if cnt % 4 == 1:
-#                 order_beginning_coeffs['ccd_2_order_'+ str(order)] = [float(coeff) for coeff in line[10:-1].split(' ')]
-#                 order_beginning_coeffs['ccd_2_order_'+ str(order)][0] -= 45
-#                 order_ending_coeffs['ccd_2_order_'+ str(order)] = [float(coeff) for coeff in line[10:-1].split(' ')]
-#             line = fp.readline()
-#             cnt += 1
-
-#     with open(Path(__file__).resolve().parent / 'veloce_reference_data' / 'rosso-th-m65-104-all.txt') as fp:
-#         line = fp.readline()
-#         cnt = 0
-#         while line:
-#             if cnt % 4 == 0:
-#                 split_lines = line[:-1].split(' ')
-#                 order = int(split_lines[0])
-#                 order_ranges['ccd_3_order_'+ str(order)] = np.arange(int(split_lines[1]), int(split_lines[2]))
-#             if cnt % 4 == 1:
-#                 order_beginning_coeffs['ccd_3_order_'+ str(order)] = [float(coeff) for coeff in line[10:-1].split(' ')]
-#                 order_beginning_coeffs['ccd_3_order_'+ str(order)][0] -= 45
-#                 order_ending_coeffs['ccd_3_order_'+ str(order)] = [float(coeff) for coeff in line[10:-1].split(' ')]
-#             line = fp.readline()
-#             cnt += 1
-
-#     # We could also use the laser comb position.
-#     # with open('./VeloceReduction/veloce_reference_data/verde-lc-m104-135-all.txt') as fp:
-#     # with open('./VeloceReduction/veloce_reference_data/rosso-lc-m65-104-all.txt') as fp:
-#     # For now, we simply assume that the laser comb position is just slightly offset from the order_ending
-#     # (so that we can simply use the order_ending_coeffs).
-
-#     order_ranges_sorted = dict()
-#     order_beginning_coeffs_sorted = dict()
-#     order_ending_coeffs_sorted = dict()
-
-#     for ccd in ['1','2','3']:
-#         if ccd == '1': orders = np.arange(167, 138-1, -1)
-#         if ccd == '2': orders = np.arange(140, 103-1, -1)
-#         if ccd == '3': orders = np.arange(104,  65-1, -1)
-
-#         for order in orders:
-#             order_ranges_sorted['ccd_'+ccd+'_order_'+str(order)] = order_ranges['ccd_'+ccd+'_order_'+str(order)]
-#             order_beginning_coeffs_sorted['ccd_'+ccd+'_order_'+str(order)] = order_beginning_coeffs['ccd_'+ccd+'_order_'+str(order)]
-#             order_ending_coeffs_sorted['ccd_'+ccd+'_order_'+str(order)] = order_ending_coeffs['ccd_'+ccd+'_order_'+str(order)]
-
-#     return(order_ranges_sorted, order_beginning_coeffs_sorted, order_ending_coeffs_sorted)
-
-# def read_in_order_tramlines(use_default = False):
-#     """
-#     Reads in optimized tramline information specifying the pixel positions for the beginning and ending of each 
-#     spectroscopic order across three CCDs. The data is read from text files and used to populate three dictionaries 
-#     with pixel information for each order.
-
-#     Parameters:
-#         use_default (bool): Set to True to use the default tramline information and not version from the night.
-
-#     Returns:
-#         tuple: Contains three dictionaries:
-#             - order_tramline_ranges (dict): Mapping of each spectroscopic order to its full pixel range.
-#             - order_tramline_beginning_coefficients (dict): Mapping of each order to the beginning pixel positions of its tramlines.
-#             - order_tramline_ending_coefficients (dict): Mapping of each order to the ending pixel positions of its tramlines.
-
-#     Each dictionary key is formatted as 'ccd_{ccd}_{order}', where '{ccd}' is the CCD number (1, 2, or 3),
-#     and '{order}' is the specific order number on that CCD.
-
-#     CCD Orders Handled:
-#         - CCD1 handles orders 167 to 138.
-#         - CCD2 handles orders 140 to 103.
-#         - CCD3 handles orders 104 to 65.
-
-#     Each order's data is loaded from a corresponding file in the format:
-#     './VeloceReduction/tramline_information/tramlines_begin_end_ccd_{ccd}_order_{order}.txt'
-
-#     The function constructs three dictionaries:
-#         - order_tramline_ranges: Maps 'ccd_{ccd}_{order}' to a range of pixel indices (0 to 4096-1).
-#         - order_tramline_beginning_coefficients: Coefficients for 5th order polynomial for starting pixel positions for tramlines.
-#         - order_tramline_ending_coefficients: Coefficients for 5th order polynomial for ending pixel positions for tramlines.
-#     """
-
-#     order_tramline_ranges = dict()
-#     order_tramline_beginning_coefficients = dict()
-#     order_tramline_ending_coefficients = dict()
-
-#     for ccd in ['1','2','3']:
-#         if ccd == '1': orders = np.arange(167, 138-1, -1)
-#         if ccd == '2': orders = np.arange(140, 103-1, -1)
-#         if ccd == '3': orders = np.arange(104,  65-1, -1)
-
-#         for order in orders:
-#             order_tramline_ranges['ccd_'+ccd+'_order_'+str(order)] = np.arange(4096)
-
-#             if use_default:
-#                 tramline_information = np.loadtxt(Path(__file__).resolve().parent / 'tramline_information' / f'tramlines_begin_end_ccd_{ccd}_order_{order}.txt')
-#             else:
-#                 try:
-#                     tramline_information = np.loadtxt(config.working_directory+'/reduced_data/'+config.date+f'/_tramline_information/tramlines_begin_end_ccd_{ccd}_order_{order}.txt')
-#                 except:
-#                     tramline_information = np.loadtxt(Path(__file__).resolve().parent / 'tramline_information' / f'tramlines_begin_end_ccd_{ccd}_order_{order}.txt')
-#             order_tramline_beginning_coefficients['ccd_'+ccd+'_order_'+str(order)] = tramline_information[0,:-1] # neglecting the buffer info in last cell
-#             order_tramline_ending_coefficients['ccd_'+ccd+'_order_'+str(order)]    = tramline_information[1,:-1] # neglecting the buffer info in last cell
-
-#     return(order_tramline_ranges, order_tramline_beginning_coefficients, order_tramline_ending_coefficients)
-
-# def get_master_dark(runs, archival=False):
-#     """
-#     Read in the dark runs (assuming they are the same exposure time) and combine them to a master dark dictionary with keys for the three CCDs.
-
-#     Parameters:
-#         runs (list): List of observation runs for dark frames.
-
-#     Returns:
-#         dict: A dictionary containing the master dark image for the three CCDs.
-    
-#     """
-
-#     # Extract Images from CCDs 1-3
-#     images = dict()
-    
-#     # Read in, overscan subtract and append images to array
-#     for ccd in [1,2,3]:
-#         images['ccd_'+str(ccd)] = []
-
-#         # If we use acrhival dark frames, we use the master dark frame for 1800s from reference date 001122.
-#         if not archival: date = config.date
-#         else:
-#             runs = ['0011']
-#             date = '001122'
-
-#         for run in runs:
-#             full_image, metadata = read_veloce_fits_image_and_metadata(config.working_directory+'observations/'+date+'/ccd_'+str(ccd)+'/'+date[-2:]+match_month_to_date(date)+str(ccd)+run+'.fits')
-#             trimmed_image, _, _, _ = substract_overscan(full_image, metadata)
-#             images['ccd_'+str(ccd)].append(trimmed_image)
-        
-#         # Calculate median across all runs
-#         images['ccd_'+str(ccd)] = np.array(np.median(images['ccd_'+str(ccd)],axis=0),dtype=float)
-#     return(images)
-
-# def convert_bstar_to_telluric(bstar_flux_in_orders, filter_kernel_size=51, debug=False):
-#     """
-#     Convert B-star flux to telluric flux by normalising the B-star flux to unity
-#     using a smoothed Bstar spectrum (smoothed via median_filter).
-
-#     Parameters:
-#         bstar_flux_in_orders (np.array): An array of B-star flux in the orders.
-#         filter_kernel_size (int): The kernel size for the median filter. 51 default.
-#         debug (bool): Set to True to display debug plots.
-
-#     Returns:
-#         np.array: An array of telluric flux in the orders.
-#     """
-
-#     telluric_flux_in_orders = []
-
-#     # Calculate the median of the B-star flux in each order
-#     for order in range(len(bstar_flux_in_orders)):
-
-#         smooth_bstar_flux_in_order = median_filter(bstar_flux_in_orders[order], size=filter_kernel_size)
-
-#         bstar_flux_for_tellurics = bstar_flux_in_orders[order] / smooth_bstar_flux_in_order
-#         bstar_flux_for_tellurics[np.isnan(bstar_flux_for_tellurics)] = 1.0
-        
-#         # Let's make sure we have reasonable telluric features that we can divide with.
-#         telluric_flux_in_order = bstar_flux_for_tellurics.clip(min = 0.01, max = 1.0)
-        
-#         # cut first and last 100 pixels of telluric (~2.5% of the order each left and right).
-#         telluric_flux_in_order[:100] = 1.0
-#         telluric_flux_in_order[-100:] = 1.0
-
-#         # We do not expect any telluric lines in a lot of orders.
-#         if (order < 47) | (order in [51,52,53,54,55,56,60,61]): telluric_flux_in_order = 1.0 * np.ones(len(telluric_flux_in_order))
-        
-#         # Specific cuts left and right
-#         if order in [47,48,49,50]: telluric_flux_in_order[:200] = 1.0
-#         if order in [65,66,67]: telluric_flux_in_order[-200:] = 1.0
-#         if order == 107: telluric_flux_in_order[2250:] = 1.0
-
-#         # Specific cuts for too strong absorption (50%) where we do not expect it
-#         if order <= 82: telluric_flux_in_order[telluric_flux_in_order < 0.5] = 1.0
-
-#         telluric_flux_in_orders.append(telluric_flux_in_order)
-
-#         # Plot the bstar flux divided by the smooth flux
-#         if debug:
-#             plt.figure(figsize=(10,5))
-#             plt.title(order)
-#             plt.plot(bstar_flux_for_tellurics, label = 'B-star flux divided by smooth flux', lw = 0.5, c='k')
-#             plt.plot(telluric_flux_in_order, label = 'Final telluric flux', lw = 1, c='C0')
-#             plt.legend(ncol=4)
-#             plt.ylim(-0.1, 1.5)
-#             if 'ipykernel' in sys.modules: plt.show()
-#             plt.close()
-
-#     return(np.array(telluric_flux_in_orders))
-
-# def get_tellurics_from_bstar(bstar_information, master_flat_images, debug=False):
-#     """
-#     Extract telluric orders from a B-star observation.
-
-#     Parameters:
-#         bstar_information (list): A list in the format [bstar_id, run, obsering_time]
-#         master_flat_images (dict): The master flat field images
-#         debug (bool): Set to True to display debug plots.
-
-#     Returns:
-#         telluric_flux_in_orders (np.array): An array of telluric flux in the orders.
-#         utmjd (float): The modified Julian date of the telluric/BStar observation.
-#     """
-
-#     bstar_id, run, time = bstar_information
-
-#     if debug:
-#         print('Starting Order Extraction')
-
-#     # Extract the B-star flux in the orders and the metadata
-#     bstar_flux_in_orders, metadata = extract_orders(
-#         ccd1_runs = [run],
-#         ccd2_runs = [run],
-#         ccd3_runs = [run],
-#         Bstar = True,
-#         master_flat_images = master_flat_images,
-#         debug_overscan = debug
-#     )
-
-#     if debug:
-#         print('Starting Telluric Flux Conversion')
-
-#     # Convert the B-star flux to telluric flux by normalising the B-star flux to unity
-#     telluric_flux_in_orders = convert_bstar_to_telluric(bstar_flux_in_orders, debug=debug)
-
-#     return(telluric_flux_in_orders, metadata['UTMJD'])
-
-# def shift_polynomial_xy(coeffs, dx=0.0, dy=0.0):
-#     """
-#     Shift a polynomial x(y) by CCD offsets:
-#         x_new(y) = x_old(y - dy) + dx
-
-#     Parameters
-#     ----------
-#     coeffs : array-like
-#         Polynomial coefficients in ascending order:
-#         [a0, a1, a2, ...] for a0 + a1*y + a2*y**2 + ...
-#     dx : float
-#         Shift in x direction.
-#     dy : float
-#         Shift in y direction.
-
-#     Returns
-#     -------
-#     np.ndarray
-#         Shifted coefficients in ascending order.
-#     """
-#     p = np.polynomial.Polynomial(coeffs)         # p(y)
-#     y_shifted = np.polynomial.Polynomial([-dy, 1.0])   # (y - dy)
-#     p_new = p(y_shifted) + dx      # p(y - dy) + dx
-#     return np.array(p_new.coef, dtype=float)
-
-# def extract_orders(ccd1_runs, ccd2_runs, ccd3_runs, Flat = False, update_tramlines_based_on_flat = False, LC = False, Bstar = False, Science = False, ThXe = False, master_darks = None, master_flat_images = None, pixel_shifts = None, exposure_time_threshold_darks = 300, use_tinney_ranges = False, debug_tramlines = False, debug_rows = False, debug_overscan=False):
-#     """
-#     Extracts spectroscopic orders from CCD images for various types of Veloce CCD images
-#     using predefined tramline ranges and providing detailed debug information.
-
-#     Parameters:
-#         ccd1_runs (list): List of observation runs for CCD 1.
-#         ccd2_runs (list): List of observation runs for CCD 2.
-#         ccd3_runs (list): List of observation runs for CCD 3.
-#         Flat (bool): Set to True to extract orders for flat field images.
-#         update_tramlines_based_on_flat (bool): Set to True to update tramline information based on flat field images. Can only be activated if Flat == True.
-#         LC (bool): Set to True to extract orders for laser comb calibration images.
-#         Bstar (bool): Set to True to extract orders for B-star calibration images.
-#         Science (bool): Set to True to extract orders for science observations.
-#         ThXe (bool): Set to True to extract orders for ThXe calibration images.
-#         master_darks (dict): A dictionary containing master dark images for the three CCDs.
-#         master_flat_images (dict): A dictionary containing master flat images for the three CCDs.
-#         pixel_shifts (dict): A dictionary containing pixel shifts for the three CCDs.
-#         exposure_time_threshold_darks (int, float): The threshold exposure time for applying master darks to science images in seconds. Default is 300 (seconds, i.e. 5 minutes).
-#         use_tinney_ranges (bool): Set to True to use tramline ranges specified by Chris Tinney.
-#         debug_tramlines (bool): Set to True to display debug plots for tramline extraction.
-#         debug_rows (bool): Set to True to display debug plots for row tracing.
-#         debug_overscan (bool): Set to True to display debug plots for overscan correction.
-
-#     Returns:
-#         tuple: A tuple containing:
-#             - counts_in_orders (np.array): An array of extracted counts in the orders.
-#             - noise_in_orders (np.array): An array of noise measurements in the orders.
-#             - metadata (dict, optional): Metadata related to the science observations, included only if `Science` is True.
-
-#     Depending on the flag settings, this function processes CCD data differently:
-#         - `Flat` affects the data normalization methods.
-#         - `LC` determines the calibration regime applied.
-#         - `Science` enables additional metadata extraction.
-#     """
-
-#     # Check if Flat, LC, Bstar, Science, ThXe are all False
-#     if not any([Flat, LC, Bstar, Science, ThXe]): raise ValueError('To extract orders appropriately, at least one of the following flags must be set to True: Flat, LC, Bstar, Science, ThXe.')
-
-#     # Raise ValueError if we try to update tramlines based on flat field images without Flat being True
-#     if (not Flat) & (update_tramlines_based_on_flat): raise ValueError('Can only update tramlines based on flat field images (not possible if Flat is False).')
-    
-#     # Check if exposure_time_threshold_darks is a float or int
-#     if not isinstance(exposure_time_threshold_darks, (int, float)): raise ValueError('Exposure_time_threshold_darks must be a float.')
-
-#     # Raise warning if we use Science exposures but do not provide master darks.
-#     if (Science) & (master_darks is None): print('     --> Warning: Note using any dark subtraction.')
-
-#     # Identify the rough (too wide) tramline ranges for each order as reported by default fit or C.Tinney (with slight adjustments).
-#     try:
-#         order_ranges, order_beginning_coeffs, order_ending_coeffs = read_in_order_tramlines(use_default=True)
-#     except:
-#         order_ranges, order_beginning_coeffs, order_ending_coeffs = read_in_order_tramlines_tinney()
-
-#     if pixel_shifts is None:
-#         pixel_shifts = dict()
-#         for ccd in [1,2,3]:
-#             pixel_shifts['ccd_'+str(ccd)] = (0.0,0.0)
-
-#     # Apply significant pixel shifts to tramline x-constant and expected y-position
-#     for ccd in [1,2,3]:
-#         dx, dy = pixel_shifts[f'ccd_{ccd}']
-
-#         if np.hypot(dx, dy) > 0.1:
-#             if Flat:
-#                 print(
-#                     f'  --> Applying pixel shift dX={dx:+.2f}, dY={dy:+.2f} '
-#                     f'for tramline positions for CCD{ccd} '
-#                     f'(and will do so for all extractions!)'
-#                 )
-
-#             for order in list(order_beginning_coeffs):
-#                 if order[4] == str(ccd):
-#                     order_beginning_coeffs[order] = shift_polynomial_xy(
-#                         order_beginning_coeffs[order], dx=dx, dy=dy
-#                     )
-#                     order_ending_coeffs[order] = shift_polynomial_xy(
-#                         order_ending_coeffs[order], dx=dx, dy=dy
-#                     )
-
-#     # Extract Images from CCDs 1-3
-#     images = dict()
-#     images_noise = dict()
-    
-#     # Read in, overscan subtract and append images to array
-#     for ccd in [1,2,3]:
-        
-#         images['ccd_'+str(ccd)] = []
-#         images_noise['ccd_'+str(ccd)] = []
-#         if ccd == 1: runs = ccd1_runs
-#         if ccd == 2: runs = ccd2_runs
-#         if ccd == 3: runs = ccd3_runs
-        
-#         # Residual from implementing CURE mirror monitoring
-#         #if Flat | ThXe:
-#         #    f, ax = plt.subplots()
-
-#         for run in runs:
-
-#             # There is not LC flux in CCD1, so we create mock ones with unit flux.
-#             if LC & (ccd == 1):
-#                 trimmed_image = np.ones((4112,4096),dtype=float)
-#                 os_median = {'q1':0,'q2':0}
-#                 os_rms = {'q1':0,'q2':0}
-#                 readout_mode = 'None'
-#             else:
-#                 full_image, metadata = read_veloce_fits_image_and_metadata(config.working_directory+'observations/'+config.date+'/ccd_'+str(ccd)+'/'+config.date[-2:]+match_month_to_date(config.date)+str(ccd)+run+'.fits')
-#                 trimmed_image, os_median, os_rms, readout_mode = substract_overscan(full_image, metadata, debug_overscan)
-            
-#             # Let's apply a reasonable dark subtraction
-#             if (Science) & (master_darks is not None):
-
-#                 exp_time_science = float(metadata['EXPTIME'])
-
-#                 shape_darkframe = np.shape(master_darks[list(master_darks.keys())[-1]]['ccd_'+str(ccd)])
-
-#                 # Let's check if the science exposure is actually long enough to necessitate dark subtraction
-#                 if (exp_time_science < exposure_time_threshold_darks):
-#                     if ccd == 1:
-#                         print('  --> Science exposure time ('+str(exp_time_science)+' seconds) is less than threshold of '+str(exposure_time_threshold_darks)+' seconds to apply dark subtraction.')
-#                         print('      Adjust kwarg exposure_time_threshold_darks to change this threshold.')
-                
-#                 # Ensure that the Darks and Science frames have the same shape (as we may use an archival DarkFrame)
-#                 elif shape_darkframe != np.shape(trimmed_image):
-#                     print('  --> Shapes of DarkFrame and Science do not match: ',shape_darkframe, np.shape(trimmed_image))
-#                     print('  --> Skipping DarkFrame subtraction.')
-
-#                 # If the science exposure is long enough, apply dark subtraction
-#                 else:
-#                     # Let's find the best matching dark frame (just above the exposure time) and apply it based on the exposure time ratio of science and said dark frame.
-#                     exp_times_dark = np.array(list(master_darks.keys()),dtype=float)
-#                     # If possible: Select only the dark frames that are equal or longer than the science exposure time
-#                     if len(np.where(exp_times_dark-exp_time_science >= 0.0)[0]) > 0:
-#                         exp_times_dark = exp_times_dark[exp_times_dark-exp_time_science >= 0.0]
-#                     else:
-#                         print('  --> Warning: No DarkFrame > Science exposure time ('+str(exp_time_science)+'s) found. Using closest DarkFrame.')
-
-#                     # Now find the clostest one of those
-#                     best_matching_dark = exp_times_dark[np.argmin(np.abs(exp_times_dark-exp_time_science))]
-#                     exp_times_ratio_science_to_dark = float(exp_time_science / best_matching_dark)
-
-#                     # Calculate an exposure time adjusted dark frame, which has no negative entries.
-#                     adjusted_dark = (np.array(master_darks[str(best_matching_dark)]['ccd_'+str(ccd)], dtype=float) * exp_times_ratio_science_to_dark).clip(min=0.0)
-
-#                     if (ccd == 1): print('  --> Subtracting '+str(best_matching_dark)+'s Dark from Science exposure '+str(run)+' (D='+str(best_matching_dark)+'s vs. S='+str(exp_time_science)+'s, S/D = '+"{:.2f}".format(exp_times_ratio_science_to_dark)+' ~ '+str(int(np.median(adjusted_dark.flatten())))+' counts).')
-
-#                     # Let's check that the dark and science frames have the same dimenions.
-#                     # This may fail if the archival 2Amp dark is used for a 4Amp science frame.
-#                     if np.shape(adjusted_dark) != np.shape(trimmed_image): raise ValueError('Dark frame ('+str(np.shape(adjusted_dark)[0])+','+str(np.shape(adjusted_dark)[1])+') and science frame ('+str(np.shape(trimmed_image)[0])+','+str(np.shape(trimmed_image)[1])+') have different shapes (this is likely because of a 4Amp science vs. 2Amp archivel dark)!')
-
-#                     trimmed_image -= adjusted_dark
-
-#             # Add check if CURE mirror folded in: We expect strong signals for Flat and ThXe.
-#             use_this_image = True
-#             if Flat:
-#                 # Residual from implementing CURE mirror monitoring
-#                 #ax.hist(trimmed_image.flatten(),bins = np.linspace(0,65535,100), histtype='step', ls='dashed', label = 'Flat '+str(run))
-#                 nanmed = np.nanpercentile(trimmed_image,99)
-#                 expectation = 5000
-#                 if nanmed < expectation:
-#                     print('  --> Flat image '+str(run)+' for CCD '+str(ccd)+' has not enough signal in 99th percentile ('+str(nanmed)+'<'+str(expectation)+'). Ignoring. Was CURE mirror maybe not folded in?')
-#                     use_this_image = False
-#             elif ThXe:
-#                 # Residual from implementing CURE mirror monitoring
-#                 #ax.hist(trimmed_image.flatten(),bins = np.linspace(0,65535,100), histtype='step', ls='dashed', label = 'ThXe '+str(run))
-#                 nanmed = np.nanpercentile(trimmed_image,99)
-#                 if ccd == 1:
-#                     expectation = 50
-#                 elif ccd == 2:
-#                     expectation = 200
-#                 else:
-#                     expectation = 500
-#                 if nanmed < expectation:
-#                     print('  --> ThXe image '+str(run)+' for CCD '+str(ccd)+' has not enough signal in 99th percentile ('+str(nanmed)+'<'+str(expectation)+'). Ignoring. Was CURE mirror maybe not folded in?')
-#                     use_this_image = False
-
-#             # Apply flat-field correction
-#             if not Flat:
-
-#                 # Use unit Flat if no master_flat provided
-#                 if master_flat_images is None:
-#                     F = np.ones(np.shape(trimmed_image),dtype=float)
-#                 else:
-#                     F = master_flat_images['ccd_'+str(ccd)]
-#                 S = trimmed_image.astype(np.float64)
-
-#                 # Calculate noise for the Science frames:
-#                 if Science:
-#                     # flux variance = flux + read-out-noise^2, so
-#                     # so noise = sqrt( flux + read-out-noise^2)
-#                     # Note: We assume the maximum RMS in the quadrants to be the relevant RMS
-#                     rn = np.max([os_rms[q] for q in os_rms.keys()])
-#                     V_S = S + rn**2
-
-#                     # Flat-field correct the science image variance
-#                     images_noise['ccd_'+str(ccd)].append(V_S / (F**2))
-
-#                 # Flat-field correct the image
-#                 trimmed_image = S / F
-
-#             elif (not Flat) & (ccd == 1):
-#                 print('     --> Warning: No flat-field correction applied')
-
-#             if use_this_image:
-#                 images['ccd_'+str(ccd)].append(trimmed_image)
-#             elif (run == runs[-1]) & len(images['ccd_'+str(ccd)]) == 0:
-#                 print('  --> No good Flat or ThXe available for CCD '+str(ccd)+'. Be careful!')
-#                 images['ccd_'+str(ccd)].append(trimmed_image)
-
-#         # Residual from implementing CURE mirror monitoring
-#         #if Flat | ThXe:
-#         #    ax.set_xlabel('Counts')
-#         #    ax.set_ylabel('Number of Pixels')
-#         #    ax.legend(ncol=2,fontsize=8)
-#         #    ax.set_yscale('log')
-#         #    plt.show()
-#         #    plt.close()
-        
-#         # For science: sum the flux and calculate the calculate median counts (we previously use the co-adding, but found the median to be more robust)
-#         if Science:
-#             images['ccd_'+str(ccd)] = np.array(np.sum(images['ccd_'+str(ccd)],axis=0),dtype=float)
-#             images_noise['ccd_'+str(ccd)] = np.array(np.sqrt(np.sum(images_noise['ccd_'+str(ccd)],axis=0)),dtype=float)
-#         # For calibration: calculate median counts
-#         else: images['ccd_'+str(ccd)] = np.array(np.median(images['ccd_'+str(ccd)],axis=0),dtype=float)
-
-#         if Flat:
-#             # Normalise so that median response = 1
-#             images['ccd_'+str(ccd)] /= np.nanmedian(images['ccd_'+str(ccd)])
-#             # Ensure that Flat pixels without value are still available as 1.0
-#             images['ccd_'+str(ccd)][np.isnan(images['ccd_'+str(ccd)])] = 1.0
-#             # Ensure that Flat pixels with negative value or 0.0 exactly are reset to 1.0
-#             images['ccd_'+str(ccd)][np.where(images['ccd_'+str(ccd)] <= 0.0)] = 1.0
-
-#             # Update tramlines if this was requested
-#             if update_tramlines_based_on_flat:
-#                 if ccd == 1:
-#                     print('  --> Optimising tramlines based on Flat images (saving at reduced_data/YYMMDD/_tramline_information/).')
-#                     print('      Check reduced_data/YYMMDD/_debug/debug_tramlines_flat.pdf for results.')
-#                 for order in list(order_beginning_coeffs):
-
-#                     if order[4] == str(ccd):
-#                         order_beginning_fit, order_ending_fit = optimise_tramline_polynomial(
-#                             overscan_subtracted_images = images['ccd_'+str(ccd)], 
-#                             order = order,
-#                             order_ranges = order_ranges,
-#                             order_beginning_coeffs = order_beginning_coeffs,
-#                             order_ending_coeffs = order_ending_coeffs,
-#                             order_pixels = np.arange(4096,dtype=float),
-#                             overwrite = False,
-#                             debug = debug_rows
-#                         )
-
-#                         order_beginning_coeffs[order] = order_beginning_fit
-#                         order_ending_coeffs[order] = order_ending_fit
-
-#     counts_in_orders = []
-#     if Science:
-#         noise_in_orders = []
-    
-#     # Create the debug_tramlines plot if we are debugging or fitting the tramlines
-#     if debug_tramlines | (update_tramlines_based_on_flat & Flat):
-
-#         if Flat: type='_flat'
-#         elif Science: type='_'+metadata['OBJECT']
-#         elif LC: type='_lc'
-#         elif ThXe: type='_thxe'
-#         else: raise ValueError('Unknown type of observation.')
-
-#         # Create a figure that shows the tramlines on each CCD
-#         f_flat_tramlines, gs = plt.subplots(1,3,figsize=(15,4))
-#         for panel_index in [0,1,2]:
-
-#             vmin = np.nanpercentile(images['ccd_'+str(panel_index+1)], 50).clip(min=0.01)
-#             # Make LC exposures more prominent
-#             if LC:
-#                 vmin = np.nanpercentile(images['ccd_'+str(panel_index+1)], 90).clip(min=0.01)
-#             if Science:
-#                 vmin = np.nanpercentile(images['ccd_'+str(panel_index+1)], 16).clip(min=0.01)
-#             if np.isnan(vmin):
-#                 vmin = 0.01
-
-#             vmax = np.nanpercentile(images['ccd_'+str(panel_index+1)], 95).clip(min=1.0)
-#             if np.isnan(vmax):
-#                 vmax = 1.0
-
-#             s = gs[panel_index].imshow(images['ccd_'+str(panel_index+1)],cmap='Oranges_r', norm = LogNorm(vmin=vmin, vmax=vmax))
-#             cbar_label = r'Log10(Counts)'
-
-#             gs[panel_index].set_title('CCD '+str(panel_index+1))
-#             cbar = plt.colorbar(s, ax=gs[panel_index-1], extend='both')
-#             cbar.set_label(cbar_label)
-#             gs[panel_index].set_xlabel('X Pixel')
-#             gs[panel_index].set_ylabel('Y Pixel')
-#             gs[panel_index].set_xlim(0,np.shape(images['ccd_'+str(panel_index+1)])[1])
-#             gs[panel_index].set_ylim(np.shape(images['ccd_'+str(panel_index+1)])[0],0)
-#             f_flat_tramlines.tight_layout()
-
-#         # Create zoomed figures for each tramline
-#         for order in order_beginning_coeffs.keys():
-
-#             ccd = order[4]
-
-#             if (not LC) | (ccd in ['2','3']):
-
-#                 f_order, ax_order = plt.subplots(figsize=(8,5))
-
-#                 # Limit to width around center for visualisation with height of *width_around_center* pixels and populate a 2D array for imshow
-#                 width_around_center = 70
-#                 order_xrange_begin = np.array(polynomial_function(np.arange(4096,dtype=float),*order_beginning_coeffs[order])-1)
-#                 order_xrange_end   = np.array(polynomial_function(np.arange(4096,dtype=float),*order_ending_coeffs[order])+1)
-
-#                 # If we are using the LC, use the few pixels around the LC position
-#                 if LC:
-#                     width_around_center = 30
-
-#                     # Default offsets for LC region
-#                     offset_begin = 9 + pixel_shifts['ccd_'+str(ccd)][0]
-#                     offset_end = 14 + pixel_shifts['ccd_'+str(ccd)][0]
-#                     # Adjust offsets for CCD3
-#                     if ccd == '3':
-#                         offset_begin = 8 + pixel_shifts['ccd_'+str(ccd)][0]
-#                         offset_end = 12 + pixel_shifts['ccd_'+str(ccd)][0]
-#                     order_xrange_begin = np.array(polynomial_function(np.arange(4096,dtype=float),*order_ending_coeffs[order])+offset_begin)
-#                     order_xrange_end   = np.array(polynomial_function(np.arange(4096,dtype=float),*order_ending_coeffs[order])+offset_end)
-                
-#                 order_xrange_center = np.array((order_xrange_begin + order_xrange_end) / 2,dtype=int)
-#                 debug_order_range_begin = (order_xrange_center - width_around_center // 2).clip(min=0,max=4096)
-#                 debug_order_range_end   = (order_xrange_center + width_around_center // 2).clip(min=0,max=4096)
-#                 flat_region_to_show = np.zeros((len(order_xrange_center), width_around_center)); flat_region_to_show[:] = np.nan
-#                 for x_index, x in enumerate(order_ranges[order]):
-
-#                     row = images['ccd_'+str(ccd)][x,debug_order_range_begin[x_index]:debug_order_range_end[x_index]]
-#                     # If the row is shorter than width_around_center, pad with NaNs
-#                     if len(row) < width_around_center:
-#                         if debug_order_range_begin[x_index] == 0:
-#                             row = np.concatenate((np.full((width_around_center - len(row)), np.nan), row))
-#                         else:
-#                             row = np.concatenate((row, np.full((width_around_center - len(row)), np.nan)))
-#                     row /= np.nanpercentile(row,90)
-#                     flat_region_to_show[x_index,:] = row
-
-#                 s = ax_order.imshow(flat_region_to_show, norm=LogNorm(vmin=np.max([0.0001,np.nanpercentile(flat_region_to_show,50)]), vmax=np.nanpercentile(flat_region_to_show,95)), cmap='Greys_r', aspect='auto', extent=[-width_around_center//2, width_around_center//2, len(order_xrange_center), 0])
-#                 cbar = plt.colorbar(s, ax=ax_order, extend='both')
-#                 cbar.set_label('Row-Normalised Counts')
-
-#                 ax_order.set_xlim(-width_around_center//2, width_around_center//2)
-#                 ax_order.plot(np.floor(order_xrange_begin - order_xrange_center), np.arange(len(order_xrange_begin)), c='C0', lw=0.5)
-#                 ax_order.plot(np.ceil(order_xrange_end - order_xrange_center), np.arange(len(order_xrange_end)), c='C0', lw=0.5)
-
-#                 ax_order.set_title(f'CCD {ccd} Order {order[9:]} Tramline Extraction')
-#                 ax_order.set_xlabel('Relative X Pixel (w.r.t. center of tramline)')
-#                 ax_order.set_ylabel('Y Pixel')
-#                 f_order.tight_layout()
-
-#                 Path(config.working_directory+'reduced_data/'+config.date+'/_tramline_information').mkdir(parents=True, exist_ok=True)
-#                 f_order.savefig(config.working_directory+'reduced_data/'+config.date+f'/_tramline_information/tramline{type}_{order}.pdf',bbox_inches='tight')
-#                 if 'ipykernel' in sys.modules: plt.show(f_order)
-#                 plt.close(f_order)
-    
-#     for order in order_beginning_coeffs.keys():
-#         ccd = order[4]
-
-#         # Prepare to the flux from each tramlines in a row; give NaN values to regions without flux
-#         order_counts = np.zeros(np.shape(images['ccd_'+str(ccd)])[1]); order_counts[:] = np.nan
-#         if Science:
-#             order_noise = np.zeros(np.shape(images['ccd_'+str(ccd)])[1]); order_noise[:] = np.nan
-
-#         # We will never have flux in LC mode on CCD1, so we can just assume 0 counts and continue after the orders of CCD1.
-#         if LC & (ccd == '1'):
-#             # The SimLC is not present on CCD1
-#             counts_in_orders.append(order_counts)
-#             continue
-
-#         order_xrange_begin = np.array(polynomial_function(np.arange(4096,dtype=float),*order_beginning_coeffs[order])-1,dtype=int)
-#         order_xrange_end   = np.array(polynomial_function(np.arange(4096,dtype=float),*order_ending_coeffs[order])+1,dtype=int)
-
-#         # The SimLC position is slightly different for CCD2 and CCD3.
-#         if LC:
-#             # Default offsets for LC region
-#             offset_begin = 10 + pixel_shifts['ccd_'+str(ccd)][0]
-#             offset_end = 14 + pixel_shifts['ccd_'+str(ccd)][0]
-#             # Adjust offsets for CCD3
-#             if ccd == '3':
-#                 offset_begin = 8 + pixel_shifts['ccd_'+str(ccd)][0]
-#                 offset_end = 12 + pixel_shifts['ccd_'+str(ccd)][0]
-#             order_xrange_begin = np.array(polynomial_function(np.arange(4096,dtype=float),*order_ending_coeffs[order])+offset_begin,dtype=int)
-#             order_xrange_end   = np.array(polynomial_function(np.arange(4096,dtype=float),*order_ending_coeffs[order])+offset_end,dtype=int)
-
-#         if debug_tramlines | (update_tramlines_based_on_flat & Flat):
-#             if order == list(order_beginning_coeffs.keys())[0]:
-#                 label_left = 'Tramline left edges'
-#                 label_right = 'Tramline right edges'
-#             else:
-#                 label_left = '_nolegend_'
-#                 label_right = '_nolegend_'
-#             gs[int(ccd)-1].plot(order_xrange_begin,np.arange(len(order_xrange_begin)),c='C0',lw=0.1,label=label_left)
-#             gs[int(ccd)-1].plot(order_xrange_end,np.arange(len(order_xrange_begin)),c='C1',lw=0.1,label=label_right)
-        
-#         # Let's loop over the x-pixels (aka rows) of the tramlines
-#         for x_index, x in enumerate(order_ranges[order]):
-
-#             # For each tramline, find the relevant pixels and then sum across the rows
-#             counts_in_tramline = np.sum(images['ccd_'+str(ccd)][x,order_xrange_begin[x_index]:order_xrange_end[x_index]], axis=0)
-#             order_counts[order_ranges[order][0] + x_index] = counts_in_tramline
-
-#             # If we are working with the Science frame, also compute the noise:
-#             if Science:
-#                 # For each tramline, find the relevant pixels and then sum across the rows
-#                 order_noise[order_ranges[order][0] + x_index] = np.sqrt(np.sum(images_noise['ccd_'+str(ccd)][x,order_xrange_begin[x_index]:order_xrange_end[x_index]]**2, axis=0))
-
-#         counts_in_orders.append(order_counts)
-#         if Science:
-#             noise_in_orders.append(order_noise)
-
-#     if debug_tramlines | (update_tramlines_based_on_flat & Flat):        
-#         f_flat_tramlines.tight_layout()
-#         Path(config.working_directory+'reduced_data/'+config.date+'/_debug').mkdir(parents=True, exist_ok=True)
-#         f_flat_tramlines.savefig(config.working_directory+'reduced_data/'+config.date+f'/_debug/debug_tramlines{type}.pdf',bbox_inches='tight')
-#         plt.show()
-#         plt.close(f_flat_tramlines)
-        
-#     if Science:
-#         return(np.array(counts_in_orders),np.array(noise_in_orders),metadata)
-#     elif Bstar:
-#         return(np.array(counts_in_orders), metadata)
-#     elif Flat:
-#         return(np.array(counts_in_orders), images)
-#     else:
-#         return(np.array(counts_in_orders))
-
-
-# def find_tramline_beginning_and_ending(order, x_index, x_pixels, previous_beginning, previous_ending, expected_tramline_width = 38, tolerance=2, tolerance_to_previous=3, debug=False):
-#     """
-#     Calculates the beginning and ending positions of a tramline for a specific row based on pixel intensity data that exceeds a certain threshold. 
-#     This function identifies significant gaps likely representing the space between the main tramline and outer fibers.
-
-#     Parameters:
-#         order (str): The order being analyzed, formatted as 'ccd_{ccd}_{order}'.
-#         x_index (int): Index of the row currently being analyzed.
-#         x_pixels (array): Array of pixel positions within the tramline region above a specified intensity threshold.
-#         previous_beginning (int): Beginning pixel index of the tramline in the previous row.
-#         previous_ending (int): Ending pixel index of the tramline in the previous row.
-#         expected_tramline_width (int, optional): Expected width of the tramline, typically ranging from 38 to 45 pixels. Default is 38.
-#         tolerance (int, optional): Tolerance level for identifying significant gaps between the main tramline and outer fibers, measured in pixels. Default is 2.
-#         tolerance_to_previous (int, optional): Tolerance for deviations from the previous row's tramline positions, measured in pixels. Default is 3.
-#         debug (bool, optional): If True, enables debug outputs for troubleshooting the tramline detection process.
-
-#     Returns:
-#         tuple (int, int): A tuple containing the beginning and ending pixel indices of the tramline for the current row.
-#                           Returns (np.nan, np.nan) if the calculated tramline positions are outside of the defined tolerances or if other validity tests fail.
-#     """
-
-#     # Calculate differences between pixels above the threshold (which wis used as input for x_pixels)
-#     differences = [x_pixels[i+1] - x_pixels[i] for i in range(len(x_pixels) - 1)]
-
-#     if debug:
-#         print('\n  --> Debugging Traminline Beginning/Ending for Order:',order)
-#         print('  --> x_index:',x_index)
-#         print('  --> x_pixels:',x_pixels[0],'...',x_pixels[-1])
-#         print('  --> Differences:',differences)
-
-#     # Initialise tramline_beginning and tramline_ending as nans    
-#     tramline_beginning = np.nan
-#     if len(x_pixels) < 1: return(np.nan, np.nan)
-#     elif x_pixels[-1] < 1: return(np.nan, np.nan)
-
-#     tramline_ending = np.nan
-    
-#     # Identify segments above the tolerance, while allowing for gaps.
-#     current_gap = 0
-#     for i, diff in enumerate(differences):
-#         # if no gap, continue the sequence
-#         if diff == 1: current_gap = 0
-#         elif diff > 1:
-#             current_gap += diff  # Increment the gap count by the missing numbers
-#             # Check if the gap exceeds tolerance
-#             if current_gap > tolerance:
-#                 if np.isnan(tramline_beginning): tramline_beginning = x_pixels[i+1]
-#                 # Add tramline_ending, if it is ~expected_tramline_width, so < expected_tramline_width +- 4 from the tramline_beginning
-#                 elif np.abs((x_pixels[i]+1 - tramline_beginning) - expected_tramline_width) <= 4:
-#                     tramline_ending = x_pixels[i]+1
-#                     current_gap = 0
-#                 else:
-#                     if debug: print('  --> Not using: '+str(x_pixels[i]+1)+' with width '+str(x_pixels[i]+1 - tramline_beginning)+' because the following width was expected: '+str(expected_tramline_width-3)+'-'+str(expected_tramline_width+3))
-#                     current_gap = 0
-                    
-#     if debug: print('  --> x_index Initial Beginning/End: ',x_index, tramline_beginning, tramline_ending)
-                    
-#     # Force new beginning to be close to beginning of previous pixel within tolerance_to_previous
-#     if (np.abs(previous_beginning - tramline_beginning) > tolerance_to_previous):
-#         tramline_beginning = previous_beginning
-#     # Replace with previous, if we could not find a tramline_beginning
-#     # but only if the previous tramline_beginning is not too close to the left edge
-#     elif np.isnan(tramline_beginning):
-#         if previous_beginning > 2:
-#             if debug: print('  --> Correction 1: Setting tramline_beginning = previous_beginning')
-#             # For CCD1, we know that positions tend to decrease downwards -- but let's make sure it's not left of the search range!
-#             if order[4] == '1': tramline_beginning = np.max([x_pixels[0]+5,previous_beginning - 1])
-#             # For CCD2, the higher orders turn around pixel 600
-#             elif (order[4] == '2'):
-#                 if (int(order[-3:]) > 115):
-#                     # We know that positions tend to increase downwards -- but let's make sure it's not right of the search range!
-#                     if x_index < 600: tramline_beginning = np.min([x_pixels[-1]-5,previous_beginning + 1])
-#                     # We know that positions tend to decrease downwards -- but let's make sure it's not left of the search range!
-#                     else: tramline_beginning = np.max([x_pixels[0]+5,previous_beginning - 1])
-#                 else:
-#                     tramline_beginning = previous_beginning.clip(min = x_pixels[0]+5, max = x_pixels[-1]-5)
-#             # For most other orders, using the same pixel as the previous row is fine.
-#             else:
-#                 tramline_beginning = previous_beginning.clip(min = x_pixels[0]+5, max = x_pixels[-1]-5)
-#         else:
-#             if debug: print('  --> Exception 1: Beginning too far left; returning (np.nan,np.nan)')
-#             return(np.nan, np.nan)
-
-#     # Force new ending to be close to ending of previous pixel within tolerance_to_previous
-#     if (np.abs(previous_ending - tramline_ending) > tolerance_to_previous) & (previous_ending - tramline_beginning < expected_tramline_width+3):
-#         if debug: print('  --> Correction 2: Setting tramline_ending = previous_ending, because difference previous_ending - tramline_ending above tolerance of '+str(tolerance_to_previous)+' and previous ending within expected_tramline_width')
-#         tramline_ending = previous_ending
-#     # Replace with previous, if we could not find a tramline_ending
-#     # but only if the previous tramline_ending is not too close to the left edge
-#     elif np.isnan(tramline_ending):
-#         if previous_ending > 2:
-#             if debug: print('  --> Correction 3: Too far off from previous ending. Setting tramline_ending = previous_ending.clip(min = x_pixels[0]+5, max = x_pixels[-1]-5)')
-#             tramline_ending = previous_ending.clip(min = x_pixels[0]+5, max = x_pixels[-1]-5)
-#         else:
-#             if debug: print('  --> Exception 2: Ending too far left 1, returning (np.nan,np.nan)')
-#             return(np.nan, np.nan)
-#     # If the tramline ending is too close to left edge, we return nans
-#     elif tramline_ending <= expected_tramline_width+3:
-#         if debug: print('  --> Exception 3: Ending too far left 2, returning (np.nan,np.nan)')
-#         return(np.nan, np.nan)
-    
-#     # Make sure that the tramlines are reasonably wide.
-#     # We expect a tramline with width expected_tramline_width within tolerance.
-#     if tramline_ending - tramline_beginning < expected_tramline_width-4:
-#         if debug: print('  --> Exception 4: Tramline not wide enough: ', tramline_ending - tramline_beginning, ' (expexting ',expected_tramline_width,'). Returning (np.nan,np.nan)')
-#         return(np.nan, np.nan)
-
-#     if debug: print('  --> No Exception. Using: ',tramline_beginning, tramline_ending)
-    
-#     return(tramline_beginning, tramline_ending)
-
-# def optimise_tramline_polynomial(overscan_subtracted_images, order, order_ranges, order_beginning_coeffs, order_ending_coeffs, order_pixels, overwrite=False, debug=False):
-#     """
-#     Optimizes the polynomial coefficients for defining the beginning and ending of tramlines in spectroscopic data
-#     for a given order. This function fits polynomials to tramline boundaries based on
-#     overscan-subtracted images.
-
-#     Parameters:
-#         overscan_subtracted_images (list of ndarray): A list of 2D arrays, each representing an overscan-subtracted image.
-#         order (int or str): The spectral order to be processed.
-#         order_ranges (dict): A dictionary mapping each order to its full pixel range.
-#         order_beginning_coeffs (dict): A dictionary mapping each order to the beginning pixel positions of its tramlines.
-#         order_ending_coeffs (dict): A dictionary mapping each order to the ending pixel positions of its tramlines.
-#         order_pixels (array): the pixel positions corresponding to the order after taking shifts wrt to the reference image into account.
-#         overwrite (bool, optional): If True, overwrites the existing polynomial coefficient file located at 
-#             'VeloceReduction/tramline_information/tramlines_begin_end_{order}.txt'. Default is False.
-#         debug (bool, optional): If True, displays debug plots that illustrate the polynomial fitting process and 
-#             the derived tramline boundaries. Default is False.
-
-#     Returns:
-#         tuple of arrays: Returns a tuple containing two arrays:
-#             - The first array contains the polynomial coefficients for the tramline beginning.
-#             - The second array contains the polynomial coefficients for the tramline ending.
-#     """
-
-#     ccd = order[4]
-    
-#     adjusted_order_pixel = []
-#     adjusted_order_beginning = []
-#     adjusted_order_ending = []
-
-#     image_dimensions = np.shape(overscan_subtracted_images)
-
-#     # leave option to adjust beginning and end of tramlines.
-#     # Set left and right adjustment to 15 for CCDs 1 and 2 and 10 for CCD 3 by default.
-#     # 20 would be too close to neighbouring tramlines. 15 is too broad for CCD3.
-#     tramline_buffer_left = -15
-#     tramline_buffer_right = 15
-#     if order[4] == '3':
-#         tramline_buffer_left = -10
-#         tramline_buffer_right = 10
-#     # Orders at the detector edges tend to need special treatment
-#     if order == 'ccd_3_order_104': tramline_buffer_left = -8
-
-#     order_xrange_begin = np.array(polynomial_function(order_pixels,*order_beginning_coeffs[order])+tramline_buffer_left,dtype=int)
-#     order_xrange_end   = np.array(polynomial_function(order_pixels,*order_ending_coeffs[order])+tramline_buffer_right,dtype=int)
-
-#     # Define buffer for beginning and ending of the CCD to avoid issues with tramlines at the edges
-#     buffer = dict()
-#     buffer['ccd_1_order_138'] = [200,320]
-#     buffer['ccd_1_order_139'] = [125,550]
-#     buffer['ccd_1_order_140'] = [125,350]
-#     buffer['ccd_1_order_141'] = [125,250]
-#     buffer['ccd_1_order_142'] = [125,250]
-#     buffer['ccd_1_order_143'] = [125,250]
-#     buffer['ccd_1_order_144'] = [125,250]
-#     buffer['ccd_1_order_145'] = [125,250]
-#     buffer['ccd_1_order_146'] = [125,250]
-#     buffer['ccd_1_order_147'] = [225,250]
-#     buffer['ccd_1_order_148'] = [150,250]
-#     buffer['ccd_1_order_149'] = [225,250]
-#     buffer['ccd_1_order_150'] = [325,250]
-#     buffer['ccd_1_order_151'] = [500,250]
-#     buffer['ccd_1_order_152'] = [800,250]
-#     buffer['ccd_1_order_153'] = [1150,250]
-#     buffer['ccd_1_order_154'] = [1350,800]
-#     buffer['ccd_1_order_155'] = [1530,850]
-#     buffer['ccd_1_order_156'] = [1650,1220]
-#     buffer['ccd_1_order_157'] = [1650,1300]
-#     buffer['ccd_1_order_158'] = [1500,1350]
-#     buffer['ccd_1_order_159'] = [1500,1200]
-#     buffer['ccd_1_order_160'] = [1500,1200]
-#     buffer['ccd_1_order_161'] = [1500,1200]
-#     buffer['ccd_1_order_162'] = [1500,1500]
-#     buffer['ccd_1_order_163'] = [1600,1200]
-#     buffer['ccd_1_order_164'] = [1600,1250]
-#     buffer['ccd_1_order_165'] = [1560,1400]
-#     buffer['ccd_1_order_166'] = [1600,1500]
-#     buffer['ccd_1_order_167'] = [1500,1200]
-#     buffer['ccd_2_order_103'] = [105,450]
-#     buffer['ccd_2_order_104'] = [110,100]
-#     buffer['ccd_2_order_105'] = [110,100]
-#     buffer['ccd_2_order_106'] = [110,100]
-#     buffer['ccd_2_order_107'] = [110,100]
-#     buffer['ccd_2_order_108'] = [110,100]
-#     buffer['ccd_2_order_109'] = [110,100]
-#     buffer['ccd_2_order_110'] = [110,100]
-#     buffer['ccd_2_order_111'] = [100,100]
-#     buffer['ccd_2_order_112'] = [100,100]
-#     buffer['ccd_2_order_113'] = [100,100]
-#     buffer['ccd_2_order_114'] = [100,100]
-#     buffer['ccd_2_order_115'] = [110,100]
-#     buffer['ccd_2_order_116'] = [130,100]
-#     buffer['ccd_2_order_117'] = [130,100]
-#     buffer['ccd_2_order_118'] = [130,100]
-#     buffer['ccd_2_order_119'] = [150,100]
-#     buffer['ccd_2_order_120'] = [200,120]
-#     buffer['ccd_2_order_121'] = [220,100]
-#     buffer['ccd_2_order_122'] = [220,120]
-#     buffer['ccd_2_order_123'] = [200,100]
-#     buffer['ccd_2_order_124'] = [200,100]
-#     buffer['ccd_2_order_125'] = [300,100]
-#     buffer['ccd_2_order_126'] = [200,100]
-#     buffer['ccd_2_order_127'] = [260,100]
-#     buffer['ccd_2_order_128'] = [240,100]
-#     buffer['ccd_2_order_129'] = [250,110]
-#     buffer['ccd_2_order_130'] = [250,120]
-#     buffer['ccd_2_order_131'] = [280,120]
-#     buffer['ccd_2_order_132'] = [260,110]
-#     buffer['ccd_2_order_133'] = [270,120]
-#     buffer['ccd_2_order_134'] = [330,125]
-#     buffer['ccd_2_order_135'] = [365,125]
-#     buffer['ccd_2_order_136'] = [300,145]
-#     buffer['ccd_2_order_137'] = [360,100]
-#     buffer['ccd_2_order_138'] = [500,170]
-#     buffer['ccd_2_order_139'] = [550,290]
-#     buffer['ccd_2_order_140'] = [1700,650]
-#     buffer['ccd_3_order_65'] = [105,50]
-#     buffer['ccd_3_order_66'] = [105,50]
-#     buffer['ccd_3_order_67'] = [105,70]
-#     buffer['ccd_3_order_68'] = [105,50]
-#     buffer['ccd_3_order_69'] = [105,50]
-#     buffer['ccd_3_order_70'] = [105,50]
-#     buffer['ccd_3_order_71'] = [125,50]
-#     buffer['ccd_3_order_72'] = [105,50]
-#     buffer['ccd_3_order_73'] = [105,50]
-#     buffer['ccd_3_order_74'] = [105,50]
-#     buffer['ccd_3_order_75'] = [105,50]
-#     buffer['ccd_3_order_76'] = [105,50]
-#     buffer['ccd_3_order_77'] = [105,50]
-#     buffer['ccd_3_order_78'] = [105,50]
-#     buffer['ccd_3_order_79'] = [105,50]
-#     buffer['ccd_3_order_80'] = [105,50]
-#     buffer['ccd_3_order_81'] = [105,50]
-#     buffer['ccd_3_order_82'] = [105,50]
-#     buffer['ccd_3_order_83'] = [115,50]
-#     buffer['ccd_3_order_84'] = [115,50]
-#     buffer['ccd_3_order_85'] = [130,50]
-#     buffer['ccd_3_order_86'] = [135,50]
-#     buffer['ccd_3_order_87'] = [135,50]
-#     buffer['ccd_3_order_88'] = [155,100]
-#     buffer['ccd_3_order_89'] = [190,100]
-#     buffer['ccd_3_order_90'] = [230,100]
-#     buffer['ccd_3_order_91'] = [230,100]
-#     buffer['ccd_3_order_92'] = [300,100]
-#     buffer['ccd_3_order_93'] = [310,100]
-#     buffer['ccd_3_order_94'] = [330,125]
-#     buffer['ccd_3_order_95'] = [350,125]
-#     buffer['ccd_3_order_96'] = [370,125]
-#     buffer['ccd_3_order_97'] = [360,125]
-#     buffer['ccd_3_order_98'] = [410,125]
-#     buffer['ccd_3_order_99'] = [370,150]
-#     buffer['ccd_3_order_100'] = [375,150]
-#     buffer['ccd_3_order_101'] = [580,150]
-#     buffer['ccd_3_order_102'] = [400,150]
-#     buffer['ccd_3_order_103'] = [710,150]
-#     buffer['ccd_3_order_104'] = [1600,150]
-
-#     for x_index, x in enumerate(order_ranges[order]):
-
-#         # The uppermost and lowermost ~100 pixels typically do no get a lot of exposure
-#         # For robustness, let's neglect these pixels
-#         if (x_index >= buffer[order][0]) & (x_index <= image_dimensions[0] - buffer[order][1]):
-#             x_pixels_to_be_tested_for_tramline = np.arange(order_xrange_begin[x_index],order_xrange_end[x_index])
-#             x_pixels_to_be_tested_for_tramline = x_pixels_to_be_tested_for_tramline[x_pixels_to_be_tested_for_tramline >= 0]
-#             x_pixels_to_be_tested_for_tramline = x_pixels_to_be_tested_for_tramline[x_pixels_to_be_tested_for_tramline < image_dimensions[1]]
-#             x_pixel_values_to_be_tested_for_tramline = overscan_subtracted_images[x,x_pixels_to_be_tested_for_tramline]
-
-#             if len(x_pixel_values_to_be_tested_for_tramline) > 0:
-
-#                 # We assume that flat measurements should be ~halfway between minimum and maximum
-#                 threshold = 0.5*(
-#                     np.nanmin(x_pixel_values_to_be_tested_for_tramline)+
-#                     np.nanmax(x_pixel_values_to_be_tested_for_tramline)
-#                 )
-#                 # The right side of CCD 2 with order 130-140 gets less dominant exposure -> lower threshold
-#                 if (ccd == '2') & (order[-2] in ['3','4']):
-#                     threshold = 0.4*(
-#                         np.nanmin(x_pixel_values_to_be_tested_for_tramline)+
-#                         np.nanmax(x_pixel_values_to_be_tested_for_tramline)
-#                     )
-#                 above_threshold = np.where(x_pixel_values_to_be_tested_for_tramline > threshold)[0]
-                
-#                 if debug & (x_index % 500 == 0): debug_find_tramline_row = True
-#                 else: debug_find_tramline_row = False
-
-#                 if debug_find_tramline_row:
-#                     f2, ax2 = plt.subplots()
-#                     ax2.set_title('x_index: '+str(x_index))
-#                     ax2.plot(
-#                         x_pixels_to_be_tested_for_tramline,
-#                         x_pixel_values_to_be_tested_for_tramline,
-#                         label = 'Flat'
-#                     )
-#                     ax2.plot(
-#                         x_pixels_to_be_tested_for_tramline[above_threshold],
-#                         threshold*np.ones(len(x_pixel_values_to_be_tested_for_tramline[above_threshold])),
-#                         c = 'C3', label = 'Threshold ('+"{:.1f}".format(threshold)+')'
-#                     )
-#                     ax2.set_xlabel('X Pixel')
-#                     ax2.set_ylabel('Counts')
-#                     ax2.set_ylim(0,1.1*np.max(x_pixel_values_to_be_tested_for_tramline))
-#                     plt.tight_layout()
-#                     if 'ipykernel' in sys.modules: plt.show()
-#                     plt.close(f2)
-                
-#                 # We expect slightly different widths for each tramlines in the different CCDs
-#                 if ccd == '3': expected_tramline_width = 38
-#                 elif ccd == '2': expected_tramline_width = 44
-#                 elif ccd == '1': expected_tramline_width = 45
-        
-#                 if x_index == buffer[order][0]:
-#                     tramline_beginning = np.nan
-#                     tramline_ending = np.nan
-
-#                 tramline_beginning, tramline_ending = find_tramline_beginning_and_ending(
-#                     order,
-#                     x_index,
-#                     x_pixels_to_be_tested_for_tramline[above_threshold],
-#                     previous_beginning = tramline_beginning,
-#                     previous_ending = tramline_ending,
-#                     expected_tramline_width = expected_tramline_width,
-#                     debug = debug_find_tramline_row
-#                 )
-                
-#                 if debug_find_tramline_row: print('  --> x_index, beginning, ending, width: ',x_index, tramline_beginning, tramline_ending, tramline_ending-tramline_beginning)
-
-#                 x_pixels_tramline = []
-#                 if np.isfinite(tramline_beginning) & np.isfinite(tramline_ending):
-#                     x_pixels_tramline = np.arange(tramline_beginning,tramline_ending)
-#                     adjusted_order_pixel.append(x_index)
-#                     adjusted_order_beginning.append(tramline_beginning)
-#                     adjusted_order_ending.append(tramline_ending)
-
-#     adjusted_order_pixel     = np.array(adjusted_order_pixel)
-#     adjusted_order_beginning = np.array(adjusted_order_beginning)
-#     adjusted_order_ending    = np.array(adjusted_order_ending)
-
-#     old_order_beginning, old_order_ending = np.loadtxt(Path(__file__).resolve().parent / 'tramline_information' / f'tramlines_begin_end_{order}.txt')
-#     old_buffer = [old_order_beginning[-1],old_order_ending[-1]]
-#     old_order_beginning = old_order_beginning[:-1]
-#     old_order_ending = old_order_ending[:-1]
-   
-#     if order not in ['ccd_1_order_167','ccd_1_order_166']:
-#         try:
-#             order_beginning_fit = curve_fit(
-#                 polynomial_function,
-#                 adjusted_order_pixel,
-#                 adjusted_order_beginning,
-#                 p0 = old_order_beginning,
-#                 bounds=(
-#                     [old_order_beginning[0]-10,old_order_beginning[1]-0.01,old_order_beginning[2]-1e-06,old_order_beginning[3]-1e-11,old_order_beginning[4]-1e-13],
-#                     [old_order_beginning[0]+10,old_order_beginning[1]+0.01,old_order_beginning[2]+1e-06,old_order_beginning[3]+1e-11,0]
-#                     )
-#             )[0]
-#         except:
-#             if debug: print('Could not fit beginning of '+order+'. Using old beginning.')
-#             order_beginning_fit = old_order_beginning
-
-#         try:
-#             order_ending_fit = curve_fit(
-#                 polynomial_function,
-#                 adjusted_order_pixel,
-#                 adjusted_order_ending,
-#                 p0 = old_order_ending,
-#                 bounds=(
-#                     [old_order_ending[0]-10,old_order_ending[1]-0.01,old_order_ending[2]-1e-06,old_order_ending[3]-1e-11,old_order_ending[4]-1e-13],
-#                     [old_order_ending[0]+10,old_order_ending[1]+0.01,old_order_ending[2]+1e-06,old_order_ending[3]+1e-11,0]
-#                 )
-#             )[0]
-#         except:
-#             if debug: print('  --> Could not fit end of order '+order+'. Using old ending.')
-#             order_ending_fit = old_order_ending
-#     else:
-#         if debug: print('  --> Skipping fitting for '+order+'. Using old values.')
-#         order_beginning_fit = old_order_beginning
-#         order_ending_fit = old_order_ending
-
-#     Path(config.working_directory+'reduced_data/'+config.date+'/_tramline_information').mkdir(parents=True, exist_ok=True)
-#     np.savetxt(config.working_directory+'reduced_data/'+config.date+f'/_tramline_information/tramlines_begin_end_{order}.txt',
-#         np.array([
-#             ['#c0', 'c1', 'c2', 'c3', 'c4','buffer_pixel'],
-#             np.concatenate((order_beginning_fit,[buffer[order][0]])),
-#             np.concatenate((order_ending_fit,[buffer[order][1]]))
-#         ]),
-#         fmt='%s'
-#     )
-
-#     # Print/plot tramline extraction diagnostics
-#     if debug:
-#         f, ax = plt.subplots(figsize=(15,15))
-#         ax.set_title('Tramline Extraction for '+order, fontsize=20)
-#         if order in ['ccd_1_order_167','ccd_1_order_166']:
-#             ax.imshow(np.log10(overscan_subtracted_images),cmap='Greys', vmax = np.nanpercentile(np.log10(overscan_subtracted_images.flatten()),68), label = 'Flat Exposure')
-#         else:
-#             ax.imshow(np.log10(overscan_subtracted_images),cmap='Greys', label = 'Flat Exposure')
-#         ax.plot(order_xrange_begin-tramline_buffer_left,np.arange(len(order_xrange_begin)),c='C3',lw=0.5, ls = 'dashed', label = 'Initial Tramline Region')
-#         ax.plot(order_xrange_end-tramline_buffer_right,np.arange(len(order_xrange_begin)),c='C3',lw=0.5, ls = 'dashed', label = '_nolegend_')
-#         ax.plot(order_xrange_begin,np.arange(len(order_xrange_begin)),c='C3',lw=0.5, label = 'Initial Search Region')
-#         ax.plot(order_xrange_end,np.arange(len(order_xrange_begin)),c='C3',lw=0.5, label = '_nolegend_')
-#         ax.axhline(buffer[order][0], label = 'Edge Buffer Region')
-#         ax.axhline(image_dimensions[0]-buffer[order][1], label = '_nolegend_')
-#         ax.set_aspect(1/10)
-
-#         ax.plot(
-#             adjusted_order_beginning,
-#             adjusted_order_pixel,
-#             c = 'C1',
-#             label = 'Identified Tramline Beginning/Ending'
-#         )
-#         ax.plot(
-#             np.round(polynomial_function(np.arange(image_dimensions[0]), *order_beginning_fit),0),
-#             np.arange(image_dimensions[0]),
-#             c = 'C0',
-#             ls = 'dashed',
-#             label = 'Polynomial Fit to Tramline Beginning/Ending'
-#         )
-#         ax.plot(
-#             adjusted_order_ending,
-#             adjusted_order_pixel,
-#             c = 'C1',
-#             label = '_nolegend_'
-#         )
-#         ax.plot(
-#             np.round(polynomial_function(np.arange(image_dimensions[0]), *order_ending_fit),0),
-#             np.arange(image_dimensions[0]),
-#             c = 'C0',
-#             ls = 'dashed',
-#             label = '_nolegend_'
-#         )
-
-#         ax.set_xlim(
-#             np.nanmax([np.nanmin(order_xrange_begin) - 20,-20]), 
-#             np.nanmin([np.nanmax(order_xrange_end) + 20, image_dimensions[1] + 20])
-#         )
-
-#         print('  --> Old vs New with old/new buffers: ',old_buffer, buffer[order])
-#         print('  --> Beginning:')
-#         print('      --> Old: ',[f"{number:.4e}" for number in old_order_beginning])
-#         print('      --> New: ',[f"{number:.4e}" for number in order_beginning_fit])
-#         print('  --> Ending:')
-#         print('      --> Old: ',[f"{number:.4e}" for number in old_order_ending])
-#         print('      --> New: ',[f"{number:.4e}" for number in order_ending_fit])
-        
-#         ax.set_xlabel('X Pixels (Zoom)',fontsize=15)
-#         ax.set_ylabel('Y Pixels',fontsize=15)
-#         ax.legend(loc = 'upper left',fontsize=15)
-#         if (order == 'ccd_1_order_141') & overwrite: plt.savefig(Path(__file__).resolve().parent / 'joss_paper' / f'tramline_extraction_example_{order}.png',dpi=100,bbox_inches='tight')
-#         if 'ipykernel' in sys.modules: plt.show()
-#         plt.close(f)
-        
-#     return(order_beginning_fit, order_ending_fit)
+    background = (
+        np.full(nx, np.nan)
+        if fit_background
+        else None
+    )
+
+    covariance = (
+        np.full((nx, nf, nf), np.nan)
+        if return_covariance else None
+    )
+
+    debug = logger.isEnabledFor(logging.DEBUG)
+    condition_numbers = []
+    skipped = 0
+
+    for x in range(nx):
+        good = (
+            np.isfinite(order[x])
+            & np.isfinite(variance[x])
+            & (variance[x] > 0)
+        )
+        if good.sum() < nf + int(fit_background):
+            skipped += 1
+            continue
+
+        # Build the fixed profile matrix from the smooth Flat geometry.
+        P = _integrated_gaussians(
+            m, geometry.centres[x], geometry.sigma[x]
+        )
+        A = (
+            np.column_stack((P, np.ones(nm)))
+            if fit_background else P
+        )
+
+        # Weight every detector pixel by its propagated standard deviation.
+        inv_sigma = 1.0 / np.sqrt(variance[x, good])
+        Aw = A[good] * inv_sigma[:, None]
+        dw = order[x, good] * inv_sigma
+
+        if (
+            not np.all(np.isfinite(Aw))
+            or not np.all(np.isfinite(dw))
+        ):
+            skipped += 1
+            continue
+
+        try:
+            coeff, *_ = np.linalg.lstsq(Aw, dw, rcond=None)
+            cov = np.linalg.pinv(Aw.T @ Aw)[:nf, :nf]
+        except np.linalg.LinAlgError:
+            skipped += 1
+            logger.debug(
+                "%sfibre extraction row %d skipped: linear solve failed",
+                f"{label}: " if label else "",
+                x,
+            )
+            continue
+
+        flux[x] = coeff[:nf]
+        var[x] = np.diag(cov)
+        if fit_background:
+            background[x] = coeff[nf]
+        if return_covariance:
+            covariance[x] = cov
+
+        # Condition number is an excellent debug diagnostic for strongly
+        # blended/degenerate fibre solutions, but need not be computed always.
+        if debug and x % 64 == 0:
+            condition_numbers.append(np.linalg.cond(Aw))
+
+    valid_rows = np.count_nonzero(np.all(np.isfinite(flux), axis=1))
+    if debug:
+        finite_cond = np.asarray(condition_numbers, float)
+        finite_cond = finite_cond[np.isfinite(finite_cond)]
+        logger.debug(
+            "%sfibre extraction: valid rows %d/%d; skipped=%d; "
+            "median matrix condition=%.2e; max=%.2e",
+            f"{label}: " if label else "",
+            valid_rows, nx, skipped,
+            float(np.nanmedian(finite_cond)) if finite_cond.size else np.nan,
+            float(np.nanmax(finite_cond)) if finite_cond.size else np.nan,
+        )
+
+    return ExtractionResult(
+        flux=flux,
+        variance=var,
+        components=geometry.components,
+        extraction_mode="fibre",
+        covariance=covariance,
+        background=background,
+    )
+
+
+def recombine_fibres(result, components=SCIENCE_COMPONENTS):
+    """Recombine selected fibre amplitudes with correct uncertainty propagation.
+
+    If the simultaneous fibre fit retained covariance, off-diagonal terms are
+    included through ``1.T @ C @ 1`` rather than simply summing variances.
+    """
+    if result.extraction_mode != "fibre":
+        raise ValueError("recombine_fibres requires a fibre ExtractionResult")
+
+    idx = result.component_indices(components)
+    flux = np.sum(result.flux[:, idx], axis=1)
+
+    if result.covariance is None:
+        variance = np.sum(result.variance[:, idx], axis=1)
+    else:
+        covariance = result.covariance[:, idx][:, :, idx]
+        variance = np.sum(covariance, axis=(1, 2))
+
+    return flux, variance
+
+
+def _smooth_1d(values, sigma=50.0):
+    """Gaussian-smooth a 1D sequence while normalising around missing samples."""
+    values = np.asarray(values, float)
+    good = np.isfinite(values)
+    filled = np.where(good, values, 0.0)
+    weights = gaussian_filter1d(good.astype(float), sigma, mode="nearest")
+    smooth = gaussian_filter1d(filled, sigma, mode="nearest")
+    result = np.full_like(values, np.nan)
+    use = weights > 0.05
+    result[use] = smooth[use] / weights[use]
+    return result
+
+
+def fibre_recombination_qa(
+    summed,
+    fibre,
+    summed_component="Science",
+    smooth_sigma=50.0,
+    label=None,
+):
+    """Compare recombined science fibres with the direct summed extraction.
+
+    The direct summed spectrum remains the robust spectral-shape product.  This
+    diagnostic measures wavelength-dependent structure introduced by fibre
+    deblending; a constant scale difference is removed with a broad smooth ratio.
+    """
+    if summed_component not in summed.components:
+        raise KeyError(f"Summed component {summed_component!r} is unavailable")
+
+    j = summed.components.index(summed_component)
+    direct_flux = np.asarray(summed.flux[:, j], float)
+    direct_variance = np.asarray(summed.variance[:, j], float)
+    recombined_flux, recombined_variance = recombine_fibres(
+        fibre, SCIENCE_COMPONENTS
+    )
+
+    ratio = np.full_like(direct_flux, np.nan)
+    good = (
+        np.isfinite(direct_flux)
+        & np.isfinite(recombined_flux)
+        & (direct_flux != 0)
+    )
+    ratio[good] = recombined_flux[good] / direct_flux[good]
+
+    ratio_smooth = _smooth_1d(ratio, sigma=smooth_sigma)
+    structure = np.full_like(ratio, np.nan)
+    good_structure = good & np.isfinite(ratio_smooth) & (ratio_smooth != 0)
+    structure[good_structure] = ratio[good_structure] / ratio_smooth[good_structure] - 1.0
+
+    finite = structure[np.isfinite(structure)]
+    robust_rms = (
+        1.4826 * np.median(np.abs(finite - np.median(finite)))
+        if finite.size else np.nan
+    )
+    median_ratio = float(np.nanmedian(ratio[good])) if good.any() else np.nan
+    p95_structure = (
+        float(np.nanpercentile(np.abs(finite), 95)) if finite.size else np.nan
+    )
+    logger.debug(
+        "%sfibre/summed QA: median ratio=%.5f; "
+        "small-scale robust RMS=%.4f%%; |structure| p95=%.4f%%",
+        f"{label}: " if label else "",
+        median_ratio, 100.0 * robust_rms, 100.0 * p95_structure,
+    )
+
+    return {
+        "direct_flux": direct_flux,
+        "direct_variance": direct_variance,
+        "recombined_flux": recombined_flux,
+        "recombined_variance": recombined_variance,
+        "ratio": ratio,
+        "ratio_smooth": ratio_smooth,
+        "fractional_structure": structure,
+        "robust_rms_fractional_structure": float(robust_rms),
+    }
+
+
+def extract_order(
+    order,
+    variance,
+    row,
+    extraction_mode,
+    fibre_geometry=None,
+):
+    """Dispatch one order to either robust summed or fibre-resolved extraction."""
+    if extraction_mode == "summed":
+        return extract_summed_order(order, variance, row)
+    if extraction_mode == "fibre":
+        if fibre_geometry is None:
+            raise ValueError(
+                "fibre_geometry is required for extraction_mode='fibre'"
+            )
+        return extract_fibre_order(order, variance, fibre_geometry)
+    raise ValueError(f"Unknown extraction mode: {extraction_mode}")
+
+
+def smooth_fibre_flat(fibre_flux, sigma=50.0):
+    """Smooth each extracted Flat fibre only along the dispersion direction."""
+    data = np.asarray(fibre_flux, float)
+    result = np.full_like(data, np.nan)
+    for j in range(data.shape[1]):
+        good = np.isfinite(data[:, j])
+        values = np.where(good, data[:, j], 0.0)
+        weights = gaussian_filter1d(
+            good.astype(float), sigma, mode="nearest"
+        )
+        smooth = gaussian_filter1d(
+            values, sigma, mode="nearest"
+        )
+        ok = weights > 0.05
+        result[ok, j] = smooth[ok] / weights[ok]
+    return result
+
+
+def save_fibre_geometries(filename, geometries, config=None):
+    """Write smooth fibre geometry and component metadata for all orders to FITS."""
+    primary = fits.PrimaryHDU()
+    primary.header["PRODUCT"] = "FIBRE_GEOMETRY"
+    if config is not None:
+        primary.header["NIGHT"] = config.night
+    hdus = [primary]
+
+    for order, g in geometries.items():
+        columns = [
+            fits.Column(
+                name="X", format="J",
+                array=np.arange(g.centres.shape[0]),
+            ),
+            fits.Column(
+                name="SIGMA", format="E",
+                array=g.sigma.astype(np.float32),
+            ),
+            fits.Column(
+                name="SEPARATION", format="E",
+                array=g.separation.astype(np.float32),
+            ),
+            fits.Column(
+                name="BUNDLE", format="E",
+                array=g.bundle_offset.astype(np.float32),
+            ),
+        ]
+        for i in range(len(g.components)):
+            columns.append(
+                fits.Column(
+                    name=f"CENTRE_{i:02d}",
+                    format="E",
+                    array=g.centres[:, i].astype(np.float32),
+                )
+            )
+
+        hdu = fits.BinTableHDU.from_columns(
+            columns, name=str(order)
+        )
+        hdu.header["NFIBRE"] = len(g.components)
+        for i, component in enumerate(g.components):
+            hdu.header[f"FIB{i:02d}"] = str(component)
+            hdu.header[f"SLOT{i:02d}"] = float(g.slots[i])
+            hdu.header[f"OFF{i:02d}"] = float(g.fibre_offsets[i])
+        hdus.append(hdu)
+
+    fits.HDUList(hdus).writeto(filename, overwrite=True)
+
+
+
+def _apply_response_flat(order, variance, response_flat):
+    """Apply detector-response correction and propagate variance by response squared."""
+    if response_flat is None:
+        return order, variance
+    response = np.asarray(response_flat, float)
+    valid = np.isfinite(response) & (response > 0)
+    corrected = np.full_like(np.asarray(order, float), np.nan)
+    corrected_var = np.full_like(np.asarray(variance, float), np.nan)
+    corrected[valid] = np.asarray(order, float)[valid] / response[valid]
+    corrected_var[valid] = np.asarray(variance, float)[valid] / response[valid] ** 2
+    return corrected, corrected_var
+
+
+def _extract_region_for_order(image, variance_image, row, region, response_flat=None):
+    """Extract one named calibration aperture from a detector image and variance."""
+    order, m, _ = tramlines.extract_order_matrix(
+        image, row, return_trace_offset=True
+    )
+    var, _, _ = tramlines.extract_order_matrix(
+        variance_image, row, return_trace_offset=True
+    )
+    order, var = _apply_response_flat(order, var, response_flat)
+    name = "Science" if region == "FibTh" else region
+    result = extract_apertures(
+        order,
+        var,
+        m,
+        [(name, row[f"{name}_begin"], row[f"{name}_end"])],
+    )
+    return result.flux[:, 0], result.variance[:, 0]
+
+
+def extract_calibration_spectra(
+    reduction_input,
+    nightly_tramlines,
+    flat_products,
+    config,
+    paths,
+):
+    """Extract summed calibration spectra and optional per-fibre FibTh spectra.
+
+    Summed calibration products remain the absolute wavelength-calibration
+    reference; fibre-resolved FibTh spectra are retained for relative
+    fibre-dependent wavelength corrections.
+    """
+    output = {
+        "SimLC": {"2": [], "3": []},
+        "SimTh": {"1": [], "2": [], "3": []},
+        "FibTh": {"1": [], "2": [], "3": []},
+    }
+
+    for caltype in ("SimLC", "SimTh", "FibTh"):
+        for obs in reduction_input[
+            reduction_input["type"] == caltype
+        ]:
+            if not obs["use"]:
+                continue
+
+            for ccd in ("1", "2", "3"):
+                if (
+                    ccd not in output[caltype]
+                    or not obs[f"use_ccd{ccd}"]
+                ):
+                    continue
+
+                filename = obs[f"file_ccd{ccd}"]
+                if filename is None:
+                    continue
+
+                frame = detector.preprocess_image(
+                    filename,
+                    ccd=ccd,
+                    config=config,
+                )
+
+                image = frame.image
+                variance_image = frame.variance
+                orders = []
+                summed = []
+                summed_var = []
+                fibre_counts = []
+                fibre_var = []
+
+                for row in nightly_tramlines:
+                    order_name = str(row["order_name"])
+                    if f"ccd_{ccd}_" not in order_name:
+                        continue
+
+                    orders.append(
+                        int(order_name.split("_")[-1])
+                    )
+                    response_flat = flat_products[order_name].get("response_flat")
+                    counts, var = _extract_region_for_order(
+                        image, variance_image, row, caltype, response_flat
+                    )
+                    summed.append(counts)
+                    summed_var.append(var)
+
+                    if (
+                        caltype == "FibTh"
+                        and config.extraction_mode == "fibre"
+                    ):
+                        matrix, _, _ = tramlines.extract_order_matrix(
+                            image, row, return_trace_offset=True
+                        )
+                        matrix_var, _, _ = tramlines.extract_order_matrix(
+                            variance_image, row, return_trace_offset=True
+                        )
+                        matrix, matrix_var = _apply_response_flat(
+                            matrix, matrix_var, response_flat
+                        )
+                        geometry = flat_products[
+                            order_name
+                        ]["fibre_geometry"]
+                        result = extract_fibre_order(
+                            matrix, matrix_var, geometry
+                        )
+                        idx = result.component_indices(
+                            SCIENCE_COMPONENTS
+                        )
+                        fibre_counts.append(result.flux[:, idx])
+                        fibre_var.append(result.variance[:, idx])
+
+                exposure = {
+                    "run": obs["run"],
+                    "mjd_mid": float(obs["mjd_mid"]),
+                    "exptime": float(obs["exptime"]),
+                    "orders": np.asarray(orders),
+                    "counts": np.asarray(summed),
+                    "variance": np.asarray(summed_var),
+                    "extraction_mode": config.extraction_mode,
+                }
+                if fibre_counts:
+                    exposure["fibre_counts"] = np.asarray(fibre_counts)
+                    exposure["fibre_variance"] = np.asarray(fibre_var)
+                    exposure["fibre_components"] = SCIENCE_COMPONENTS
+
+                output[caltype][ccd].append(exposure)
+
+    return output
+
+
+def save_calibration_spectra(
+    calibration_data,
+    filename,
+    calibration_type,
+    overwrite=True,
+):
+    """Save summed calibration spectra plus optional fibre-resolved FibTh cubes."""
+    primary = fits.PrimaryHDU()
+    primary.header["CALTYPE"] = calibration_type
+    hdus = [primary]
+
+    for ccd, exposures in calibration_data.items():
+        for i, exposure in enumerate(exposures):
+            counts = np.asarray(exposure["counts"], np.float32)
+            variance = np.asarray(
+                exposure["variance"], np.float32
+            )
+            columns = [
+                fits.Column(
+                    name="ORDER",
+                    format="I",
+                    array=exposure["orders"],
+                ),
+                fits.Column(
+                    name="COUNTS",
+                    format=f"{counts.shape[1]}E",
+                    array=counts,
+                ),
+                fits.Column(
+                    name="VARIANCE",
+                    format=f"{variance.shape[1]}E",
+                    array=variance,
+                ),
+            ]
+
+            hdu = fits.BinTableHDU.from_columns(
+                columns, name=f"CCD{ccd}_{i:03d}"
+            )
+            hdu.header["CCD"] = int(ccd)
+            hdu.header["RUN"] = str(exposure["run"])
+            hdu.header["MJD-MID"] = exposure["mjd_mid"]
+            hdu.header["EXPTIME"] = exposure["exptime"]
+            hdu.header["EXTRMODE"] = exposure.get(
+                "extraction_mode", "summed"
+            )
+            hdus.append(hdu)
+
+            if "fibre_counts" in exposure:
+                f = fits.ImageHDU(
+                    exposure["fibre_counts"].astype(np.float32),
+                    name=f"FIB_C{ccd}_{i:03d}",
+                )
+                v = fits.ImageHDU(
+                    exposure["fibre_variance"].astype(np.float32),
+                    name=f"FVAR_C{ccd}_{i:03d}",
+                )
+                f.header["AXES"] = "ORDER,DISPERSION,FIBRE"
+                for j, component in enumerate(
+                    exposure["fibre_components"]
+                ):
+                    f.header[f"FIB{j:02d}"] = str(component)
+                    v.header[f"FIB{j:02d}"] = str(component)
+                hdus += [f, v]
+
+    fits.HDUList(hdus).writeto(
+        filename, overwrite=overwrite
+    )
+
+
+def extract_science_spectra(
+    reduction_input,
+    nightly_tramlines,
+    flat_products,
+    config,
+    paths=None,
+):
+    """Extract response-corrected Science spectra in detector-pixel space.
+
+    The direct summed Science/Sky apertures are always retained because they are
+    the least model-dependent spectral-shape products.  In fibre mode the 19
+    Science and five Sky fibres are additionally deblended.  Their recombination
+    is stored only as QA here; the scientifically useful fibre combination is
+    performed later after applying fibre-dependent wavelength solutions.
+
+    When ``config.diagnostics == "full"`` and ``paths`` is provided, a
+    per-order fibre/summed fidelity figure is saved below ``paths.debug``.
+    """
+    exposures = []
+
+    for obs in reduction_input[reduction_input["type"] == "Science"]:
+        if not obs["use"]:
+            continue
+
+        logger.info(
+            "Extracting science run %s (%s), mode=%s",
+            obs["run"], obs["object"], config.extraction_mode,
+        )
+        exposure = {
+            "run": obs["run"],
+            "object": str(obs["object"]),
+            "mjd_mid": float(obs["mjd_mid"]),
+            "exptime": float(obs["exptime"]),
+            "extraction_mode": config.extraction_mode,
+            "ccd": {},
+        }
+
+        for ccd in ("1", "2", "3"):
+            if not obs[f"use_ccd{ccd}"]:
+                continue
+            filename = obs[f"file_ccd{ccd}"]
+            if filename is None:
+                continue
+
+            frame = detector.preprocess_image(
+                filename,
+                ccd=ccd,
+                config=config,
+            )
+
+            image = frame.image
+            variance_image = frame.variance
+            ccd_orders = {}
+            fidelity_values = []
+            logger.debug(
+                "Run %s CCD%s: detector image %s; variance finite %.2f%%",
+                obs["run"], ccd, image.shape,
+                100.0 * np.mean(np.isfinite(variance_image)),
+            )
+
+            for row in nightly_tramlines:
+                order_name = str(row["order_name"])
+                if f"ccd_{ccd}_" not in order_name:
+                    continue
+
+                matrix, m, _ = tramlines.extract_order_matrix(
+                    image, row, return_trace_offset=True
+                )
+                matrix_var, _, _ = tramlines.extract_order_matrix(
+                    variance_image, row, return_trace_offset=True
+                )
+                matrix, matrix_var = _apply_response_flat(
+                    matrix,
+                    matrix_var,
+                    flat_products[order_name].get("response_flat"),
+                )
+
+                summed = extract_summed_order(matrix, matrix_var, row)
+                product = {
+                    "components": summed.components,
+                    "summed_flux": summed.flux,
+                    "summed_variance": summed.variance,
+                }
+
+                if config.extraction_mode == "fibre":
+                    geometry = flat_products[order_name]["fibre_geometry"]
+                    label = f"run {obs['run']} {order_name}"
+                    fibre = extract_fibre_order(
+                        matrix,
+                        matrix_var,
+                        geometry,
+                        return_covariance=True,
+                        label=label,
+                    )
+                    qa = fibre_recombination_qa(summed, fibre, label=label)
+                    fidelity_values.append(qa["robust_rms_fractional_structure"])
+                    product.update(
+                        fibre_components=fibre.components,
+                        fibre_flux=fibre.flux,
+                        fibre_variance=fibre.variance,
+                        fibre_covariance=fibre.covariance,
+                        fibre_recombined_flux=qa["recombined_flux"],
+                        fibre_recombined_variance=qa["recombined_variance"],
+                        fibre_to_summed_ratio=qa["ratio"],
+                        fibre_fractional_structure=qa["fractional_structure"],
+                        fibre_fidelity_rms=qa["robust_rms_fractional_structure"],
+                    )
+
+                    if (
+                        getattr(config, "diagnostics", "none") == "full"
+                        and paths is not None
+                    ):
+                        # Import lazily to keep plotting dependencies out of the
+                        # normal extraction path.
+                        from velocereduction import diagnostics
+                        diagnostics.plot_fibre_extraction_qa(
+                            qa,
+                            geometry,
+                            paths.debug / "fibre_extraction"
+                            / f"run{int(obs['run']):04d}_{order_name}.png",
+                            title=label,
+                        )
+
+                ccd_orders[order_name] = product
+
+            if fidelity_values:
+                values = np.asarray(fidelity_values, float)
+                finite = values[np.isfinite(values)]
+                logger.info(
+                    "Run %s CCD%s fibre fidelity: %d orders; "
+                    "median small-scale RMS %.4f%%; max %.4f%%",
+                    obs["run"], ccd, len(fidelity_values),
+                    100.0 * float(np.nanmedian(finite)) if finite.size else np.nan,
+                    100.0 * float(np.nanmax(finite)) if finite.size else np.nan,
+                )
+            exposure["ccd"][ccd] = ccd_orders
+
+        exposures.append(exposure)
+
+    return exposures
+
+
+def save_science_extractions(exposures, output_dir, overwrite=True):
+    """Save detector-space summed spectra, fibres, and fibre-fidelity QA arrays.
+
+    ``FR_*``, ``FRV_*``, ``FQR_*``, and ``FQS_*`` are explicitly QA-only:
+    final fibre recombination occurs later on a common wavelength grid.
+    """
+    from pathlib import Path
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    filenames = []
+    for exposure in exposures:
+        filename = output_dir / f'science_{int(exposure["run"]):04d}_extracted.fits'
+        if filename.exists() and not overwrite:
+            filenames.append(filename)
+            continue
+
+        primary = fits.PrimaryHDU()
+        primary.header["RUN"] = str(exposure["run"])
+        primary.header["OBJECT"] = exposure["object"]
+        primary.header["MJD-MID"] = exposure["mjd_mid"]
+        primary.header["EXPTIME"] = exposure["exptime"]
+        primary.header["EXTRMODE"] = exposure["extraction_mode"]
+        hdus = [primary]
+
+        for ccd, orders in exposure["ccd"].items():
+            for order_name, product in orders.items():
+                summed = fits.ImageHDU(
+                    np.asarray(product["summed_flux"], np.float32),
+                    name=f"S_{order_name}",
+                )
+                svar = fits.ImageHDU(
+                    np.asarray(product["summed_variance"], np.float32),
+                    name=f"SV_{order_name}",
+                )
+                for j, component in enumerate(product["components"]):
+                    summed.header[f"COMP{j:02d}"] = str(component)
+                    svar.header[f"COMP{j:02d}"] = str(component)
+                hdus += [summed, svar]
+
+                if "fibre_flux" in product:
+                    fibre = fits.ImageHDU(
+                        np.asarray(product["fibre_flux"], np.float32),
+                        name=f"F_{order_name}",
+                    )
+                    fvar = fits.ImageHDU(
+                        np.asarray(product["fibre_variance"], np.float32),
+                        name=f"FV_{order_name}",
+                    )
+                    for j, component in enumerate(product["fibre_components"]):
+                        fibre.header[f"FIB{j:02d}"] = str(component)
+                        fvar.header[f"FIB{j:02d}"] = str(component)
+                    fibre.header["FIDRMS"] = float(product["fibre_fidelity_rms"])
+                    hdus += [fibre, fvar]
+
+                    frecombined = fits.ImageHDU(
+                        np.asarray(product["fibre_recombined_flux"], np.float32),
+                        name=f"FR_{order_name}",
+                    )
+                    frvar = fits.ImageHDU(
+                        np.asarray(product["fibre_recombined_variance"], np.float32),
+                        name=f"FRV_{order_name}",
+                    )
+                    fratio = fits.ImageHDU(
+                        np.asarray(product["fibre_to_summed_ratio"], np.float32),
+                        name=f"FQR_{order_name}",
+                    )
+                    fstructure = fits.ImageHDU(
+                        np.asarray(product["fibre_fractional_structure"], np.float32),
+                        name=f"FQS_{order_name}",
+                    )
+                    frecombined.header["PURPOSE"] = "QA_ONLY"
+                    frvar.header["PURPOSE"] = "QA_ONLY"
+                    fratio.header["PURPOSE"] = "QA_ONLY"
+                    fstructure.header["PURPOSE"] = "QA_ONLY"
+                    fstructure.header["FIDRMS"] = float(product["fibre_fidelity_rms"])
+                    hdus += [frecombined, frvar, fratio, fstructure]
+
+        fits.HDUList(hdus).writeto(filename, overwrite=True)
+        filenames.append(filename)
+
+    return filenames

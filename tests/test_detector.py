@@ -5,7 +5,7 @@ from astropy.io import fits
 from astropy.table import Table
 
 from velocereduction import detector
-from velocereduction.config import ReductionConfig
+from velocereduction.config import ReductionConfig, prepare_reduction
 
 
 def test_robust_amplifier_and_blocks(monkeypatch):
@@ -147,7 +147,7 @@ def test_gain_characterisation_helpers(tmp_path, monkeypatch):
     for signal in np.linspace(1000, 20000, 12):
         r = 1.0; variance = signal * (1 + r) / gain + rn ** 2 * (1 + r ** 2)
         synthetic.append({"signal_adu": signal, "variance_difference_adu2": variance, "pair_scale": r, "n_pixels": 100000})
-    fit = detector._fit_gain(synthetic); assert fit["gain_e_per_adu"] == pytest.approx(gain, rel=2e-3); assert fit["read_noise_adu"] == pytest.approx(rn, rel=.05)
+    fit = detector._fit_gain(synthetic, overscan_rms=rn); assert fit["gain_e_per_adu"] == pytest.approx(gain, rel=2e-3); assert fit["read_noise_adu"] == pytest.approx(rn, rel=.05)
 
 
 def test_characterise_and_plot(tmp_path, monkeypatch):
@@ -160,7 +160,7 @@ def test_characterise_and_plot(tmp_path, monkeypatch):
     monkeypatch.setattr(detector, "_pair_binned_statistics", lambda *a, **k: stats)
     output = tmp_path / "g.ecsv"; table, diagnostic = detector.characterise_detector_gain(["a", "b"], 1, output, min_pixels=1)
     assert len(table) == 2 and output.exists() and len(diagnostic) == 2
-    figures = detector.plot_gain_characterisation(diagnostic, tmp_path / "figs"); assert len(figures) == 2
+    figures = detector.plot_gain_characterisation(diagnostic, "1", "001122", 1.0, ["a", "b"], tmp_path / "figs"); assert len(figures) == 2
 
     monkeypatch.setattr(detector, "_pair_binned_statistics", lambda *a, **k: [])
     calls = iter([{"readout_mode": "2Amp", "amplifiers": amps1}, {"readout_mode": "2Amp", "amplifiers": amps1}]); monkeypatch.setattr(detector, "_read_amplifiers", lambda f: next(calls))
@@ -179,3 +179,88 @@ def test_detector_debug_logging(tmp_path, monkeypatch):
     monkeypatch.setattr(detector.logger, "debug", lambda message, *args: messages.append(message % args))
     detector.preprocess_image(filename, "1", ReductionConfig("001122", use_poisson_variance=False))
     assert "overscan RMS" in messages[0] and "CCD1" in messages[0]
+    
+
+
+def test_detector_shift_helpers():
+    assert detector.expected_detector_shifts("001122")["1"] == (0, 0)
+    assert detector.expected_detector_shifts("220101") is None
+
+    for night in ("240101", "240801", "250101", "250701", "260101"):
+        assert detector.expected_detector_shifts(night) is not None
+
+    assert detector.expected_detector_shifts("270101") is None
+
+    table = Table(rows=[(2, 1.2, -0.4)], names=("ccd", "dx", "dy"))
+    assert detector.detector_shift(table, "2") == (1.2, -0.4)
+    assert detector.detector_shift(table, "1") == (0.0, 0.0)
+
+
+def test_phase_correlation_shift():
+    reference = np.zeros((32, 32))
+    reference[10:13, 15:18] = 1
+    moving = np.roll(reference, 2, axis=0)
+
+    dx, dy, error = detector.phase_correlation_shift(
+        reference,
+        moving,
+        upsample_factor=1,
+    )
+
+    assert dx == pytest.approx(2.0)
+    assert dy == pytest.approx(0.0)
+    assert np.isfinite(error)
+
+
+def test_detector_shift_measurement(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    (repo / "observations" / "001122").mkdir(parents=True)
+    reference_config = ReductionConfig("001122", diagnostics="none")
+    paths = prepare_reduction(reference_config, "0.8.0", repo)
+
+    table = detector.measure_detector_shifts(Table(), reference_config, paths)
+    assert len(table) == 3
+    assert set(table["status"]) == {"reference"}
+
+    # A second call should load the cached result.
+    cached = detector.measure_detector_shifts(Table(), reference_config, paths)
+    assert len(cached) == 3
+
+    # With no suitable nightly exposure, use the historical fallback where defined.
+    (repo / "observations" / "240101").mkdir(parents=True)
+    fallback_config = ReductionConfig("240101", diagnostics="none")
+    paths2 = prepare_reduction(fallback_config, "0.8.0", repo)
+    monkeypatch.setattr(detector, "_registration_candidates", lambda *a: Table())
+    fallback = detector.measure_detector_shifts(Table(), fallback_config, paths2)
+    assert set(fallback["status"]) == {"historical fallback"}
+
+    # For nights without a historical fallback, use measured SimTh registrations.
+    (repo / "observations" / "270101").mkdir(parents=True)
+    measured_config = ReductionConfig("270101", diagnostics="none")
+    paths3 = prepare_reduction(measured_config, "0.8.0", repo)
+    candidates = Table(rows=[
+        {"file_ccd1": "a", "file_ccd2": "b", "file_ccd3": "c"},
+        {"file_ccd1": "d", "file_ccd2": "e", "file_ccd3": "f"},
+    ])
+    monkeypatch.setattr(detector, "_registration_candidates", lambda *a: candidates)
+    monkeypatch.setattr(
+        detector,
+        "_reference_registration_image",
+        lambda *a: np.zeros((4, 4)),
+    )
+    monkeypatch.setattr(
+        detector,
+        "preprocess_image",
+        lambda *a, **k: SimpleNamespace(image=np.zeros((4, 4))),
+    )
+    monkeypatch.setattr(
+        detector,
+        "phase_correlation_shift",
+        lambda *a, **k: (1.0, 2.0, 0.1),
+    )
+
+    measured = detector.measure_detector_shifts(Table(), measured_config, paths3)
+    assert np.allclose(measured["dx"], 1.0)
+    assert np.allclose(measured["dy"], 2.0)
+    assert np.all(measured["n_used"] == 2)
+    assert set(measured["status"]) == {"good"}

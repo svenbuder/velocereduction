@@ -1,784 +1,229 @@
 import logging
-from pathlib import Path
-
 import numpy as np
-from numpy.polynomial import Polynomial
-
 from astropy.io import fits
-
+from astropy.table import Table
 from scipy.ndimage import gaussian_filter1d
 
-from velocereduction import tramlines
-from velocereduction import utils
+from .constants import SCIENCE_FIBRES
+from .models import FibreGeometry, FlatOrder
+from . import detector, diagnostics, extraction, observations, tramlines
 
 logger = logging.getLogger(__name__)
 
 
-
-FLAT_SMOOTH_SIGMA = 50.0
-
-
-# =============================================================================
-# SELECT FLAT EXPOSURES
-# =============================================================================
-
-def _select_flat_exposures(
-    reduction_input,
-    ccd,
-):
-    """
-    Select Flat exposures appropriate for one CCD.
-
-    The exposure-time selection has already been encoded in use_ccd1/2/3.
-    """
-
-    selection = (
-        (reduction_input['type'] == 'Flat')
-        & reduction_input['use']
-        & reduction_input[f'use_ccd{ccd}']
-    )
-
-    return reduction_input[
-        selection
-    ]
+def _smooth_nan(values, sigma):
+    values = np.asarray(values, float); good = np.isfinite(values)
+    if not np.any(good): return np.full_like(values, np.nan)
+    data = gaussian_filter1d(np.where(good, values, 0), sigma, mode="nearest")
+    weight = gaussian_filter1d(good.astype(float), sigma, mode="nearest")
+    return np.divide(data, weight, out=np.full_like(values, np.nan), where=weight > 0.05)
 
 
-def _flat_is_usable(
-    image,
-    minimum_signal=5000.0,
-):
-    """
-    Test whether a nominal Flat actually contains useful illumination.
-    """
-
-    signal = float(
-        np.nanpercentile(
-            image,
-            99,
-        )
-    )
-
-    usable = (
-        np.isfinite(signal)
-        and signal >= minimum_signal
-    )
-
-    return usable, signal
+def smooth_matrix(matrix, sigma):
+    return np.column_stack([_smooth_nan(matrix[:, j], sigma) for j in range(matrix.shape[1])]).astype(np.float32)
 
 
-def _normalise_flat(
-    image,
-):
-    """
-    Normalise one Flat before combination.
-
-    The normalisation removes exposure-to-exposure lamp intensity changes
-    while preserving the detector/order structure.
-    """
-
-    scale = float(
-        np.nanpercentile(
-            image,
-            95,
-        )
-    )
-
-    if (
-        not np.isfinite(scale)
-        or scale <= 0
-    ):
-
-        raise ValueError(
-            'Could not determine Flat normalisation'
-        )
-
-    return (
-        image / scale,
-        scale,
+def create_response(matrix, smooth):
+    return np.divide(
+        matrix, smooth, out=np.full_like(matrix, np.nan, np.float32),
+        where=np.isfinite(matrix) & np.isfinite(smooth) & (smooth > 0),
     )
 
 
-# =============================================================================
-# MASTER FLAT INPUT / OUTPUT
-# =============================================================================
+def create_master_flat(reduction_input, config, paths):
+    filename = paths.flat / "master_flat.fits"
+    if filename.exists() and not config.overwrite:
+        with fits.open(filename, memmap=False) as hdul:
+            master = {f"ccd_{ccd}": np.asarray(hdul[f"CCD{ccd}"].data, np.float32) for ccd in ("1", "2", "3")}
+        logger.info("Loaded cached master Flat: %s", filename)
+        noise_file = paths.detector / "flat_read_noise.ecsv"
+        if config.diagnostics != "none" and noise_file.exists():
+            diagnostics.plot_read_noise(Table.read(noise_file, format="ascii.ecsv"), paths.figures / "detector_read_noise.png")
+        return master
 
-def _master_flat_filename(
-    paths,
-):
-    return (
-        paths.flat
-        / 'master_flat.fits'
-    )
-
-
-def _read_master_flat(
-    filename,
-):
-    """Read a previously created three-CCD master Flat."""
-
-    result = {}
-
-    with fits.open(
-        filename,
-        memmap=False,
-    ) as hdul:
-
-        for ccd in ['1', '2', '3']:
-
-            result[
-                f'ccd_{ccd}'
-            ] = np.asarray(
-                hdul[f'CCD{ccd}'].data,
-                dtype=np.float32,
-            )
-
-    return result
-
-
-def _write_master_flat(
-    master_flat,
-    input_runs,
-    config,
-    paths,
-):
-    """Write the master Flat for all three CCDs."""
-
-    filename = _master_flat_filename(
-        paths
-    )
-
-    primary = fits.PrimaryHDU()
-
-    primary.header[
-        'NIGHT'
-    ] = config.night
-
-    primary.header[
-        'PRODUCT'
-    ] = 'MASTER_FLAT'
-
-    hdus = [
-        primary
-    ]
-
-    for ccd in [
-        '1',
-        '2',
-        '3',
-    ]:
-
-        hdu = fits.ImageHDU(
-            data=master_flat[
-                f'ccd_{ccd}'
-            ],
-            name=f'CCD{ccd}',
-        )
-
-        runs = input_runs[
-            f'ccd_{ccd}'
-        ]
-
-        hdu.header[
-            'NCOMBINE'
-        ] = len(runs)
-
-        hdu.header[
-            'RUNS'
-        ] = ','.join(runs)
-
-        hdus.append(
-            hdu
-        )
-
-    fits.HDUList(
-        hdus
-    ).writeto(
-        filename,
-        overwrite=True,
-    )
-
-    logger.info(
-        'Saved master Flat: %s',
-        filename,
-    )
-
-
-# =============================================================================
-# CREATE MASTER FLAT
-# =============================================================================
-
-def create_master_flat(
-    reduction_input,
-    config,
-    paths,
-):
-    """
-    Create one normalised median master Flat per CCD.
-
-    Flats are processed just in time and only one CCD is held as a stack
-    at a time.
-    """
-
-    filename = _master_flat_filename(
-        paths
-    )
-
-    # Cache/restart.
-    if (
-        filename.exists()
-        and not config.overwrite
-    ):
-
-        logger.info(
-            'Loading existing master Flat: %s',
-            filename,
-        )
-
-        return _read_master_flat(
-            filename
-        )
-
-    master_flat = {}
-    input_runs = {}
-
-    for ccd in [
-        '1',
-        '2',
-        '3',
-    ]:
-
-        candidate_runs = (
-            _select_flat_exposures(
-                reduction_input,
-                ccd,
-            )
-        )
-
-        logger.info(
-            'CCD%s: %d candidate Flat exposures',
-            ccd,
-            len(candidate_runs),
-        )
-
-        accepted_images = []
-        accepted_runs = []
-
-        for row in candidate_runs:
-
-            filename_raw = row[
-                f'file_ccd{ccd}'
-            ]
-
-            (
-                image,
-                _,
-                _,
-            ) = utils.preprocess_image(
-                filename_raw,
-                ccd=ccd,
-            )
-
-            usable, signal = (
-                _flat_is_usable(
-                    image
-                )
-            )
-
-            if not usable:
-
-                logger.warning(
-                    'CCD%s Flat run %s rejected: '
-                    '99th percentile %.0f ADU',
-                    ccd,
-                    row['run'],
-                    signal,
-                )
-
+    master, runs, read_noise_rows = {}, {}, []
+    for ccd in ("1", "2", "3"):
+        images, accepted = [], []
+        for row in observations.select(reduction_input, "Flat", ccd):
+            frame = detector.preprocess_image(row[f"file_ccd{ccd}"], ccd, config)
+            image = frame.image
+            if np.nanpercentile(image, 99) < 5000:
+                logger.warning("CCD%s Flat %s rejected as too faint", ccd, row["run"])
                 continue
-
-            image, scale = (
-                _normalise_flat(
-                    image
-                )
-            )
-
-            accepted_images.append(
-                image.astype(
-                    np.float32,
-                    copy=False,
-                )
-            )
-
-            accepted_runs.append(
-                str(row['run'])
-            )
-
-            logger.debug(
-                'CCD%s Flat run %s accepted: '
-                'signal %.0f ADU, normalisation %.1f',
-                ccd,
-                row['run'],
-                signal,
-                scale,
-            )
-
-        if len(
-            accepted_images
-        ) == 0:
-
-            raise RuntimeError(
-                'No usable Flat exposures '
-                f'for CCD{ccd}'
-            )
-
+            scale = float(np.nanpercentile(image, 95))
+            images.append((image / scale).astype(np.float32)); accepted.append(str(row["run"]))
+            read_noise_rows.extend({
+                "ccd": int(ccd), "run": int(row["run"]), "mjd_mid": float(row["mjd_mid"]),
+                "readout_mode": frame.readout_mode, "amplifier": amp, "rms_adu": float(value),
+            } for amp, value in frame.overscan_rms.items())
+        if not images:
+            raise RuntimeError(f"No usable Flat exposures for CCD{ccd}")
+        master[f"ccd_{ccd}"] = np.nanmedian(np.stack(images), axis=0).astype(np.float32); runs[ccd] = accepted
+        subset = [r["rms_adu"] for r in read_noise_rows if r["ccd"] == int(ccd)]
         logger.info(
-            'CCD%s: combining %d Flats',
-            ccd,
-            len(accepted_images),
+            "CCD%s master Flat: combined %d exposures; median overscan RMS %.2f ADU",
+            ccd, len(accepted), float(np.nanmedian(subset)),
         )
 
-        stack = np.stack(
-            accepted_images,
-            axis=0,
-        )
-
-        master = np.nanmedian(
-            stack,
-            axis=0,
-        ).astype(
-            np.float32
-        )
-
-        master_flat[
-            f'ccd_{ccd}'
-        ] = master
-
-        input_runs[
-            f'ccd_{ccd}'
-        ] = accepted_runs
-
-        # Explicitly release the potentially large cube before moving
-        # to the next CCD.
-        del stack
-        del accepted_images
-
-    _write_master_flat(
-        master_flat,
-        input_runs,
-        config,
-        paths,
-    )
-
-    return master_flat
-
-
-# =============================================================================
-# SMOOTH EXTRACTED FLAT
-# =============================================================================
-
-def _smooth_nan_1d(
-    values,
-    sigma,
-):
-    """
-    Gaussian smooth a 1D array while correctly handling NaNs.
-
-    Uses weighted convolution rather than compressing the array around NaNs.
-    """
-
-    values = np.asarray(
-        values,
-        dtype=np.float32,
-    )
-
-    good = np.isfinite(
-        values
-    )
-
-    if good.sum() == 0:
-
-        return np.full_like(
-            values,
-            np.nan,
-        )
-
-    data = np.where(
-        good,
-        values,
-        0.0,
-    )
-
-    weights = good.astype(
-        np.float32
-    )
-
-    smooth_data = gaussian_filter1d(
-        data,
-        sigma=sigma,
-        mode='nearest',
-    )
-
-    smooth_weights = gaussian_filter1d(
-        weights,
-        sigma=sigma,
-        mode='nearest',
-    )
-
-    result = np.full_like(
-        values,
-        np.nan,
-    )
-
-    valid = (
-        smooth_weights > 0.05
-    )
-
-    result[valid] = (
-        smooth_data[valid]
-        / smooth_weights[valid]
-    )
-
-    return result
-
-
-def _smooth_extracted_flat(
-    extracted_flat,
-    sigma=FLAT_SMOOTH_SIGMA,
-):
-    """
-    Smooth an extracted Flat along the dispersion/fibre direction.
-
-    No smoothing is performed across the cross-dispersion direction.
-    """
-
-    smooth_flat = np.full_like(
-        extracted_flat,
-        np.nan,
-        dtype=np.float32,
-    )
-
-    for m in range(
-        extracted_flat.shape[1]
-    ):
-
-        smooth_flat[
-            :,
-            m
-        ] = _smooth_nan_1d(
-            extracted_flat[
-                :,
-                m
-            ],
-            sigma=sigma,
-        )
-
-    return smooth_flat
-
-
-def _create_response_flat(
-    extracted_flat,
-    smooth_flat,
-):
-    """
-    Divide the measured Flat by its smooth illumination model.
-
-    The result should be close to unity and contain small-scale detector
-    response variations.
-    """
-
-    response = np.full_like(
-        extracted_flat,
-        np.nan,
-        dtype=np.float32,
-    )
-
-    valid = (
-        np.isfinite(extracted_flat)
-        & np.isfinite(smooth_flat)
-        & (smooth_flat > 0)
-    )
-
-    response[valid] = (
-        extracted_flat[valid]
-        / smooth_flat[valid]
-    )
-
-    return response
-
-
-def _create_blaze(
-    smooth_flat,
-    row,
-):
-    """
-    Derive a normalised 1D blaze function from the smooth Science aperture.
-    """
-
-    half_window = int(
-        row[
-            'extraction_half_window'
-        ]
-    )
-
-    m = np.arange(
-        -half_window,
-        half_window + 1,
-    )
-
-    science_begin = float(
-        row['Science_begin']
-    )
-
-    science_end = float(
-        row['Science_end']
-    )
-
-    science = (
-        (m >= science_begin)
-        & (m <= science_end)
-    )
-
-    blaze = np.nansum(
-        smooth_flat[
-            :,
-            science
-        ],
-        axis=1,
-    ).astype(
-        np.float32
-    )
-
-    finite = (
-        np.isfinite(blaze)
-        & (blaze > 0)
-    )
-
-    if np.any(finite):
-
-        normalisation = np.nanmax(
-            blaze[finite]
-        )
-
-        if normalisation > 0:
-            blaze /= normalisation
-
-    return blaze
-
-
-# =============================================================================
-# FLAT PRODUCT FITS I/O
-# =============================================================================
-
-def _write_order_product(
-    filename,
-    products,
-    key,
-    config,
-):
-    """
-    Write one product as a FITS file with one extension per order.
-    """
-
-    primary = fits.PrimaryHDU()
-
-    primary.header[
-        'NIGHT'
-    ] = config.night
-
-    primary.header[
-        'PRODUCT'
-    ] = key.upper()
-
-    hdus = [
-        primary
-    ]
-
-    for order, product in (
-        products.items()
-    ):
-
-        data = product[
-            key
-        ]
-
-        hdu = fits.ImageHDU(
-            data=data,
-            name=str(order),
-        )
-
-        hdu.header[
-            'ORDER'
-        ] = str(order)
-
-        hdus.append(
-            hdu
-        )
-
-    fits.HDUList(
-        hdus
-    ).writeto(
-        filename,
-        overwrite=True,
-    )
-
-
-# =============================================================================
-# CREATE EXTRACTED FLAT PRODUCTS
-# =============================================================================
-
-def create_flat_products(
-    master_flat,
-    nightly_tramlines,
-    config,
-    paths,
-):
-    """
-    Extract the master Flat along the nightly tramlines and derive:
-
-        extracted_flat
-        smooth_flat
-        response_flat
-        blaze
-
-    Returns
-    -------
-    products : dict
-        products[order][product_name]
-    """
+    hdus = [fits.PrimaryHDU()]; hdus[0].header["NIGHT"] = config.night; hdus[0].header["PRODUCT"] = "MASTER_FLAT"
+    for ccd in ("1", "2", "3"):
+        hdu = fits.ImageHDU(master[f"ccd_{ccd}"], name=f"CCD{ccd}"); hdu.header["NCOMBINE"] = len(runs[ccd]); hdu.header["RUNS"] = ",".join(runs[ccd]); hdus.append(hdu)
+    fits.HDUList(hdus).writeto(filename, overwrite=True)
+    read_noise_table = Table(rows=read_noise_rows)
+    read_noise_table.write(paths.detector / "flat_read_noise.ecsv", format="ascii.ecsv", overwrite=True)
+    if config.diagnostics != "none":
+        diagnostics.plot_read_noise(read_noise_table, paths.figures / "detector_read_noise.png")
+    return master
+
+
+def _blaze(smooth, row):
+    half = int(row["extraction_half_window"]); m = np.arange(-half, half + 1, dtype=float)
+    weights = extraction.aperture_weights(m, float(row["Science_begin"]), float(row["Science_end"]))
+    blaze = np.nansum(smooth * weights[None, :], axis=1); maximum = np.nanmax(blaze)
+    return (blaze / maximum if maximum > 0 else blaze).astype(np.float32)
+
+
+def _fibre_relative_response(fibre_smooth, components):
+    science = [components.index(f) for f in SCIENCE_FIBRES]; reference = np.nanmedian(fibre_smooth[:, science], axis=1)
+    return np.divide(fibre_smooth, reference[:, None], out=np.full_like(fibre_smooth, np.nan), where=reference[:, None] > 0).astype(np.float32)
+
+
+def reconstruct_fibre_flat(geometry, fibre_smooth, background_smooth, n_crossdispersion=81, batch_size=512):
+    m = np.arange(n_crossdispersion, dtype=float) - (n_crossdispersion - 1) / 2
+    model = np.full((len(geometry.sigma), n_crossdispersion), np.nan, np.float32)
+    for start in range(0, len(model), batch_size):
+        stop = min(start + batch_size, len(model)); profiles = extraction.integrated_gaussian_cube(m, geometry.centres[start:stop], geometry.sigma[start:stop])
+        model[start:stop] = np.einsum("xyf,xf->xy", profiles, fibre_smooth[start:stop], optimize=True) + background_smooth[start:stop, None]
+    return model
+
+
+def _write_arrays(filename, products, attribute, config):
+    hdus = [fits.PrimaryHDU()]; hdus[0].header["NIGHT"] = config.night; hdus[0].header["PRODUCT"] = attribute.upper()
+    for name, product in products.items():
+        data = getattr(product, attribute)
+        if data is not None: hdus.append(fits.ImageHDU(np.asarray(data), name=name))
+    fits.HDUList(hdus).writeto(filename, overwrite=True)
+
+
+def _write_geometry(filename, products, config):
+    hdus = [fits.PrimaryHDU()]; hdus[0].header["NIGHT"] = config.night; hdus[0].header["PRODUCT"] = "FIBRE_GEOMETRY"
+    for name, product in products.items():
+        g = product.geometry
+        if g is None: continue
+        columns = [
+            fits.Column(name="X", format="J", array=np.arange(len(g.sigma))),
+            fits.Column(name="SIGMA", format="E", array=g.sigma.astype(np.float32)),
+            fits.Column(name="SEPARATION", format="E", array=g.separation.astype(np.float32)),
+            fits.Column(name="BUNDLE", format="E", array=g.bundle_offset.astype(np.float32)),
+        ] + [fits.Column(name=f"CENTRE_{i:02d}", format="E", array=g.centres[:, i].astype(np.float32)) for i in range(len(g.components))]
+        hdu = fits.BinTableHDU.from_columns(columns, name=name); hdu.header["NFIBRE"] = len(g.components)
+        for i, component in enumerate(g.components):
+            hdu.header[f"FIB{i:02d}"] = str(component); hdu.header[f"SLOT{i:02d}"] = float(g.slots[i]); hdu.header[f"OFF{i:02d}"] = float(g.fibre_offsets[i])
+        hdus.append(hdu)
+    fits.HDUList(hdus).writeto(filename, overwrite=True)
+
+
+def create_flat_products(master_flat, nightly_tramlines, config, paths):
+    response_file = paths.flat_mode / "response.fits"
+    if response_file.exists() and not config.overwrite:
+        products = load_flat_products(config, paths)
+        logger.info("Loaded cached %s Flat products for %d orders", config.extraction_mode, len(products))
+        if config.diagnostics != "none":
+            diagnostics.plot_flat_response_summary(products, paths.figures / f"flat_response_{config.extraction_mode}.png")
+            if config.extraction_mode == "fibre":
+                diagnostics.plot_fibre_geometry_summary(products, paths.figures / "fibre_geometry.png")
+                diagnostics.plot_fibre_profile_summary(products, paths.figures / "fibre_profile_fits.png")
+                if config.diagnostics == "full":
+                    for name, product in products.items():
+                        diagnostics.plot_fibre_profile_order(product, paths.debug / "fibre_profiles" / f"{name}.png")
+        return products
 
     products = {}
-
     for row in nightly_tramlines:
-
-        order_value = row[
-            'order_name'
-        ]
-
-        order = (
-            order_value.decode()
-            if isinstance(
-                order_value,
-                bytes,
-            )
-            else str(order_value)
-        )
-
-        ccd = order[4]
-
-        image = master_flat[
-            f'ccd_{ccd}'
-        ]
-
-        half_window = int(
-            row[
-                'extraction_half_window'
-            ]
-        )
-
-        x = np.arange(
-            image.shape[0],
-            dtype=float,
-        )
-
-        coeffs = np.array([
-            float(
-                row[
-                    f'tramline_coeff_{i}'
-                ]
-            )
-            for i in range(5)
-        ])
-
-        trace = Polynomial(
-            coeffs
-        )(x)
-
-        extracted_flat, _ = (
-            tramlines.extract_trace(
-                image,
-                trace,
-                half_window,
-            )
-        )
-
-        smooth_flat = (
-            _smooth_extracted_flat(
-                extracted_flat
-            )
-        )
-
-        response_flat = (
-            _create_response_flat(
-                extracted_flat,
-                smooth_flat,
-            )
-        )
-
-        blaze = _create_blaze(
-            smooth_flat,
-            row,
-        )
-
-        products[
-            order
-        ] = {
-            'extracted_flat':
-                extracted_flat,
-
-            'smooth_flat':
-                smooth_flat,
-
-            'response_flat':
-                response_flat,
-
-            'blaze':
-                blaze,
-        }
+        name = tramlines.order_name(row); ccd = tramlines.ccd_from_order_name(name)
+        matrix, _, trace_offset = tramlines.extract_order_matrix(master_flat[f"ccd_{ccd}"], row, True)
 
         logger.debug(
-            '%s: created extracted Flat, response Flat and blaze',
-            order,
+            "%s geometry input: min=%.3g median=%.3g max=%.3g",
+            name,
+            np.nanmin(matrix),
+            np.nanmedian(matrix),
+            np.nanmax(matrix),
         )
+        if config.extraction_mode == "fibre":
+            geometry = extraction.fit_fibre_geometry(matrix, trace_offset, config.fibre_sample_step, config.fibre_sample_half_width, config.fibre_geometry_degree,label=name)
+            fibre = extraction.extract_fibre_order(matrix, np.ones_like(matrix), geometry)
+            fibre_smooth = smooth_matrix(fibre.flux, config.flat_smooth_sigma); background_smooth = _smooth_nan(fibre.background, config.flat_smooth_sigma)
+            smooth = reconstruct_fibre_flat(geometry, fibre_smooth, background_smooth, matrix.shape[1])
+            product = FlatOrder(name, matrix, smooth, create_response(matrix, smooth), _blaze(smooth, row), trace_offset, geometry, fibre.flux.astype(np.float32), fibre_smooth, _fibre_relative_response(fibre_smooth, geometry.components))
+        else:
+            smooth = smooth_matrix(matrix, config.flat_smooth_sigma)
+            product = FlatOrder(name, matrix, smooth, create_response(matrix, smooth), _blaze(smooth, row), trace_offset)
+        products[name] = product
 
-    # -------------------------------------------------------------------------
-    # Save products.
-    # -------------------------------------------------------------------------
+    for ccd in ("1", "2", "3"):
+        subset = [p for name, p in products.items() if str(name).split("_")[1] == ccd]
+        if not subset:
+            continue
+        response_scatter = [1.4826 * np.nanmedian(np.abs(p.response - np.nanmedian(p.response))) for p in subset]
+        if config.extraction_mode == "fibre":
+            sigma = [np.nanmedian(p.geometry.sigma) for p in subset]
+            separation = [np.nanmedian(p.geometry.separation) for p in subset]
+            failed = sum(np.count_nonzero(~np.isfinite(p.geometry.sampled_sigma)) for p in subset)
+            total = sum(len(p.geometry.sampled_sigma) for p in subset)
+            logger.info(
+                "CCD%s fibre geometry: %d orders; median sigma %.3f px; separation %.3f px; sampled failures %d/%d",
+                ccd, len(subset), float(np.nanmedian(sigma)), float(np.nanmedian(separation)), failed, total,
+            )
+        logger.info("CCD%s Flat response: median robust scatter %.4f", ccd, float(np.nanmedian(response_scatter)))
 
-    _write_order_product(
-        paths.flat
-        / 'extracted_flat.fits',
-        products,
-        'extracted_flat',
-        config,
-    )
+    for attr in ("matrix", "trace_offset"): _write_arrays(paths.flat / f"{attr}.fits", products, attr, config)
+    for attr in ("smooth", "response", "blaze"): _write_arrays(paths.flat_mode / f"{attr}.fits", products, attr, config)
+    if config.extraction_mode == "fibre":
+        for attr in ("fibre_flat", "fibre_smooth", "fibre_relative_response"): _write_arrays(paths.flat_mode / f"{attr}.fits", products, attr, config)
+        _write_geometry(paths.flat_mode / "fibre_geometry.fits", products, config)
+    if config.diagnostics != "none":
+        diagnostics.plot_flat_response_summary(products, paths.figures / f"flat_response_{config.extraction_mode}.png")
+        if config.extraction_mode == "fibre":
+            diagnostics.plot_fibre_geometry_summary(products, paths.figures / "fibre_geometry.png")
+            diagnostics.plot_fibre_profile_summary(products, paths.figures / "fibre_profile_fits.png")
+            if config.diagnostics == "full":
+                for name, product in products.items():
+                    diagnostics.plot_fibre_profile_order(product, paths.debug / "fibre_profiles" / f"{name}.png")
+    logger.info("Created %s Flat products for %d orders", config.extraction_mode, len(products))
+    return products
 
-    _write_order_product(
-        paths.flat
-        / 'smooth_flat.fits',
-        products,
-        'smooth_flat',
-        config,
-    )
 
-    _write_order_product(
-        paths.flat
-        / 'response_flat.fits',
-        products,
-        'response_flat',
-        config,
-    )
+def _read_array_file(filename):
+    with fits.open(filename, memmap=False) as hdul: return {hdu.name.lower(): np.asarray(hdu.data) for hdu in hdul[1:]}
 
-    _write_order_product(
-        paths.flat
-        / 'blaze.fits',
-        products,
-        'blaze',
-        config,
-    )
 
-    logger.info(
-        'Created Flat products for %d orders',
-        len(products),
-    )
+def _read_geometries(filename):
+    geometries = {}
+    with fits.open(filename, memmap=False) as hdul:
+        for hdu in hdul[1:]:
+            n = int(hdu.header["NFIBRE"])
+            components = tuple(int(hdu.header[f"FIB{i:02d}"]) if str(hdu.header[f"FIB{i:02d}"]).isdigit() else str(hdu.header[f"FIB{i:02d}"]) for i in range(n))
+            centres = np.column_stack([hdu.data[f"CENTRE_{i:02d}"] for i in range(n)])
+            geometries[hdu.name.lower()] = FibreGeometry(
+                components, np.array([hdu.header[f"SLOT{i:02d}"] for i in range(n)], float), centres,
+                np.asarray(hdu.data["SIGMA"]), np.asarray(hdu.data["SEPARATION"]), np.asarray(hdu.data["BUNDLE"]),
+                np.array([hdu.header[f"OFF{i:02d}"] for i in range(n)], float),
+            )
+    return geometries
 
+
+def load_flat_products(config, paths):
+    common = {attr: _read_array_file(paths.flat / f"{attr}.fits") for attr in ("matrix", "trace_offset")}
+    mode = {attr: _read_array_file(paths.flat_mode / f"{attr}.fits") for attr in ("smooth", "response", "blaze")}
+    fibre = {}; geometries = {}
+    if config.extraction_mode == "fibre":
+        fibre = {attr: _read_array_file(paths.flat_mode / f"{attr}.fits") for attr in ("fibre_flat", "fibre_smooth", "fibre_relative_response")}
+        geometries = _read_geometries(paths.flat_mode / "fibre_geometry.fits")
+    products = {}
+    for key in common["matrix"]:
+        products[key] = FlatOrder(
+            key, common["matrix"][key], mode["smooth"][key], mode["response"][key], mode["blaze"][key], common["trace_offset"][key],
+            geometries.get(key), fibre.get("fibre_flat", {}).get(key), fibre.get("fibre_smooth", {}).get(key), fibre.get("fibre_relative_response", {}).get(key),
+        )
     return products

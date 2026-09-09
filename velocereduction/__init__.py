@@ -1,9 +1,14 @@
-__version__ = '0.7.0'
-from . import utils
-from . import flat
-from . import tramlines
-from . import extraction
-from . import wavelength
-from . import velocities
-from . import tellurics
-from . import flux_comparison
+__version__ = "0.8.0"
+
+from .config import ReductionConfig, ReductionPaths, prepare_reduction, setup_logging
+from . import (
+    calibration, constants, detector, diagnostics, extraction, flat, flux_comparison, observations,
+    pipeline, science, tellurics, tramlines, utils, velocities, wavelength,
+)
+
+__all__ = [
+    "ReductionConfig", "ReductionPaths", "prepare_reduction", "setup_logging",
+    "calibration", "constants", "detector", "diagnostics", "extraction", "flat", "flux_comparison",
+    "observations", "pipeline", "science", "tellurics", "tramlines", "utils",
+    "velocities", "wavelength",
+]

@@ -6,15 +6,23 @@ import numpy as np
 from astropy.io import fits
 from astropy.table import Table
 from scipy.optimize import least_squares
+from skimage.registration import phase_cross_correlation
 
+from .constants import REFERENCE_NIGHT
+from . import diagnostics, observations
 from .models import DetectorFrame
 
 logger = logging.getLogger(__name__)
+
+REFERENCE_RUNS = {"1": "0001", "2": "0002", "3": "0003"}
+
 OVERSCAN_BORDER = 32
 RAW_16BIT_MAX = np.iinfo(np.uint16).max
 MASK_SATURATED = np.uint16(1 << 0)
 DEFAULT_GAIN_FILE = Path(__file__).resolve().parent / "veloce_reference_data" / "detector_gains.ecsv"
 
+
+# ---- Nightly detector preprocessing. ----
 
 def _robust_sigma(values):
     """Return a robust 1-sigma scatter estimate (1.4826 x MAD), ignoring non-finite values."""
@@ -275,7 +283,7 @@ def apply_response(image, variance, response):
     return flux, var
 
 
-# ---- Optional detector characterisation; not part of the nightly reduction. ----
+# ---- Detector gain characterisation; not part of the nightly reduction. ----
 
 def _read_amplifiers(filename):
     """Read one raw FITS file and return each amplifier as an overscan-subtracted science image plus overscan statistics."""
@@ -392,13 +400,18 @@ def _fit_gain(points, overscan_rms):
     n_pixels = np.array([p["n_pixels"] for p in points], float)
     design = np.column_stack((signal * (1 + ratio), 1 + ratio ** 2))
     uncertainty = np.maximum(variance * np.sqrt(2 / np.maximum(n_pixels - 1, 1)), np.nanmedian(variance) * 1e-4)
-    initial = [1.0, overscan_rms]
+    read_noise2_initial = overscan_rms ** 2
+    bounds = (
+        [0.5, (0.1 * overscan_rms) ** 2],
+        [1.5, (4.0 * overscan_rms) ** 2],
+    )
+    initial = [1.0, read_noise2_initial]
     residual = lambda p: (design @ p - variance) / uncertainty
-    robust = least_squares(residual, initial, bounds=([0.5, 0.1*overscan_rms], [1.5, 4*overscan_rms]), loss="soft_l1")
+    robust = least_squares(residual, initial, bounds=bounds, loss="soft_l1")
     keep = np.abs(residual(robust.x)) < 5
     if keep.sum() < 4:
         keep[:] = True
-    final = least_squares(lambda p: residual(p)[keep], robust.x, bounds=([0.5, 0.1*overscan_rms], [1.5, 4*overscan_rms]))
+    final = least_squares(lambda p: residual(p)[keep], robust.x, bounds=bounds)
     inverse_gain, read_noise2 = final.x
     gain, read_noise = 1 / inverse_gain, np.sqrt(read_noise2)
     dof = max(keep.sum() - 2, 1)
@@ -494,3 +507,176 @@ def plot_gain_characterisation(diagnostics, ccd, date, texp, files, output_direc
             fig.savefig(output_directory / f"gain_ccd{ccd}_{readout}_{amp}_{texp}s.png", dpi=150, bbox_inches="tight")
             plt.close(fig)
     return figures
+
+
+
+# ---- Detector registration relative to the reference night. ----
+
+def phase_correlation_shift(reference, moving, upsample_factor=100):
+    """
+    Measure the displacement of an image relative to a reference image.
+
+    Phase cross-correlation returns the shift required to align ``moving``
+    with ``reference``. Here the sign is reversed so that ``dx`` and ``dy``
+    describe the displacement of the moving detector image relative to the
+    reference image, in pixels along array axes 0 and 1, respectively.
+
+    Returns
+    -------
+    dx, dy : float
+        Detector displacement relative to the reference image, in pixels.
+    error : float
+        Registration error returned by ``phase_cross_correlation``.
+    """
+    shift, error, _ = phase_cross_correlation(
+        reference,
+        moving,
+        upsample_factor=upsample_factor,
+        normalization="phase",
+    )
+    dx, dy = -shift
+    return float(dx), float(dy), float(error)
+
+
+def expected_detector_shifts(night):
+    """
+    Return historical detector shifts for epochs with calibrated offsets.
+
+    The shifts are given as ``(dx, dy)`` in pixels for CCDs 1--3 relative to
+    ``REFERENCE_NIGHT``. They are used only as a fallback when no suitable
+    nightly registration exposure is available. ``None`` indicates that no
+    historical fallback has been defined for the requested night.
+    """
+    if night == REFERENCE_NIGHT:
+        return {"1": (0, 0), "2": (0, 0), "3": (0, 0)}
+    date = int(night)
+    if date < 231120:
+        return None
+    if date <= 240518:
+        return {"1": (0, 0), "2": (0, 0), "3": (0.01, -0.01)}
+    if date <= 241106:
+        return {"1": (-0.89, 7.02), "2": (-3.86, 3.10), "3": (3.08, 1.80)}
+    if date <= 250507:
+        return {"1": (-0.74, 8.13), "2": (-3.58, 4.06), "3": (3.09, 2.91)}
+    if date <= 250823:
+        return {"1": (-6.15, 1.11), "2": (-8.75, 2.80), "3": (2.51, 0.22)}
+    if date <= 260303:
+        return {"1": (-6.08, 1.41), "2": (-8.76, 2.88), "3": (2.72, 0.34)}
+    return None
+
+
+def _registration_candidates(table, ccd):
+    """Return SimTh exposures suitable for measuring the detector shift of one CCD."""
+    rows = observations.select(table, "SimTh", ccd)
+    return rows[~rows["lc_requested"]] if len(rows) else rows
+
+
+def _reference_registration_image(paths, ccd):
+    """Load the overscan-corrected registration image for one CCD on the reference night."""
+    filename = observations.raw_fits_path(
+        paths,
+        REFERENCE_NIGHT,
+        REFERENCE_RUNS[ccd],
+        ccd,
+    )
+    if not filename.exists():
+        raise FileNotFoundError(f"Reference registration image not found: {filename}")
+    return preprocess_image(filename, ccd, config=None).image
+
+
+def measure_detector_shifts(reduction_input, config, paths):
+    """
+    Measure nightly CCD shifts relative to the reference night.
+
+    Suitable SimTh exposures are registered against the corresponding
+    reference image using phase cross-correlation. For each CCD, the adopted
+    shift is the median of all measurements and their scatter is stored as a
+    diagnostic. If no registration exposure is available, a historical shift
+    is used where defined; otherwise a zero shift is adopted.
+
+    Existing ``detector_shifts.fits`` results are reused unless
+    ``config.overwrite`` is set.
+
+    Returns
+    -------
+    astropy.table.Table
+        One row per CCD with ``dx``, ``dy``, their measurement scatter,
+        ``n_used``, and a registration ``status``.
+    """
+    filename = paths.detector / "detector_shifts.fits"
+    if filename.exists() and not config.overwrite:
+        table = Table.read(filename)
+        logger.info("Loaded cached detector shifts from %s", filename)
+        if config.diagnostics != "none":
+            diagnostics.plot_detector_shifts(table, paths.figures / "detector_shifts.png")
+        return table
+
+    if config.night == REFERENCE_NIGHT:
+        table = Table(
+            rows=[(i, 0., 0., 0., 0., 0, "reference") for i in (1, 2, 3)],
+            names=("ccd", "dx", "dy", "dx_scatter", "dy_scatter", "n_used", "status"),
+        )
+        table.write(filename, overwrite=True)
+        logger.info("Reference night 001122: detector shifts are (0, 0) on all CCDs")
+        if config.diagnostics != "none":
+            diagnostics.plot_detector_shifts(table, paths.figures / "detector_shifts.png")
+        return table
+
+    expected, rows = expected_detector_shifts(config.night), []
+    for ccd in ("1", "2", "3"):
+        measurements = []
+        candidates = _registration_candidates(reduction_input, ccd)
+        if len(candidates):
+            reference = _reference_registration_image(paths, ccd)
+            for row in candidates:
+                moving = preprocess_image(row[f"file_ccd{ccd}"], ccd, config).image
+                measurements.append(phase_correlation_shift(reference, moving))
+
+        if measurements:
+            dxs = np.array([measurement[0] for measurement in measurements])
+            dys = np.array([measurement[1] for measurement in measurements])
+            dx, dy = float(np.nanmedian(dxs)), float(np.nanmedian(dys))
+            dx_scatter = float(np.nanstd(dxs)) if len(dxs) > 1 else np.nan
+            dy_scatter = float(np.nanstd(dys)) if len(dys) > 1 else np.nan
+            status = (
+                "good"
+                if max(np.nan_to_num(dx_scatter), np.nan_to_num(dy_scatter)) <= 0.1
+                else "large scatter"
+            )
+        elif expected is not None:
+            dx, dy = expected[ccd]
+            dx_scatter = dy_scatter = np.nan
+            status = "historical fallback"
+        else:
+            dx = dy = 0.0
+            dx_scatter = dy_scatter = np.nan
+            status = "zero fallback"
+
+        rows.append((int(ccd), dx, dy, dx_scatter, dy_scatter, len(measurements), status))
+        logger.info(
+            "CCD%s detector shift: dx=%+.2f, dy=%+.2f px (%s; %d measurements)",
+            ccd,
+            dx,
+            dy,
+            status,
+            len(measurements),
+        )
+        if status != "good":
+            logger.warning("CCD%s detector registration status: %s", ccd, status)
+
+    table = Table(
+        rows=rows,
+        names=("ccd", "dx", "dy", "dx_scatter", "dy_scatter", "n_used", "status"),
+    )
+    table.write(filename, overwrite=True)
+    if config.diagnostics != "none":
+        diagnostics.plot_detector_shifts(table, paths.figures / "detector_shifts.png")
+    return table
+
+
+def detector_shift(table, ccd):
+    """Return the measured ``(dx, dy)`` shift for one CCD, or zero if absent."""
+    use = np.asarray(table["ccd"]) == int(ccd)
+    if not np.any(use):
+        return 0.0, 0.0
+    return float(table[use][0]["dx"]), float(table[use][0]["dy"])

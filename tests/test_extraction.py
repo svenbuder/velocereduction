@@ -1,302 +1,118 @@
-import velocereduction as VR
-from pathlib import Path
-import pytest
+import numpy as np
+from velocereduction import extraction
 
-def test_substract_overscan():
-    print('\n  --> Testing: substract_overscan()')
 
-    # Load the image to test
-    test_file = str(Path(__file__).resolve().parent)+'/../observations/001122/ccd_1/22nov10001.fits'
+def test_fractional_aperture_variance():
+    m = np.arange(-2, 3, dtype=float)
+    data = np.ones((1, 5))
+    variance = np.ones_like(data) * 4.0
+    result = extraction.extract_apertures(
+        data, variance, m, [("A", -0.25, 1.25)]
+    )
+    weights = extraction.aperture_weights(m, -0.25, 1.25)
+    assert np.allclose(result.flux[0, 0], weights.sum())
+    assert np.allclose(result.variance[0, 0], 4.0 * np.sum(weights ** 2))
 
-    full_image, metadata = VR.utils.read_veloce_fits_image_and_metadata(test_file)
 
-    # Test the function without debug
-    print('      --> with debug_overscan=False')
-    trimmed_image, _, _, _ = VR.extraction.substract_overscan(full_image, metadata)
+def test_fibre_slit_order():
+    assert extraction.SCIENCE_COMPONENTS == (
+        7, 18, 17, 6, 16, 15, 5, 14, 13, 1,
+        12, 11, 4, 10, 9, 3, 8, 19, 2,
+    )
+    assert extraction.SKY_COMPONENTS == ("S5", "S2", "S4", "S3", "S1")
+    assert np.allclose(extraction.FIBRE_SLOTS[:2], [-12, -11])
+    assert np.allclose(extraction.FIBRE_SLOTS[2:21], np.arange(-9, 10))
+    assert np.allclose(extraction.FIBRE_SLOTS[-3:], [11, 12, 13])
 
-    # Test the debug function
-    print('      --> with debug_overscan=True')
-    trimmed_image, _, _, _ = VR.extraction.substract_overscan(full_image, metadata, debug_overscan= True)
 
-    # Load the image to test
-    print('      --> with 4Amp')
-    test_file = str(Path(__file__).resolve().parent)+'/../observations/001122/ccd_1/4amp_example.fits'
-    full_image, metadata = VR.utils.read_veloce_fits_image_and_metadata(test_file)
-    trimmed_image, _, _, _ = VR.extraction.substract_overscan(full_image, metadata)
+def test_recombine_fibres_uses_covariance():
+    flux = np.tile(np.arange(len(extraction.FIBRE_COMPONENTS), dtype=float), (3, 1))
+    variance = np.ones_like(flux)
+    covariance = np.zeros((3, flux.shape[1], flux.shape[1]))
+    for i in range(flux.shape[1]):
+        covariance[:, i, i] = 2.0
 
-    print('\n  --> DONE Testing: substract_overscan()')
+    # Add anti-covariance between the first two science fibres.
+    i0 = extraction.FIBRE_COMPONENTS.index(extraction.SCIENCE_COMPONENTS[0])
+    i1 = extraction.FIBRE_COMPONENTS.index(extraction.SCIENCE_COMPONENTS[1])
+    covariance[:, i0, i1] = covariance[:, i1, i0] = -0.5
 
-def test_read_in_order_tramlines_tinney():
-    print('\n  --> Testing: read_in_order_tramlines_tinney()')
+    result = extraction.ExtractionResult(
+        flux, variance, extraction.FIBRE_COMPONENTS, "fibre", covariance
+    )
+    combined, combined_var = extraction.recombine_fibres(result)
+    idx = result.component_indices(extraction.SCIENCE_COMPONENTS)
 
-    tinney_tramlines = VR.extraction.read_in_order_tramlines_tinney()
+    assert np.allclose(combined, flux[:, idx].sum(axis=1))
+    assert np.allclose(combined_var, 2.0 * len(idx) - 1.0)
 
-    print('\n  --> DONE Testing: read_in_order_tramlines_tinney()')
 
-def test_read_in_order_tramlines():
-    print('\n  --> Testing: read_in_order_tramlines()')
-
-    test_order = 'ccd_3_order_70'
-    print('  --> Testing with order '+test_order)
-
-    # Test the function
-    print('      with use_default=False')
-    order_tramline_ranges, order_tramline_beginning_coefficients, order_tramline_ending_coefficients = VR.extraction.read_in_order_tramlines()
-    print(f'  --> tramline ranges test entry: {order_tramline_ranges[test_order]}')
-    print(f'  --> tramline beginning coefficients test entry: {[format(value, ".3e") for value in order_tramline_beginning_coefficients[test_order]]}')
-    print(f'  --> tramline ending coefficients test entry: {[format(value, ".3e") for value in order_tramline_ending_coefficients[test_order]]}')
-
-    print('      with use_default=True')
-    order_tramline_ranges, order_tramline_beginning_coefficients, order_tramline_ending_coefficients = VR.extraction.read_in_order_tramlines(use_default=True)
-    print(f'  --> tramline ranges test entry: {order_tramline_ranges[test_order]}')
-    print(f'  --> tramline beginning coefficients test entry: {[format(value, ".3e") for value in order_tramline_beginning_coefficients[test_order]]}')
-    print(f'  --> tramline ending coefficients test entry: {[format(value, ".3e") for value in order_tramline_ending_coefficients[test_order]]}')
-
-    print('\n  --> DONE Testing: read_in_order_tramlines()')
-
-def test_get_master_dark():
-    print('\n  --> Testing: get_master_dark()')
-
-    VR.config.date = '001122'
-    VR.config.working_directory = str(Path(__file__).resolve().parent)+'/../'
-
-    runs = ['0011']
-
-    print('      with archival=False')
-    master_dark = VR.extraction.get_master_dark(runs)
-    print(f'  --> master dark test entry: {master_dark.keys()}')
-
-    print('      with archival=True')
-    master_dark = VR.extraction.get_master_dark(runs, archival=True)
-    print(f'  --> master dark test entry: {master_dark.keys()}')
-
-    print('\n  --> DONE Testing: get_master_dark()')
-
-def test_get_tellurics_from_bstar():
-    print('\n  --> Testing: get_tellurics_from_bstar() with debug=True')
-
-    VR.config.date = '001122'
-    VR.config.working_directory = str(Path(__file__).resolve().parent)+'/../'
-
-    calibration_runs = {
-        'Flat_60.0': ['0008'],
-        'Flat_1.0': ['0009'],
-        'Flat_0.1': ['0010'],
-        'Bstar': {'18:57:01': ['127972', '0154', '18:57:01']}
-    }
-
-    master_flat, master_flat_images = VR.extraction.extract_orders(
-        ccd1_runs = calibration_runs['Flat_60.0'],
-        ccd2_runs = calibration_runs['Flat_1.0'],
-        ccd3_runs = calibration_runs['Flat_0.1'],
-        Flat = True,
-        update_tramlines_based_on_flat = False,
-        debug_overscan = False,
-        debug_rows = False,
-        debug_tramlines = False
+def test_fibre_recombination_qa_detects_shape_structure():
+    nx = 256
+    direct = np.ones(nx) * 1000.0
+    summed = extraction.ExtractionResult(
+        direct[:, None],
+        np.ones((nx, 1)),
+        ("Science",),
+        "summed",
     )
 
-    for bstar_exposure in calibration_runs['Bstar'].keys():
-        telluric_flux, telluric_mjd = VR.extraction.get_tellurics_from_bstar(
-            calibration_runs['Bstar'][bstar_exposure], master_flat_images,
-            debug = True
-        )
+    nf = len(extraction.FIBRE_COMPONENTS)
+    fibre_flux = np.zeros((nx, nf))
+    science_idx = [extraction.FIBRE_COMPONENTS.index(c) for c in extraction.SCIENCE_COMPONENTS]
+    wiggle = 1.0 + 0.01 * np.sin(np.arange(nx) * 2 * np.pi / 8.0)
+    for i in science_idx:
+        fibre_flux[:, i] = direct * wiggle / len(science_idx)
 
-    print('\n  --> DONE Testing: get_tellurics_from_bstar()')
+    fibre = extraction.ExtractionResult(
+        fibre_flux,
+        np.ones_like(fibre_flux),
+        extraction.FIBRE_COMPONENTS,
+        "fibre",
+    )
+    qa = extraction.fibre_recombination_qa(summed, fibre, smooth_sigma=20.0)
+
+    assert np.isclose(np.nanmedian(qa["ratio"]), 1.0, atol=2e-3)
+    assert qa["robust_rms_fractional_structure"] > 0.005
 
 
-def test_extract_orders_Flat():
-    print('\n  --> Testing: extract_orders() with Flat')
+def test_regular_profile_debug_logging(caplog):
+    import logging
 
-    VR.config.date = '001122'
-    VR.config.working_directory = str(Path(__file__).resolve().parent)+'/../'
+    m = np.arange(-40, 41, dtype=float)
+    centres = 2.1 * extraction.FIBRE_SLOTS
+    amplitudes = np.ones(len(centres)) * 1000.0
+    profile = extraction._gaussian_model(m, 100.0, amplitudes, centres, 0.7)
 
-    calibration_runs = {
-        'Flat_60.0': ['0008'],
-        'Flat_1.0': ['0009'],
-        'Flat_0.1': ['0010']
-    }
-
-    print('\n      --> Testing with update_tramlines_based_on_flat=True & debug_rows=True')
-    master_flat, master_flat_images = VR.extraction.extract_orders(
-        ccd1_runs = calibration_runs['Flat_60.0'],
-        ccd2_runs = calibration_runs['Flat_1.0'],
-        ccd3_runs = calibration_runs['Flat_0.1'],
-        Flat = True,
-        update_tramlines_based_on_flat = True,
-        debug_overscan = False,
-        debug_rows = True,
-        debug_tramlines = False
+    caplog.set_level(logging.DEBUG, logger=extraction.logger.name)
+    fit = extraction._fit_regular_profile(
+        profile, m, extraction.FIBRE_SLOTS,
+        separation0=2.1, sigma0=0.7, label="CCD3 order 85",
     )
 
-    print('\n      --> Testing with debug_overscan=True')
-    master_flat, master_flat_images = VR.extraction.extract_orders(
-        ccd1_runs = calibration_runs['Flat_60.0'],
-        ccd2_runs = calibration_runs['Flat_1.0'],
-        ccd3_runs = calibration_runs['Flat_0.1'],
-        Flat = True,
-        update_tramlines_based_on_flat = False,
-        debug_overscan = True,
-        debug_rows = False,
-        debug_tramlines = False
+    assert fit.success
+    assert "CCD3 order 85: regular fibre fit" in caplog.text
+    assert "initial d=2.100 sigma=0.700" in caplog.text
+
+
+def test_fibre_qa_debug_logging(caplog):
+    import logging
+
+    nx = 128
+    direct = np.ones(nx) * 1000.0
+    summed = extraction.ExtractionResult(
+        direct[:, None], np.ones((nx, 1)), ("Science",), "summed"
     )
 
-    print('\n     --> Testing with debug_rows=True')
-    master_flat, master_flat_images = VR.extraction.extract_orders(
-        ccd1_runs = calibration_runs['Flat_60.0'],
-        ccd2_runs = calibration_runs['Flat_1.0'],
-        ccd3_runs = calibration_runs['Flat_0.1'],
-        Flat = True,
-        update_tramlines_based_on_flat = False,
-        debug_overscan = False,
-        debug_rows = True,
-        debug_tramlines = False
+    nf = len(extraction.FIBRE_COMPONENTS)
+    fibre_flux = np.zeros((nx, nf))
+    idx = [extraction.FIBRE_COMPONENTS.index(c) for c in extraction.SCIENCE_COMPONENTS]
+    for i in idx:
+        fibre_flux[:, i] = direct / len(idx)
+    fibre = extraction.ExtractionResult(
+        fibre_flux, np.ones_like(fibre_flux), extraction.FIBRE_COMPONENTS, "fibre"
     )
 
-    print('\n     --> Testing with debug_tramlines=True')
-    master_flat, master_flat_images = VR.extraction.extract_orders(
-        ccd1_runs = calibration_runs['Flat_60.0'],
-        ccd2_runs = calibration_runs['Flat_1.0'],
-        ccd3_runs = calibration_runs['Flat_0.1'],
-        Flat = True,
-        update_tramlines_based_on_flat = False,
-        debug_overscan = False,
-        debug_rows = False,
-        debug_tramlines = True
-    )
-
-    print('\n  --> DONE Testing: extract_orders() with Flat')
-
-def test_extract_orders_ThXe():
-    print('\n  --> Testing: extract_orders() with ThXe')
-
-    VR.config.date = '001122'
-    VR.config.working_directory = str(Path(__file__).resolve().parent)+'/../'
-
-    calibration_runs = {
-        'FibTh_180.0': ['0004'],
-        'FibTh_60.0': ['0005'],
-        'FibTh_15.0': ['0006']
-    }
-
-    print('\n     --> Testing with debug_tramlines=True')
-    master_thxe = VR.extraction.extract_orders(
-        ccd1_runs = calibration_runs['FibTh_180.0'],
-        ccd2_runs = calibration_runs['FibTh_60.0'],
-        ccd3_runs = calibration_runs['FibTh_15.0'],
-        ThXe = True,
-        debug_tramlines = True
-    )
-
-    print('\n  --> DONE Testing: extract_orders() with ThXe')
-
-def test_extract_orders_LC():
-    print('\n  --> Testing: extract_orders() with LC')
-
-    VR.config.date = '001122'
-    VR.config.working_directory = str(Path(__file__).resolve().parent)+'/../'
-
-    calibration_runs = {
-        'SimLC': ['0007'],
-        'SimLC': ['0007'],
-        'SimLC': ['0007']
-    }
-
-    print('\n     --> Testing with debug_tramlines=True')
-    master_lc = VR.extraction.extract_orders(
-        ccd1_runs = calibration_runs['SimLC'],
-        ccd2_runs = calibration_runs['SimLC'],
-        ccd3_runs = calibration_runs['SimLC'],
-        LC = True,
-        debug_tramlines = True
-    )
-
-    print('\n  --> DONE Testing: extract_orders() with LC')
-
-def test_extract_order_Science():
-    print('\n  --> Testing: extract_orders() with Science')
-
-    VR.config.date = '001122'
-    VR.config.working_directory = str(Path(__file__).resolve().parent)+'/../'
-
-    science_runs = {
-        'HIP69673': ['0150','0151']
-    }
-    
-    print('\n     --> Testing with master_darks = None & debug_tramlines=False\n')
-    science, science_noise, science_header = VR.extraction.extract_orders(
-        ccd1_runs = science_runs['HIP69673'],
-        ccd2_runs = science_runs['HIP69673'],
-        ccd3_runs = science_runs['HIP69673'],
-        Science = True,
-        debug_tramlines = False
-    )
-
-    print('\n     --> Testing with master_darks = 1800.0 & exposure_time_threshold_darks = 5.0 & debug_tramlines=True\n')
-    master_darks = dict()
-    master_darks['1800.0'] = VR.extraction.get_master_dark(None, archival=True)
-    science, science_noise, science_header = VR.extraction.extract_orders(
-        ccd1_runs = science_runs['HIP69673'],
-        ccd2_runs = science_runs['HIP69673'],
-        ccd3_runs = science_runs['HIP69673'],
-        Science = True,
-        master_darks = master_darks,
-        exposure_time_threshold_darks = 5.0,
-        debug_tramlines = True
-    )
-
-    print('\n  --> DONE Testing: extract_orders() with Science')
-
-def test_extract_orders_ValueErrors():
-    print('\n  --> Testing: extract_orders() to raise ValueErrors')
-
-    # Let's use Flat=False and update_tramlines_based_on_flat=True
-
-    VR.config.date = '001122'
-    VR.config.working_directory = str(Path(__file__).resolve().parent)+'/../'
-
-    calibration_runs = {
-        'FibTh_180.0': ['0004'],
-        'FibTh_60.0': ['0005'],
-        'FibTh_15.0': ['0006']
-    }
-
-    print('     --> Testing ValueError with neither Flat nor LC nor Bstar nor Science nor ThXe')
-    with pytest.raises(ValueError) as excinfo:
-        master_thxe = VR.extraction.extract_orders(
-            ccd1_runs = calibration_runs['FibTh_180.0'],
-            ccd2_runs = calibration_runs['FibTh_60.0'],
-            ccd3_runs = calibration_runs['FibTh_15.0']
-        )
-    print(f'     --> ValueError raised: {excinfo.value}')
-
-    print('     --> Testing ValueError with Flat=False and update_tramlines_based_on_flat, wrongly using ThXe=True.')
-    with pytest.raises(ValueError) as excinfo:
-        master_thxe = VR.extraction.extract_orders(
-            ccd1_runs = calibration_runs['FibTh_180.0'],
-            ccd2_runs = calibration_runs['FibTh_60.0'],
-            ccd3_runs = calibration_runs['FibTh_15.0'],
-            ThXe = True,
-            update_tramlines_based_on_flat = True
-        )
-    print(f'     --> ValueError raised: {excinfo.value}')
-
-    print('\n  --> DONE Testing: extract_orders() to raise ValueErrors')
-
-# Run the test function
-if __name__ == "__main__":
-
-    print('\n  START Testing: VR.extraction.py')
-    
-    test_substract_overscan()
-    test_read_in_order_tramlines_tinney()
-    test_read_in_order_tramlines()
-    test_get_master_dark()
-    test_get_tellurics_from_bstar()
-    test_extract_orders_Flat()
-    test_extract_orders_ThXe()
-    test_extract_orders_LC()
-    test_extract_order_Science()
-    test_extract_orders_ValueErrors()
-
-    print('\n  DONE Testing: VR.extraction.py')
+    caplog.set_level(logging.DEBUG, logger=extraction.logger.name)
+    extraction.fibre_recombination_qa(summed, fibre, label="CCD3 order 85")
+    assert "CCD3 order 85: fibre/summed QA" in caplog.text
