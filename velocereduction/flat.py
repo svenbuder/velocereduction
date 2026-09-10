@@ -44,7 +44,7 @@ def create_master_flat(reduction_input, config, paths):
     master, runs, read_noise_rows = {}, {}, []
     for ccd in ("1", "2", "3"):
         images, accepted = [], []
-        for row in observations.select(reduction_input, "Flat", ccd):
+        for row in observations.select_usable_observations(reduction_input, "Flat", ccd):
             frame = detector.preprocess_image(row[f"file_ccd{ccd}"], ccd, config)
             image = frame.image
             if np.nanpercentile(image, 99) < 5000:
