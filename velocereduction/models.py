@@ -21,47 +21,14 @@ Variances have the same shape as their corresponding flux/count arrays and
 are expressed in the square of the corresponding flux/count units.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
 
-# ---------------------------------------------------------------------------
-# Detector-level products
-# ---------------------------------------------------------------------------
-
 @dataclass
 class DetectorFrame:
-    """One preprocessed Veloce CCD exposure.
-
-    This is the first calibrated data product created from a raw CCD frame.
-    The overscan has been removed, but the detector counts remain in ADU.
-
-    Attributes
-    ----------
-    image
-        Overscan-subtracted detector counts, with shape
-        ``(n_dispersion, n_cross_dispersion)``.
-    variance
-        Per-pixel statistical variance in ADU^2.  This includes read noise
-        estimated from the exposure overscan and, where enabled, photon noise
-        calculated using the characterised detector gain.
-    header
-        FITS header of the original exposure.
-    ccd
-        Veloce CCD identifier: ``"1"``, ``"2"``, or ``"3"``.
-    readout_mode
-        Detector readout configuration, currently ``"2Amp"`` or ``"4Amp"``.
-    overscan_median
-        Median overscan level measured independently for each amplifier.
-    overscan_rms
-        Read-noise estimate in ADU measured from each amplifier overscan.
-    quality_mask
-        Integer bit mask with the same shape as ``image``.  Zero denotes an
-        unflagged pixel; non-zero bits identify pixels that should not normally
-        contribute to extraction, such as saturated pixels.
-    """
-
+    """Overscan-corrected detector image with variance and pixel flags."""
     image: np.ndarray
     variance: np.ndarray
     header: object
@@ -72,156 +39,128 @@ class DetectorFrame:
     quality_mask: np.ndarray
 
 
-# ---------------------------------------------------------------------------
-# Flat-field and fibre-geometry products
-# ---------------------------------------------------------------------------
+@dataclass
+class OrderGeometry:
+    """Compact location and extraction regions of one echelle order."""
+    ccd: str
+    order: int
+    trace_coefficients: np.ndarray
+    extraction_half_window: int = 40
+    regions: dict = field(default_factory=dict)
+    available: dict = field(default_factory=dict)
+    trace_rms: float = np.nan
+    trace_npoints: int = 0
+
+    @property
+    def name(self):
+        return f"ccd_{self.ccd}_order_{self.order}"
+
+    def trace(self, n_dispersion):
+        y = np.arange(n_dispersion, dtype=float)
+        return np.polynomial.polynomial.polyval(y, self.trace_coefficients)
+
+    def region(self, name):
+        if name not in self.regions:
+            raise KeyError(f"{self.name} has no {name!r} extraction region")
+        return self.regions[name]
+
+
+@dataclass
+class OrderMatrix:
+    """Rectangular detector-space representation of one echelle order."""
+    geometry: OrderGeometry
+    flux: np.ndarray
+    variance: np.ndarray
+    quality_mask: np.ndarray
+    relative_x: np.ndarray
+    trace_offset: np.ndarray
+
+    @property
+    def ccd(self):
+        return self.geometry.ccd
+
+    @property
+    def order(self):
+        return self.geometry.order
+
+    @property
+    def name(self):
+        return self.geometry.name
+
 
 @dataclass
 class FibreGeometry:
-    """Flat-derived cross-dispersion geometry of one echelle order.
+    """Compact smooth model of the science+sky fibre bundle in one order.
 
-    The fibre positions are measured from the high-S/N Flat and represented as
-    smooth functions of dispersion.  This geometry is then held fixed when
-    extracting calibration and science exposures, so noisy science spectra
-    cannot change the inferred fibre positions or widths.
+    For normalised dispersion coordinate ``u=(y-y_reference)/y_scale``:
 
-    Attributes
-    ----------
-    components
-        Fibre identifiers in physical slit order.  This includes the 19 science
-        fibres and five sky fibres.
-    slots
-        Nominal slit-slot offsets relative to the reference fibre.  Gaps in the
-        physical slit are retained, so these are not simply consecutive fibre
-        numbers.
-    centres
-        Cross-dispersion centre of every fibre at every dispersion pixel, with
-        shape ``(n_dispersion, n_fibres)``.
-    sigma
-        Smooth common Gaussian width of the fibre profiles at each dispersion
-        pixel, in detector pixels.
-    separation
-        Smooth separation between adjacent nominal slit slots at each
-        dispersion pixel, in detector pixels.
-    bundle_offset
-        Smooth displacement of the fibre bundle relative to the traced order
-        centre.
-    fibre_offsets
-        Small, fixed offsets of individual fibres from a perfectly regular
-        slit grid, in detector pixels.
-    sampled_x
-        Dispersion pixels at which the Flat geometry was measured directly.
-    sampled_sigma
-        Fibre widths measured at ``sampled_x`` before smooth interpolation.
-    sampled_separation
-        Fibre separations measured at ``sampled_x`` before smooth interpolation.
-    sampled_bundle_offset
-        Bundle offsets measured at ``sampled_x`` before smooth interpolation.
+        centre_i(y) = trace_offset(y) + bundle(u)
+                      + separation(u) * slot_i + fibre_offset_i
+
+    ``bundle``, ``separation`` and ``sigma`` are stored as polynomial
+    coefficients in increasing order. The 4112-row evaluated geometry is not
+    persisted; :meth:`evaluate` reconstructs it when extraction is performed.
     """
-
+    ccd: str
+    order: int
     components: tuple
     slots: np.ndarray
-    centres: np.ndarray
-    sigma: np.ndarray
-    separation: np.ndarray
-    bundle_offset: np.ndarray
     fibre_offsets: np.ndarray
-    sampled_x: np.ndarray
-    sampled_sigma: np.ndarray
-    sampled_separation: np.ndarray
-    sampled_bundle_offset: np.ndarray
+    bundle_coefficients: np.ndarray
+    separation_coefficients: np.ndarray
+    sigma_coefficients: np.ndarray
+    y_reference: float
+    y_scale: float
+    fit_rms: float = np.nan
+    fit_npoints: int = 0
+    sampled_y: np.ndarray = field(default_factory=lambda: np.array([], int), repr=False)
+    sampled_bundle: np.ndarray = field(default_factory=lambda: np.array([], float), repr=False)
+    sampled_separation: np.ndarray = field(default_factory=lambda: np.array([], float), repr=False)
+    sampled_sigma: np.ndarray = field(default_factory=lambda: np.array([], float), repr=False)
 
+    @property
+    def name(self):
+        return f"ccd_{self.ccd}_order_{self.order}"
 
-@dataclass
-class FlatOrder:
-    """Flat-field products for one extracted echelle order.
+    @property
+    def degree(self):
+        return max(
+            len(self.bundle_coefficients),
+            len(self.separation_coefficients),
+            len(self.sigma_coefficients),
+        ) - 1
 
-    This object contains both the detector-space Flat products required for
-    response correction and, when fibre extraction is requested, the
-    fibre-resolved Flat products used to describe relative fibre throughput.
+    def _u(self, y):
+        return (np.asarray(y, float) - self.y_reference) / self.y_scale
 
-    Attributes
-    ----------
-    order_name
-        Unique order label, for example ``"ccd_2_order_120"``.
-    matrix
-        Extracted Flat order in detector-pixel space, with shape
-        ``(n_dispersion, n_order_pixels)``.
-    smooth
-        Smooth model of the Flat illumination used to separate large-scale
-        illumination from small-scale detector response.
-    response
-        Detector response map derived from the ratio of the measured and smooth
-        Flat order.  Science and calibration order matrices are divided by this
-        response before spectral extraction.
-    blaze
-        Smooth one-dimensional blaze / order-throughput function along
-        dispersion.
-    trace_offset
-        Sub-pixel displacement of the traced order relative to the
-        integer-centred extracted order matrix at each dispersion pixel.
-    geometry
-        Flat-derived fibre geometry.  Present only when fibre-resolved
-        extraction is requested.
-    fibre_flat
-        Flux extracted independently for each illuminated fibre.
-    fibre_smooth
-        Smooth model of ``fibre_flat`` along dispersion.
-    fibre_relative_response
-        Relative fibre-throughput response derived from the extracted Flat
-        fibres.
-    """
+    def bundle(self, y):
+        return np.polynomial.polynomial.polyval(self._u(y), self.bundle_coefficients)
 
-    order_name: str
-    matrix: np.ndarray
-    smooth: np.ndarray
-    response: np.ndarray
-    blaze: np.ndarray
-    trace_offset: np.ndarray
-    geometry: FibreGeometry | None = None
-    fibre_flat: np.ndarray | None = None
-    fibre_smooth: np.ndarray | None = None
-    fibre_relative_response: np.ndarray | None = None
+    def separation(self, y):
+        return np.polynomial.polynomial.polyval(self._u(y), self.separation_coefficients)
 
+    def sigma(self, y):
+        return np.polynomial.polynomial.polyval(self._u(y), self.sigma_coefficients)
 
-# ---------------------------------------------------------------------------
-# Spectral-extraction products
-# ---------------------------------------------------------------------------
+    def evaluate(self, n_dispersion, trace_offset=None):
+        """Return evaluated centres, widths and separation for extraction."""
+        y = np.arange(n_dispersion, dtype=float)
+        trace_offset = np.zeros(n_dispersion) if trace_offset is None else np.asarray(trace_offset, float)
+        bundle = self.bundle(y)
+        separation = self.separation(y)
+        sigma = self.sigma(y)
+        centres = (
+            trace_offset[:, None]
+            + bundle[:, None]
+            + separation[:, None] * np.asarray(self.slots)[None, :]
+            + np.asarray(self.fibre_offsets)[None, :]
+        )
+        return centres, sigma, separation, bundle
+
 
 @dataclass
 class ExtractionResult:
-    """Spectrum extracted from one detector-space order matrix.
-
-    Two extraction modes are supported:
-
-    ``"summed"``
-        Direct fractional-pixel aperture extraction.  Components are typically
-        the Science and sky apertures.
-
-    ``"fibre"``
-        Simultaneous profile fitting of the individual illuminated fibres.
-        Components then correspond to the physical science and sky fibres.
-
-    Attributes
-    ----------
-    flux
-        Extracted flux with shape ``(n_dispersion, n_components)``.
-    variance
-        Statistical variance corresponding to ``flux``.
-    components
-        Names or physical fibre identifiers corresponding to the second array
-        axis.
-    extraction_mode
-        ``"summed"`` or ``"fibre"``.
-    covariance
-        Optional covariance between simultaneously fitted fibre amplitudes,
-        with shape ``(n_dispersion, n_components, n_components)``.  This is
-        important when recombining neighbouring deblended fibres.
-    background
-        Optional fitted cross-dispersion background at each dispersion pixel,
-        with shape ``(n_dispersion,)``.
-    """
-
+    """One or more 1D spectra extracted from an OrderMatrix."""
     flux: np.ndarray
     variance: np.ndarray
     components: tuple
@@ -230,88 +169,52 @@ class ExtractionResult:
     background: np.ndarray | None = None
 
     def component_indices(self, components):
-        """Return second-axis indices corresponding to selected components."""
-        return np.array(
-            [self.components.index(component) for component in components],
-            dtype=int,
+        return np.array([self.components.index(value) for value in components], dtype=int)
+
+    def select(self, components):
+        idx = self.component_indices(components)
+        covariance = None if self.covariance is None else self.covariance[:, idx][:, :, idx]
+        return ExtractionResult(
+            self.flux[:, idx], self.variance[:, idx], tuple(components),
+            self.extraction_mode, covariance, self.background,
         )
 
 
 @dataclass
+class FlatOrderCalibration:
+    """Compact 1D Flat products for one order."""
+    ccd: str
+    order: int
+    summed_flat: np.ndarray
+    summed_smooth: np.ndarray
+    summed_response: np.ndarray
+    fibre_flat: np.ndarray | None = None
+    fibre_smooth: np.ndarray | None = None
+    fibre_response: np.ndarray | None = None
+
+    @property
+    def name(self):
+        return f"ccd_{self.ccd}_order_{self.order}"
+
+
+@dataclass
 class ExtractedExposure:
-    """Extracted calibration exposure from one CCD.
-
-    This groups the detector-space spectra from the echelle orders belonging to
-    a single exposure.  It is primarily used for calibration observations such
-    as FibTh, SimTh, and SimLC before the wavelength model is constructed.
-
-    Attributes
-    ----------
-    run
-        Observatory run/exposure identifier.
-    kind
-        Calibration type, for example ``"FibTh"``, ``"SimTh"``, or ``"SimLC"``.
-    ccd
-        CCD identifier.
-    mjd_mid
-        Mid-exposure Modified Julian Date.
-    exptime
-        Exposure time in seconds.
-    orders
-        Physical echelle-order numbers represented in the exposure.
-    result
-        Extracted flux and variance.
-    order_names
-        Pipeline order labels corresponding to ``orders``.
-    fibre_flux
-        Optional per-fibre calibration spectra.
-    fibre_variance
-        Variance corresponding to ``fibre_flux``.
-    """
-
+    """Detector-coordinate calibration spectra for one CCD exposure."""
     run: str
     kind: str
     ccd: str
     mjd_mid: float
     exptime: float
     orders: np.ndarray
-    result: ExtractionResult
+    summed: ExtractionResult
     order_names: tuple
     fibre_flux: np.ndarray | None = None
     fibre_variance: np.ndarray | None = None
 
 
-# ---------------------------------------------------------------------------
-# Wavelength-calibrated science products
-# ---------------------------------------------------------------------------
-
 @dataclass
 class ScienceOrder:
-    """Final wavelength-calibrated spectrum of one science echelle order.
-
-    Attributes
-    ----------
-    order
-        Physical echelle-order number.
-    wavelength_nm
-        Wavelength solution evaluated for the extracted spectrum, in nm.
-    barycentric_wavelength_nm
-        Wavelength grid after applying the barycentric correction, in nm.
-    flux
-        Final science flux on the common wavelength grid.
-    variance
-        Statistical variance corresponding to ``flux``.
-    sky
-        Sky spectrum used for sky subtraction, when available.
-    fibre_flux
-        Optional wavelength-aligned spectra of the individual science fibres.
-    fibre_variance
-        Variance corresponding to ``fibre_flux``.
-    fibre_native_wavelength_nm
-        Native wavelength solution of each fibre before interpolation onto the
-        common wavelength grid.
-    """
-
+    """Final wavelength-calibrated product for one physical echelle order."""
     order: int
     wavelength_nm: np.ndarray
     barycentric_wavelength_nm: np.ndarray
@@ -325,34 +228,11 @@ class ScienceOrder:
 
 @dataclass
 class ScienceExposure:
-    """Final reduced science spectrum from one CCD exposure.
-
-    The individual ``ScienceOrder`` objects retain the order-by-order spectra,
-    while this container stores metadata that apply to the complete exposure.
-
-    Attributes
-    ----------
-    run
-        Observatory run/exposure identifier.
-    object_name
-        Target name from the observation metadata.
-    ccd
-        CCD identifier.
-    mjd_mid
-        Mid-exposure Modified Julian Date.
-    extraction_mode
-        Extraction mode used to produce the spectrum.
-    orders
-        List of wavelength-calibrated ``ScienceOrder`` products.
-    berv_kms
-        Barycentric Earth radial velocity in km/s used for the wavelength
-        correction.
-    """
-
+    """Collection of final ScienceOrder products for one CCD exposure."""
     run: str
     object_name: str
     ccd: str
     mjd_mid: float
-    extraction_mode: str
-    orders: list[ScienceOrder]
+    mode: str
+    orders: list
     berv_kms: float = np.nan

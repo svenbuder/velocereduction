@@ -461,13 +461,21 @@ def characterise_detector_gain(flat_files, ccd, output_file=None, n_bins=30, sig
         signal = np.array([p["signal_adu"] for p in data])
         ratio = np.array([p["pair_scale"] for p in data])
         rows.append({
-            "ccd": str(ccd), "readout_mode": readout, "amplifier": amp,
-            "gain_e_per_adu": np.round(fit["gain_e_per_adu"],4), "gain_err_e_per_adu": np.round(fit["gain_err_e_per_adu"],4),
-            "read_noise_adu": np.round(fit["read_noise_adu"],1), "read_noise_err_adu": np.round(fit["read_noise_err_adu"],1),
-            "read_noise_e": np.round(fit["read_noise_e"],1), "overscan_rms_adu": np.round(overscan_rms,1),
-            "n_pairs": n_pairs[(readout, amp)], "n_bins": len(data),
-            "signal_min_adu": int(signal.min()), "signal_max_adu": int(signal.max()),
-            "median_pair_scale": np.round(float(np.nanmedian(ratio)), 4), "reduced_chi2": np.round(fit["reduced_chi2"], 1),
+            "ccd": np.int16(ccd),
+            "readout_mode": str(readout),
+            "amplifier": str(amp),
+            "gain_e_per_adu": np.float32(np.round(fit["gain_e_per_adu"], 4)),
+            "gain_err_e_per_adu": np.float32(np.round(fit["gain_err_e_per_adu"], 4)),
+            "read_noise_adu": np.float32(np.round(fit["read_noise_adu"], 1)),
+            "read_noise_err_adu": np.float32(np.round(fit["read_noise_err_adu"], 1)),
+            "read_noise_e": np.float32(np.round(fit["read_noise_e"], 1)),
+            "overscan_rms_adu": np.float32(np.round(overscan_rms, 1)),
+            "n_pairs": np.int16(n_pairs[(readout, amp)]),
+            "n_bins": np.int16(len(data)),
+            "signal_min_adu": np.int32(signal.min()),
+            "signal_max_adu": np.int32(signal.max()),
+            "median_pair_scale": np.float32(np.round(np.nanmedian(ratio), 4)),
+            "reduced_chi2": np.float32(np.round(fit["reduced_chi2"], 1)),
         })
         diagnostics[(readout, amp)] = {
             "signal_adu": signal,
@@ -603,7 +611,7 @@ def measure_detector_shifts(reduction_input, config, paths):
         One row per CCD with ``dx``, ``dy``, their measurement scatter,
         ``n_used``, and a registration ``status``.
     """
-    filename = paths.detector / "detector_shifts.fits"
+    filename = paths.detector_shifts
     if filename.exists() and not config.overwrite:
         table = Table.read(filename)
         logger.info("Loaded cached detector shifts from %s", filename)
@@ -612,10 +620,18 @@ def measure_detector_shifts(reduction_input, config, paths):
         return table
 
     if config.night == REFERENCE_NIGHT:
-        table = Table(
-            rows=[(i, 0., 0., 0., 0., 0, "reference") for i in (1, 2, 3)],
-            names=("ccd", "dx", "dy", "dx_scatter", "dy_scatter", "n_used", "status"),
-        )
+        table = Table(rows=[
+            {
+                "ccd": np.int16(ccd),
+                "dx": np.float64(0.0),
+                "dy": np.float64(0.0),
+                "dx_scatter": np.float64(0.0),
+                "dy_scatter": np.float64(0.0),
+                "n_used": np.int16(0),
+                "status": "reference",
+            }
+            for ccd in (1, 2, 3)
+        ])
         table.write(filename, overwrite=True)
         logger.info("Reference night 001122: detector shifts are (0, 0) on all CCDs")
         if config.diagnostics != "none":
@@ -652,7 +668,15 @@ def measure_detector_shifts(reduction_input, config, paths):
             dx_scatter = dy_scatter = np.nan
             status = "zero fallback"
 
-        rows.append((int(ccd), dx, dy, dx_scatter, dy_scatter, len(measurements), status))
+        rows.append({
+            "ccd": np.int16(ccd),
+            "dx": np.float64(dx),
+            "dy": np.float64(dy),
+            "dx_scatter": np.float64(dx_scatter),
+            "dy_scatter": np.float64(dy_scatter),
+            "n_used": np.int16(len(measurements)),
+            "status": status,
+        })
         logger.info(
             "CCD%s detector shift: dx=%+.2f, dy=%+.2f px (%s; %d measurements)",
             ccd,
@@ -664,19 +688,16 @@ def measure_detector_shifts(reduction_input, config, paths):
         if status != "good":
             logger.warning("CCD%s detector registration status: %s", ccd, status)
 
-    table = Table(
-        rows=rows,
-        names=("ccd", "dx", "dy", "dx_scatter", "dy_scatter", "n_used", "status"),
-    )
-    table.write(filename, overwrite=True)
+    shifts = Table(rows=rows)
+    shifts.write(filename, overwrite=True)
     if config.diagnostics != "none":
-        diagnostics.plot_detector_shifts(table, paths.figures / "detector_shifts.png")
-    return table
+        diagnostics.plot_detector_shifts(shifts, paths.figures / "detector_shifts.png")
+    return shifts
 
 
-def detector_shift(table, ccd):
+def detector_shift(shifts, ccd):
     """Return the measured ``(dx, dy)`` shift for one CCD, or zero if absent."""
-    use = np.asarray(table["ccd"]) == int(ccd)
+    use = np.asarray(shifts["ccd"]) == int(ccd)
     if not np.any(use):
         return 0.0, 0.0
-    return float(table[use][0]["dx"]), float(table[use][0]["dy"])
+    return float(shifts[use][0]["dx"]), float(shifts[use][0]["dy"])

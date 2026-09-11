@@ -222,7 +222,7 @@ def identify_observations(config, paths):
     return table
 
 
-def select_usable_observations(table, kind, ccd=None):
+def select(table, kind, ccd=None):
     """Select usable observations of a given type and optionally CCD."""
     if len(table) == 0: return table
     mask = (table["type"] == kind) & table["use"]
