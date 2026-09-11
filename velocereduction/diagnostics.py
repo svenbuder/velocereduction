@@ -342,6 +342,120 @@ def plot_fibre_geometry_order(geometry, order_matrix, filename):
     return _save(fig, filename)
 
 
+def _native_order_coordinates(order_matrix):
+    """Return native detector x coordinates for an OrderMatrix."""
+    n = order_matrix.flux.shape[0]
+    trace = order_matrix.geometry.trace(n)
+    centre_pixel = np.rint(trace - order_matrix.trace_offset).astype(int)
+    x_native = centre_pixel[:, None] + order_matrix.relative_x[None, :]
+    return trace, centre_pixel, x_native
+
+
+def plot_fibre_extraction_detector(order_matrix, fibre_geometry, filename, rows=None, half_height=150):
+    """Show fitted fibre centres over native detector pixels at three order locations."""
+    n = order_matrix.flux.shape[0]
+    if rows is None:
+        # rows = [int(f * (n - 1)) for f in (0.1, 0.5, 0.9)]
+        rows = [500, 2055, 3500]
+
+    trace, centre_pixel, x_native = _native_order_coordinates(order_matrix)
+    centres, sigma, _, _ = fibre_geometry.evaluate(n, order_matrix.trace_offset)
+    centres_native = centre_pixel[:, None] + centres
+
+    fig, axes = plt.subplots(1, len(rows), figsize=(10, 4), constrained_layout=True)
+    axes = np.atleast_1d(axes)
+
+    for ax, ycentre in zip(axes, rows):
+        y0, y1 = max(0, ycentre - half_height), min(n, ycentre + half_height)
+        use = slice(y0, y1)
+
+        xmin = int(np.nanmin(x_native[use]))
+        xmax = int(np.nanmax(x_native[use]))
+        image = np.full((y1 - y0, xmax - xmin + 1), np.nan)
+
+        for j, y in enumerate(range(y0, y1)):
+            x = x_native[y].astype(int) - xmin
+            image[j, x] = order_matrix.flux[y]
+
+        finite = image[np.isfinite(image)]
+        vmin, vmax = np.nanpercentile(finite, [5, 99.5])
+
+        ax.imshow(
+            image, origin="lower", cmap="Greys", aspect="auto", interpolation="none",
+            extent=(xmin - 0.5, xmax + 0.5, y0 - 0.5, y1 - 0.5),
+            vmin=vmin, vmax=1.2*vmax,
+        )
+
+        science_label, sky_label = True, True
+        for i, component in enumerate(fibre_geometry.components):
+            science = isinstance(component, (int, np.integer))
+            colour = "C4" if science else "C0"
+            label = "Science fibres" if science and science_label else "Sky fibres" if not science and sky_label else None
+            ax.plot(centres_native[use, i], np.arange(y0, y1), color=colour, lw=1.0, label=label)
+            science_label &= not science
+            sky_label &= science
+
+        ax.plot(trace[use], np.arange(y0, y1), color="0.15", lw=1.0, label="Order trace")
+        ax.plot(centre_pixel[use], np.arange(y0, y1), color="0.5", lw=1.0,
+                drawstyle="steps-mid", label="OrderMatrix centre")
+        ax.set(xlabel="Native cross-dispersion pixel", title=f"y = {ycentre}")
+
+    axes[0].set_ylabel("Dispersion pixel")
+    axes[0].legend(fontsize=7)
+    fig.suptitle(f"CCD{order_matrix.ccd} order {order_matrix.order}: native fibre extraction geometry")
+    return _save(fig, filename)
+
+
+def plot_fibre_extraction_rows(order_matrix, fibre_geometry, filename, rows=None):
+    """Show observed profiles and the actual fibre model used for extraction."""
+    from . import extraction
+
+    n = order_matrix.flux.shape[0]
+    if rows is None:
+        # rows = [int(f * (n - 1)) for f in (0.1, 0.5, 0.9)]
+        rows = [500, 2055, 3500]
+
+    result = extraction.extract_fibre_order(order_matrix, fibre_geometry)
+    _, centre_pixel, _ = _native_order_coordinates(order_matrix)
+    centres, sigma, _, _ = fibre_geometry.evaluate(n, order_matrix.trace_offset)
+
+    fig, axes = plt.subplots(
+        2, len(rows), figsize=(13, 5), sharex="col", constrained_layout=True,
+        gridspec_kw={"height_ratios": [4, 1]},
+    )
+
+    for column, y in enumerate(rows):
+        x = centre_pixel[y] + order_matrix.relative_x
+        profiles = extraction.integrated_gaussian_cube(
+            order_matrix.relative_x, centres[y:y + 1], sigma[y:y + 1]
+        )[0]
+
+        background = 0.0 if result.background is None else result.background[y]
+        components = profiles * result.flux[y][None, :]
+        model = background + np.nansum(components, axis=1)
+        data = order_matrix.flux[y]
+
+        axes[0, column].step(x, data, where="mid", color="0.2", lw=1.0, label="Flat")
+        for i, component in enumerate(fibre_geometry.components):
+            colour = "C4" if isinstance(component, (int, np.integer)) else "C0"
+            axes[0, column].plot(x, components[:, i], color=colour, lw=0.5, alpha=0.45)
+
+        axes[0, column].plot(x, model, color="C3", lw=1.1, label="extraction model")
+        axes[0, column].set_title(f"y = {y}, σ = {sigma[y]:.2f} px")
+
+        axes[1, column].step(x, data - model, where="mid", lw=0.8)
+        axes[1, column].axhline(0, color="0.5", ls="--", lw=0.7)
+        axes[1, column].set_xlabel("Native cross-dispersion pixel")
+
+        if column == 0:
+            axes[0, column].set_ylabel("Counts")
+            axes[1, column].set_ylabel("Residual")
+
+    axes[0, 0].legend(fontsize=8)
+    fig.suptitle(f"CCD{order_matrix.ccd} order {order_matrix.order}: fibre extraction profiles")
+    return _save(fig, filename)
+
+
 def _representative_product(products, ccd):
     names = list(products)
     name = _representative_name(names, ccd)
@@ -868,3 +982,4 @@ def plot_summed_response_image(products, filename):
 
     fig.suptitle("Summed Flat response")
     return _save(fig, filename)
+    

@@ -227,7 +227,7 @@ def _fit_flat_order(image, reference, dx, dy, step=8):
     trace = initial.trace(image.shape[0])
     rounded = np.rint(trace)
     for y0 in range(2, len(matrix) - 2, step):
-        profile = np.nanmedian(matrix[y0 - 2:y0 + 3], axis=0)
+        profile = utils.nanmedian_profile(matrix[y0 - 2:y0 + 3])
         left = _find_trough(profile, x, left0 + offset[y0])
         right = _find_trough(profile, x, right0 + offset[y0])
         if np.isfinite(left) and np.isfinite(right) and right > left:
@@ -244,7 +244,7 @@ def _fit_flat_order(image, reference, dx, dy, step=8):
         dict(reference.regions), dict(reference.available), rms, npoints,
     )
     final, x, final_offset = _extract_array(image, result)
-    profile = np.nanmedian(final, axis=0)
+    profile = utils.nanmedian_profile(final)
     left = _find_trough(profile, x, left0 + np.nanmedian(final_offset))
     right = _find_trough(profile, x, right0 + np.nanmedian(final_offset))
     if np.isfinite(left) and np.isfinite(right):

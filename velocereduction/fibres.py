@@ -47,6 +47,13 @@ def initial_fibre_parameters(ccd, order):
     return float(separation), float(sigma)
 
 
+def _pad_coefficients(coeff, degree):
+    """Pad lower-order polynomial coefficients with zeros."""
+    result = np.zeros(degree + 1, dtype=float)
+    result[:len(coeff)] = coeff
+    return result
+
+
 def integrated_gaussian_matrix(x, centres, sigma, normalise=True):
     x, centres = np.asarray(x, float)[:, None], np.asarray(centres, float)[None, :]
     p = ndtr((x + 0.5 - centres) / float(sigma)) - ndtr((x - 0.5 - centres) / float(sigma))
@@ -68,8 +75,8 @@ def _fit_regular_geometry(profile, x, x0, separation0, sigma0, ccd):
     separation_bounds, sigma_bounds = fibre_parameter_bounds(ccd)
     initial = [
         x0,
-        np.clip(separation0, *separation_bounds),
-        np.clip(sigma0, *sigma_bounds),
+        np.clip(separation0, separation_bounds[0]+0.05, separation_bounds[1]-0.05),
+        np.clip(sigma0, sigma_bounds[0]+0.05, sigma_bounds[1]-0.05),
     ]
 
     def residual(p):
@@ -77,19 +84,25 @@ def _fit_regular_geometry(profile, x, x0, separation0, sigma0, ccd):
         _, model = _linear_profile_fit(profile, x, centres, p[2])
         return model - profile
 
-    fit = least_squares(
-        residual, initial,
-        bounds=([x0 - 1.5, separation_bounds[0], sigma_bounds[0]],
-                [x0 + 1.5, separation_bounds[1], sigma_bounds[1]]),
-        max_nfev=4000,
-    )
+    try:
+        fit = least_squares(
+            residual, initial,
+            bounds=([x0 - 1.5, separation_bounds[0], sigma_bounds[0]],
+                    [x0 + 1.5, separation_bounds[1], sigma_bounds[1]]),
+            max_nfev=4000,
+        )
+    except ValueError:
+        logger.warning("Failed to fit regular fibre geometry for CCD %s", ccd)
+        logger.warning("Initial value used: x0=%.3f, separation=%.3f, sigma=%.3f", *initial)
+        logger.warning("Bounds: x0=[%.3f, %.3f], separation=[%.3f, %.3f], sigma=[%.3f, %.3f]",
+                       x0 - 1.5, x0 + 1.5, separation_bounds[0], separation_bounds[1], sigma_bounds[0], sigma_bounds[1])
     return fit.x
 
 
 def fit_collapsed_fibre_profile(order_matrix, maximum_centre_shift=0.40, reference_geometry=None):
     """Fit one high-S/N collapsed profile to initialise all local fibre fits."""
     matrix = np.asarray(order_matrix.flux, float)
-    profile = np.nanmedian(matrix, axis=0)
+    profile = utils.nanmedian_profile(matrix)
     x = np.asarray(order_matrix.relative_x, float)
     x00 = float(np.nanmedian(order_matrix.trace_offset))
     if reference_geometry is None:
@@ -99,6 +112,10 @@ def fit_collapsed_fibre_profile(order_matrix, maximum_centre_shift=0.40, referen
         separation0 = float(reference_geometry.separation(reference_geometry.y_reference))
         sigma0 = float(reference_geometry.sigma(reference_geometry.y_reference))
         reference_offsets = np.asarray(reference_geometry.fibre_offsets, float)
+        if not (np.isfinite(separation0) and np.isfinite(sigma0)):
+            separation0, sigma0 = initial_fibre_parameters(order_matrix.ccd, order_matrix.order)
+            reference_offsets = np.zeros(len(FIBRE_SLOTS))
+
     x0, separation, sigma = _fit_regular_geometry(
         profile, x, x00, separation0, sigma0, order_matrix.ccd
     )
@@ -223,7 +240,7 @@ def fit_fibre_geometry(order_matrix, sample_step=16, sample_half_width=4, degree
     local_rms = np.full(sampled_y.size, np.nan)
 
     for j, y in enumerate(sampled_y):
-        profile = np.nanmedian(matrix[y - sample_half_width:y + sample_half_width + 1], axis=0)
+        profile = utils.nanmedian_profile(matrix[y - sample_half_width:y + sample_half_width + 1])
         dynamic = np.nanpercentile(profile, 95) - np.nanpercentile(profile, 5)
         if np.isfinite(profile).sum() < len(FIBRE_COMPONENTS) + 2 or not np.isfinite(dynamic) or dynamic <= 0:
             continue
@@ -251,9 +268,9 @@ def fit_fibre_geometry(order_matrix, sample_step=16, sample_half_width=4, degree
         components=FIBRE_COMPONENTS,
         slots=FIBRE_SLOTS.copy(),
         fibre_offsets=np.asarray(collapsed["fibre_offsets"], float),
-        bundle_coefficients=np.asarray(bundle_coeff, float),
-        separation_coefficients=np.asarray(separation_coeff, float),
-        sigma_coefficients=np.asarray(sigma_coeff, float),
+        bundle_coefficients=_pad_coefficients(bundle_coeff, degree),
+        separation_coefficients=_pad_coefficients(separation_coeff, degree),
+        sigma_coefficients=_pad_coefficients(sigma_coeff, degree),
         y_reference=y_reference,
         y_scale=y_scale,
         fit_rms=float(np.nanmedian(local_rms[use])) if np.any(use) else np.nan,
@@ -401,15 +418,42 @@ def summarise_fibre_geometry(geometries, n_dispersion=N_DISPERSION):
 def save_fibre_diagnostics(geometries, flat_order_matrices, config, paths):
     if config.diagnostics == "none":
         return
+
     diagnostics.plot_fibre_geometry_summary(
         geometries, paths.figures / f"fibre_geometry_{config.night}.png"
     )
     diagnostics.plot_fibre_profile_summary(
         geometries, flat_order_matrices, paths.figures / f"fibre_profiles_{config.night}.png"
     )
+
+    # Representative native-coordinate extraction diagnostics for each CCD.
+    for ccd in ("1", "2", "3"):
+        names = sorted(
+            [name for name, matrix in flat_order_matrices.items() if str(matrix.ccd) == ccd],
+            key=lambda name: flat_order_matrices[name].order,
+        )
+        if not names:
+            continue
+
+        diagnostic_orders = {"1": 150,"2": 125,"3": 85,}
+        target = diagnostic_orders[ccd]
+        name = min(names, key=lambda name: abs(flat_order_matrices[name].order - target))
+
+        matrix, geometry = flat_order_matrices[name], geometries[name]
+        stem = f"ccd{ccd}_order{matrix.order}_{config.night}"
+
+        diagnostics.plot_fibre_extraction_detector(
+            matrix, geometry,
+            paths.figures / f"fibre_extraction_detector_{stem}.png",
+        )
+        diagnostics.plot_fibre_extraction_rows(
+            matrix, geometry,
+            paths.figures / f"fibre_extraction_rows_{stem}.png",
+        )
+
     if config.diagnostics == "full":
         for name, geometry in geometries.items():
             diagnostics.plot_fibre_geometry_order(
                 geometry, flat_order_matrices[name],
-                paths.debug / "fibre_geometry" / f"{name}.png",
+                paths.debug / "fibre_geometry" / f"fibre_geometry_{name}.png",
             )

@@ -9,6 +9,15 @@ from .constants import (
 from .config import ReductionConfig, ReductionPaths, prepare_reduction, setup_logging
 
 
+def nanmedian_profile(data):
+    """Column median without warnings for entirely invalid columns."""
+    data = np.asarray(data, float)
+    result = np.full(data.shape[1], np.nan)
+    use = np.any(np.isfinite(data), axis=0)
+    result[use] = np.nanmedian(data[:, use], axis=0)
+    return result
+
+
 def is_science_fibre(fibre):
     return isinstance(fibre, int)
 

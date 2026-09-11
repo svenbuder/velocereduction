@@ -199,7 +199,6 @@ def load_detector_gains(filename=None):
     """Load a copy of the detector-gain calibration table, using the packaged reference table by default."""
     path = str(Path(filename or DEFAULT_GAIN_FILE).resolve())
     table = _load_gain_table_cached(path).copy()
-    logger.debug("Loaded %d detector gain entries from %s", len(table), path)
     return table
 
 
