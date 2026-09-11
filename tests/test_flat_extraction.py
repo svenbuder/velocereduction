@@ -22,7 +22,7 @@ def test_flat_math(trace_row):
 def test_master_flat(tmp_path, monkeypatch):
     repo = tmp_path / "repo"; (repo / "observations" / "001122").mkdir(parents=True)
     paths = prepare_reduction(ReductionConfig("001122"), "0.8.0", repo)
-    monkeypatch.setattr(flat.observations, "select_usable_observations", lambda table, kind, ccd: Table(rows=[{f"file_ccd{ccd}":f"{ccd}.fits","run":ccd,"mjd_mid":60000.+int(ccd)}]))
+    monkeypatch.setattr(flat.observations, "select", lambda table, kind, ccd: Table(rows=[{f"file_ccd{ccd}":f"{ccd}.fits","run":ccd,"mjd_mid":60000.+int(ccd)}]))
     monkeypatch.setattr(flat.detector, "preprocess_image", lambda filename, ccd, config: SimpleNamespace(
         image=np.ones((8,12)) * (10000 + int(ccd)), readout_mode="2Amp", overscan_rms={"q1":3.0,"q2":3.1}
     ))

@@ -3,6 +3,8 @@ from pathlib import Path
 import logging
 import sys
 
+from .constants import REFERENCE_NIGHT
+
 
 @dataclass
 class ReductionConfig:
@@ -13,18 +15,17 @@ class ReductionConfig:
     overwrite: bool = False
     use_poisson_variance: bool = True
     gain_file: str | Path | None = None
+    reference_night: str = REFERENCE_NIGHT
     flat_smooth_sigma: float = 50.0
     fibre_sample_step: int = 16
     fibre_sample_half_width: int = 4
     fibre_geometry_degree: int = 3
-    wavelength_degree_y: int = 7
-    wavelength_degree_m: int = 5
-    fibre_wavelength_degree_y: int = 3
-    fibre_wavelength_degree_m: int = 2
 
     def validate(self):
-        if len(self.night) != 6 or not self.night.isdigit():
-            raise ValueError("night must be a six-digit YYMMDD string")
+        for name in ("night", "reference_night"):
+            value = getattr(self, name)
+            if len(value) != 6 or not value.isdigit():
+                raise ValueError(f"{name} must be a six-digit YYMMDD string")
         if self.log_level not in {"DEBUG", "INFO", "WARNING", "ERROR"}:
             raise ValueError(f"Unknown log level: {self.log_level}")
         if self.diagnostics not in {"none", "basic", "full"}:
@@ -40,23 +41,38 @@ class ReductionPaths:
     observations: Path
     root: Path
     calibrations: Path
-    detector: Path
-    flat: Path
-    flat_mode: Path
-    wavelength: Path
-    wavelength_mode: Path
     science: Path
-    science_products: Path
     figures: Path
     debug: Path
     reduction_input: Path
     process_log: Path
     reduction_summary: Path
+    detector_shifts: Path
+    order_geometry: Path
+    fibre_geometry: Path
+    flat_summed: Path
+    flat_smooth_summed: Path
+    response_summed: Path
+    flat_fibres: Path
+    flat_smooth_fibres: Path
+    response_fibres: Path
+
+    @property
+    def reference_data(self):
+        return self.repository / "velocereduction" / "veloce_reference_data"
+
+    def reference_product(self, stem, night=None):
+        night = night or REFERENCE_NIGHT
+        return self.reference_data / f"{stem}_{night}.fits"
 
 
 def prepare_reduction(config, version, repository=None):
+    """Create the shallow nightly output tree and return all canonical paths."""
     config.validate()
-    repository = Path(repository).expanduser().resolve() if repository else Path(__file__).resolve().parents[1]
+    repository = (
+        Path(repository).expanduser().resolve()
+        if repository else Path(__file__).resolve().parents[1]
+    )
     observations = repository / "observations" / config.night
     if not observations.exists():
         raise FileNotFoundError(f"Observation directory does not exist: {observations}")
@@ -64,21 +80,38 @@ def prepare_reduction(config, version, repository=None):
     version_dir = version if str(version).startswith("vr_") else f"vr_{version}"
     root = repository / "reduced_data" / version_dir / config.night
     calibrations = root / "calibrations"
-    wavelength = calibrations / "wavelength"
+    science = root / "science"
+    figures = root / "figures"
+    debug = root / "debug"
+    night = config.night
+
     paths = ReductionPaths(
-        repository, observations, root, calibrations,
-        calibrations / "detector", calibrations / "flat", calibrations / "flat" / config.extraction_mode, wavelength,
-        wavelength / config.extraction_mode, root / "science",
-        root / "science" / config.extraction_mode, root / "figures", root / "debug",
-        root / f"reduction_input_{config.night}.txt",
-        root / f"reduction_process_log_{config.night}.txt",
-        root / f"reduction_summary_{config.night}.txt",
+        repository=repository,
+        observations=observations,
+        root=root,
+        calibrations=calibrations,
+        science=science,
+        figures=figures,
+        debug=debug,
+        reduction_input=root / f"reduction_input_{night}.txt",
+        process_log=root / f"reduction_process_log_{night}.txt",
+        reduction_summary=root / f"reduction_summary_{night}.txt",
+        detector_shifts=root / f"detector_shifts_{night}.fits",
+        order_geometry=root / f"order_geometry_{night}.fits",
+        fibre_geometry=root / f"fibre_geometry_{night}.fits",
+        flat_summed=root / f"flat_summed_{night}.fits",
+        flat_smooth_summed=root / f"flat_smooth_summed_{night}.fits",
+        response_summed=root / f"response_summed_{night}.fits",
+        flat_fibres=root / f"flat_fibres_{night}.fits",
+        flat_smooth_fibres=root / f"flat_smooth_fibres_{night}.fits",
+        response_fibres=root / f"response_fibres_{night}.fits",
     )
-    required = [paths.root, paths.detector, paths.flat, paths.flat_mode, paths.wavelength_mode, paths.science_products]
+
+    required = [root, calibrations, science]
     if config.diagnostics != "none":
-        required.append(paths.figures)
+        required.append(figures)
     if config.diagnostics == "full":
-        required.append(paths.debug)
+        required.append(debug)
     for path in required:
         path.mkdir(parents=True, exist_ok=True)
     return paths
@@ -105,5 +138,8 @@ def setup_logging(config, paths):
         logger.addHandler(handler)
 
     logger.info("=" * 72)
-    logger.info("Starting VeloceReduction: night=%s, extraction=%s", config.night, config.extraction_mode)
+    logger.info(
+        "Starting VeloceReduction: night=%s, extraction=%s, reference=%s",
+        config.night, config.extraction_mode, config.reference_night,
+    )
     return logger
