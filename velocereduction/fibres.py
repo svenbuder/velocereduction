@@ -18,18 +18,29 @@ from . import diagnostics, utils
 
 logger = logging.getLogger(__name__)
 
+FIBRE_BOUNDS = {
+    "1": ((2.20, 2.50), (0.50, 1.50)),
+    "2": ((2.10, 2.50), (0.45, 1.00)),
+    "3": ((2.00, 2.15), (0.35, 0.80)),
+}
+
+
+def fibre_parameter_bounds(ccd):
+    """Return ((separation_min, max), (sigma_min, max)) for one CCD."""
+    return FIBRE_BOUNDS[str(ccd)]
+
 
 def initial_fibre_parameters(ccd, order):
     """Approximate Veloce fibre spacing/width used only to initialise fits."""
     ccd, order = str(ccd), int(order)
     if ccd == "1":
-        separation = np.interp(order, [140, 165], [2.50, 2.40])
-        sigma = 1.20
+        separation = np.interp(order, [140, 167], [2.475, 2.35])
+        sigma = 1.00
     elif ccd == "2":
         separation = np.interp(order, [104, 140], [2.425, 2.20])
-        sigma = 0.80
+        sigma = 0.75
     elif ccd == "3":
-        separation = 2.15
+        separation = 2.05
         sigma = 0.55
     else:
         raise ValueError(f"Unknown CCD: {ccd}")
@@ -53,16 +64,23 @@ def _linear_profile_fit(profile, x, centres, sigma):
     return coeff, design @ coeff
 
 
-def _fit_regular_geometry(profile, x, x0, separation0, sigma0):
+def _fit_regular_geometry(profile, x, x0, separation0, sigma0, ccd):
+    separation_bounds, sigma_bounds = fibre_parameter_bounds(ccd)
+    initial = [
+        x0,
+        np.clip(separation0, *separation_bounds),
+        np.clip(sigma0, *sigma_bounds),
+    ]
+
     def residual(p):
         centres = p[0] + p[1] * FIBRE_SLOTS
         _, model = _linear_profile_fit(profile, x, centres, p[2])
         return model - profile
 
     fit = least_squares(
-        residual, [x0, separation0, sigma0],
-        bounds=([x0 - 1.5, separation0 - 0.35, max(0.30, sigma0 - 0.45)],
-                [x0 + 1.5, separation0 + 0.35, sigma0 + 0.60]),
+        residual, initial,
+        bounds=([x0 - 1.5, separation_bounds[0], sigma_bounds[0]],
+                [x0 + 1.5, separation_bounds[1], sigma_bounds[1]]),
         max_nfev=4000,
     )
     return fit.x
@@ -81,7 +99,9 @@ def fit_collapsed_fibre_profile(order_matrix, maximum_centre_shift=0.40, referen
         separation0 = float(reference_geometry.separation(reference_geometry.y_reference))
         sigma0 = float(reference_geometry.sigma(reference_geometry.y_reference))
         reference_offsets = np.asarray(reference_geometry.fibre_offsets, float)
-    x0, separation, sigma = _fit_regular_geometry(profile, x, x00, separation0, sigma0)
+    x0, separation, sigma = _fit_regular_geometry(
+        profile, x, x00, separation0, sigma0, order_matrix.ccd
+    )
     regular = x0 + separation * FIBRE_SLOTS
 
     def residual(offset_correction):
@@ -94,8 +114,15 @@ def fit_collapsed_fibre_profile(order_matrix, maximum_centre_shift=0.40, referen
         bounds=(-maximum_centre_shift, maximum_centre_shift), max_nfev=5000,
     )
     centres = regular + reference_offsets + fit.x
-    separation, x0 = np.polyfit(FIBRE_SLOTS, centres, 1)
-    offsets = centres - (x0 + separation * FIBRE_SLOTS)
+    separation_fit, x0 = np.polyfit(FIBRE_SLOTS, centres, 1)
+
+    separation_bounds, _ = fibre_parameter_bounds(order_matrix.ccd)
+    separation = np.clip(separation_fit, *separation_bounds)
+
+    # Keep fibre-specific offsets free of a global linear trend.
+    offsets = centres - (x0 + separation_fit * FIBRE_SLOTS)
+    centres = x0 + separation * FIBRE_SLOTS + offsets
+
     coeff, model = _linear_profile_fit(profile, x, centres, sigma)
     rms = float(np.sqrt(np.nanmean((profile - model) ** 2)))
     return {
@@ -107,12 +134,14 @@ def fit_collapsed_fibre_profile(order_matrix, maximum_centre_shift=0.40, referen
     }
 
 
-def _fit_local_profile(profile, x, trace_offset, collapsed):
+def _fit_local_profile(profile, x, trace_offset, collapsed, ccd):
     bundle0 = collapsed["x0"] - collapsed["trace_offset_median"]
+    separation_bounds, sigma_bounds = fibre_parameter_bounds(ccd)
+
     initial = np.array([
         trace_offset + bundle0,
-        collapsed["separation"],
-        collapsed["sigma"],
+        np.clip(collapsed["separation"], *separation_bounds),
+        np.clip(collapsed["sigma"], *sigma_bounds),
     ])
     offsets = collapsed["fibre_offsets"]
 
@@ -121,8 +150,17 @@ def _fit_local_profile(profile, x, trace_offset, collapsed):
         _, model = _linear_profile_fit(profile, x, centres, p[2])
         return model - profile
 
-    lower = [initial[0] - 0.6, initial[1] - 0.25, max(0.30, initial[2] - 0.35)]
-    upper = [initial[0] + 0.6, initial[1] + 0.25, initial[2] + 0.35]
+    lower = [
+        initial[0] - 0.6,
+        max(initial[1] - 0.25, separation_bounds[0]),
+        max(initial[2] - 0.35, sigma_bounds[0]),
+    ]
+    upper = [
+        initial[0] + 0.6,
+        min(initial[1] + 0.25, separation_bounds[1]),
+        min(initial[2] + 0.35, sigma_bounds[1]),
+    ]
+
     fit = least_squares(residual, initial, bounds=(lower, upper), max_nfev=1500)
     return fit.x, float(np.sqrt(np.nanmean(residual(fit.x) ** 2)))
 
@@ -154,6 +192,23 @@ def _robust_polynomial(y, values, degree, y_reference, y_scale, clip=4.0, iterat
     return coeff, float(np.sqrt(np.nanmean(residual ** 2))), use
 
 
+def _bounded_polynomial(y, values, degree, y_reference, y_scale, bounds, n_dispersion):
+    """Use the highest polynomial degree that remains inside physical bounds."""
+    y_all = np.arange(n_dispersion)
+
+    for current_degree in range(degree, -1, -1):
+        coeff, rms, use = _robust_polynomial(
+            y, values, current_degree, y_reference, y_scale
+        )
+        model = np.polynomial.polynomial.polyval(
+            _normalised_coordinate(y_all, y_reference, y_scale), coeff
+        )
+        if np.nanmin(model) >= bounds[0] and np.nanmax(model) <= bounds[1]:
+            return coeff, rms, use
+
+    raise RuntimeError("Could not construct bounded fibre-geometry polynomial")
+    
+
 def fit_fibre_geometry(order_matrix, sample_step=16, sample_half_width=4, degree=3, reference_geometry=None):
     """Measure sparse local profiles and return a compact smooth FibreGeometry."""
     if not isinstance(order_matrix, OrderMatrix):
@@ -173,7 +228,7 @@ def fit_fibre_geometry(order_matrix, sample_step=16, sample_half_width=4, degree
         if np.isfinite(profile).sum() < len(FIBRE_COMPONENTS) + 2 or not np.isfinite(dynamic) or dynamic <= 0:
             continue
         try:
-            p, local_rms[j] = _fit_local_profile(profile, order_matrix.relative_x, order_matrix.trace_offset[y], collapsed)
+            p, local_rms[j] = _fit_local_profile(profile, order_matrix.relative_x, order_matrix.trace_offset[y], collapsed, order_matrix.ccd)
             bundles[j] = p[0] - order_matrix.trace_offset[y]
             separations[j] = p[1]
             sigmas[j] = p[2]
@@ -182,9 +237,12 @@ def fit_fibre_geometry(order_matrix, sample_step=16, sample_half_width=4, degree
 
     y_reference = 0.5 * (n_dispersion - 1)
     y_scale = y_reference
+
+    separation_bounds, sigma_bounds = fibre_parameter_bounds(order_matrix.ccd)
+
     bundle_coeff, bundle_rms, use_bundle = _robust_polynomial(sampled_y, bundles, degree, y_reference, y_scale)
-    separation_coeff, separation_rms, use_sep = _robust_polynomial(sampled_y, separations, degree, y_reference, y_scale)
-    sigma_coeff, sigma_rms, use_sigma = _robust_polynomial(sampled_y, sigmas, degree, y_reference, y_scale)
+    separation_coeff, separation_rms, use_sep = _bounded_polynomial(sampled_y, separations, degree, y_reference, y_scale,separation_bounds, n_dispersion,)
+    sigma_coeff, sigma_rms, use_sigma = _bounded_polynomial(sampled_y, sigmas, degree, y_reference, y_scale,sigma_bounds, n_dispersion,)
     use = use_bundle & use_sep & use_sigma
 
     geometry = FibreGeometry(
