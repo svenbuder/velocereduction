@@ -148,7 +148,7 @@ def _find_bright_interval(profile, m, begin, end):
 
 
 def _representative_image(reduction_input, kind, ccd, config):
-    rows = observations.select_usable_observations(reduction_input, kind, ccd)
+    rows = observations.select(reduction_input, kind, ccd)
     return None if not len(rows) else detector.preprocess_image(rows[0][f"file_ccd{ccd}"], ccd, config).image
 
 

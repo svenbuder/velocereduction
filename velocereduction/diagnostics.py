@@ -683,6 +683,43 @@ def plot_wavelength_fit(data, node, filename, calibration_type=None):
     return _save(fig, filename, dpi=200)
 
 
+def plot_wavelength_surface_validation(validation, *, filename=None):
+    """Plot blocked-CV RMS and overfitting gap versus Legendre complexity."""
+    y_degree = np.asarray(validation["y_degree"], int)
+    m_degree = np.asarray(validation["order_degree"], int)
+    value = np.asarray(validation["validation_rms_pixel"], float)
+    train = np.asarray(validation["train_rms_pixel"], float)
+    ys = np.unique(y_degree); ms = np.unique(m_degree)
+    image = np.full((len(ms), len(ys)), np.nan)
+    gap = np.full_like(image, np.nan)
+    for i, md in enumerate(ms):
+        for j, yd in enumerate(ys):
+            q = (y_degree == yd) & (m_degree == md)
+            if np.any(q):
+                image[i, j] = value[q][0]
+                gap[i, j] = value[q][0] - train[q][0]
+
+    fig, axes = plt.subplots(1, 2, figsize=(10, 4), constrained_layout=True)
+    for ax, z, title in [
+        (axes[0], image, "Held-out RMS"),
+        (axes[1], gap, "Held-out minus training RMS"),
+    ]:
+        im = ax.imshow(z, origin="lower", aspect="auto")
+        fig.colorbar(im, ax=ax, label="pixel")
+        ax.set_xticks(np.arange(len(ys)), ys)
+        ax.set_yticks(np.arange(len(ms)), ms)
+        ax.set_xlabel("Legendre degree in y")
+        ax.set_ylabel("Legendre degree in order m")
+        ax.set_title(title)
+        for i in range(len(ms)):
+            for j in range(len(ys)):
+                if np.isfinite(z[i, j]):
+                    ax.text(j, i, f"{z[i,j]:.3f}", ha="center", va="center", fontsize=7)
+    if filename is not None:
+        fig.savefig(filename, dpi=200, bbox_inches="tight")
+    return fig
+
+
 def plot_lc_drift(drift_by_ccd, filename):
     fig, ax = plt.subplots(figsize=(7, 4), constrained_layout=True)
     for ccd, (mjd, velocity) in drift_by_ccd.items():

@@ -316,7 +316,7 @@ def fibre_geometry_tables(geometries):
         row = {
             "CCD": np.int16(g.ccd),
             "ORDER": np.int16(g.order),
-            "DEGREE": np.int8(g.degree),
+            "DEGREE": np.int16(g.degree),
             "Y_REFERENCE": np.float64(g.y_reference),
             "Y_SCALE": np.float64(g.y_scale),
             "FIT_RMS": np.float32(g.fit_rms),
@@ -335,7 +335,7 @@ def fibre_geometry_tables(geometries):
                 "CCD": np.int16(g.ccd),
                 "ORDER": np.int16(g.order),
                 "FIBRE": str(component),
-                "SLOT": np.int8(slot),
+                "SLOT": np.int16(slot),
                 "OFFSET": np.float64(offset),
             })
     return Table(rows=order_rows), Table(rows=fibre_rows)

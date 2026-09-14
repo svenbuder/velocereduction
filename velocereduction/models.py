@@ -169,8 +169,17 @@ class ExtractionResult:
     background: np.ndarray | None = None
 
     def component_indices(self, components):
-        return np.array([self.components.index(value) for value in components], dtype=int)
+        """Return indices of requested fibre components."""
+        lookup = {
+            str(value).strip(): i
+            for i, value in enumerate(self.components)
+        }
+        return np.array(
+            [lookup[str(value).strip()] for value in components],
+            dtype=int,
+        )
 
+    
     def select(self, components):
         idx = self.component_indices(components)
         covariance = None if self.covariance is None else self.covariance[:, idx][:, :, idx]
