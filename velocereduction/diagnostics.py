@@ -2,6 +2,7 @@
 from pathlib import Path
 import logging
 import matplotlib.pyplot as plt
+from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.colors import TwoSlopeNorm
 import numpy as np
 
@@ -1020,3 +1021,376 @@ def plot_summed_response_image(products, filename):
     fig.suptitle("Summed Flat response")
     return _save(fig, filename)
     
+    
+def _calibration_quality_summary(peak_table):
+    """Local wrapper to avoid importing calibration.py at module import time."""
+    from .calibration import calibration_quality_summary
+    return calibration_quality_summary(peak_table)
+
+
+def plot_calibration_order_diagnostic(
+    counts, background, detection_snr, candidate_pixels, order_table, *,
+    config, calibration_type, ccd, exposure_index, order, fibre=-1,
+):
+    """Create the v0.7-style full diagnostic page for one echelle order."""
+    y = np.arange(len(counts), dtype=float)
+    good = np.asarray(order_table["used_for_wavelength_fit"], dtype=bool)
+    fibre_text = "" if int(fibre) == -1 else f" | fibre {int(fibre):+d}"
+
+    fig, axes = plt.subplots(
+        4, 1, figsize=(14, 10), sharex=True,
+        gridspec_kw={"height_ratios": [3.0, 1.2, 1.2, 1.2]},
+    )
+
+    ax = axes[0]
+    ax.plot(y, counts, lw=0.7, label="Extracted spectrum")
+    ax.plot(y, background, lw=0.8, label="Detection background")
+    if str(calibration_type).lower() in {"simth", "fibth"}:
+        ax.set_yscale("log")
+    if np.any(good):
+        ax.scatter(order_table["y"][good], np.interp(order_table["y"][good], y, counts),
+                   s=12, label="Accepted", zorder=5)
+    if np.any(~good):
+        ax.scatter(order_table["y"][~good], np.interp(order_table["y"][~good], y, counts),
+                   marker="x", s=28, label="Rejected", zorder=6)
+    if config.maximum_signal is not None:
+        ax.axhline(config.maximum_signal, ls=":", lw=1, label="Maximum signal")
+    ax.set_ylabel("Counts")
+    ax.legend(loc="upper right", fontsize=8, ncols=2)
+    ax.set_title(
+        f"{calibration_type} | CCD {ccd} | exposure {exposure_index}{fibre_text} | order {order}"
+    )
+
+    ax = axes[1]
+    ax.plot(y, detection_snr, lw=0.7)
+    if len(candidate_pixels):
+        ax.scatter(candidate_pixels, detection_snr[candidate_pixels], marker="x", s=15)
+    if str(calibration_type).lower() in {"simth", "fibth"}:
+        ax.set_yscale("log")
+    ax.axhline(config.detection_snr, ls="--", lw=1)
+    ax.set_ylabel("Detection S/N")
+
+    ax = axes[2]
+    if np.any(good):
+        ax.scatter(order_table["y"][good], np.clip(order_table["fwhm"][good], 0, 4),
+                   s=10, label="Accepted")
+    if np.any(~good):
+        ax.scatter(order_table["y"][~good], np.clip(order_table["fwhm"][~good], 0, 4),
+                   marker="x", s=20, label="Rejected")
+    width_reference = np.asarray(order_table["fwhm"][good], dtype=float)
+    if np.any(np.isfinite(width_reference)):
+        ax.axhline(np.nanmedian(width_reference), ls="--", lw=1)
+    ax.set_ylabel("FWHM [pixel]")
+
+    ax = axes[3]
+    if np.any(good):
+        ax.scatter(order_table["y"][good], np.clip(order_table["y_uncertainty"][good], 0, 0.2),
+                   s=10, label="Accepted")
+    if np.any(~good):
+        ax.scatter(order_table["y"][~good], np.clip(order_table["y_uncertainty"][~good], 0, 0.2),
+                   marker="x", s=20, label="Rejected")
+    ax.axhline(config.maximum_y_uncertainty, ls="--", lw=1)
+    ax.set_ylabel(r"$\sigma_y$ [pixel]")
+    ax.set_xlabel(r"Dispersion pixel $y$")
+
+    summary = _calibration_quality_summary(order_table)
+    fig.text(
+        0.99, 0.01,
+        f"candidates={len(candidate_pixels)} | fitted={len(order_table)} | "
+        f"accepted={summary['accepted']} | sat={summary.get('saturated', 0)} | "
+        f"width={summary.get('width_outlier', 0)} | "
+        f"blend={summary.get('blend_candidate', 0)} | lowS/N={summary.get('low_snr', 0)}",
+        ha="right", va="bottom", fontsize=8,
+    )
+    fig.tight_layout(rect=(0, 0.025, 1, 1))
+    return fig
+
+
+def plot_calibration_summary(
+    peak_table, *, calibration_type, ccd, exposure_index, filename, fibre=-1, show=False,
+):
+    """Save a compact CCD/exposure-level calibration-line QA figure."""
+    if len(peak_table) == 0:
+        return None
+    filename = Path(filename)
+    filename.parent.mkdir(parents=True, exist_ok=True)
+    good = np.asarray(peak_table["used_for_wavelength_fit"], dtype=bool)
+    identified = (
+        np.isfinite(np.asarray(peak_table["wavelength_nm"], float))
+        if "wavelength_nm" in peak_table.colnames else np.zeros(len(peak_table), bool)
+    )
+
+    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+    ax = axes[0, 0]
+    if np.any(good):
+        sc = ax.scatter(peak_table["y"][good], peak_table["order"][good],
+                        c=peak_table["fwhm"][good], s=6)
+        fig.colorbar(sc, ax=ax, label="FWHM [pixel]")
+    ax.set(xlabel=r"Dispersion pixel $y$", ylabel=r"Echelle order $m$", title="Line width")
+
+    ax = axes[0, 1]
+    if np.any(good):
+        ax.scatter(peak_table["y"][good], peak_table["y_uncertainty"][good], s=6)
+    ax.set(xlabel=r"Dispersion pixel $y$", ylabel=r"$\sigma_y$ [pixel]", title="Centroid precision")
+
+    ax = axes[1, 0]
+    if np.any(good):
+        ax.scatter(peak_table["y"][good], peak_table["signal_to_noise"][good], s=6)
+    ax.set(xlabel=r"Dispersion pixel $y$", ylabel="Fitted line S/N", title="Line signal-to-noise")
+
+    ax = axes[1, 1]
+    if np.any(good):
+        ax.hist(peak_table["pixel_phase"][good], bins=30)
+    ax.set(xlabel="Pixel phase", ylabel="Number of accepted lines", title="Sub-pixel centroid sampling")
+
+    summary = _calibration_quality_summary(peak_table)
+    fibre_text = "" if int(fibre) == -1 else f" | fibre {int(fibre):+d}"
+    fig.suptitle(
+        f"{calibration_type} | CCD {ccd} | exposure {exposure_index}{fibre_text} | "
+        f"{summary['accepted']}/{summary['total']} retained; {np.count_nonzero(identified)} matched"
+    )
+    fig.tight_layout()
+    fig.savefig(filename, dpi=150, bbox_inches="tight")
+    if show:
+        plt.show()
+    plt.close(fig)
+    return filename
+
+
+def plot_worst_peak_fits(
+    counts, order_table, *, config, calibration_type, ccd, exposure_index,
+    order, fibre=-1, max_peaks=8,
+):
+    """Plot rejected or otherwise worst local calibration-peak fits."""
+    from .calibration import CalibrationPeakFlag, calibration_line_model
+    if len(order_table) == 0:
+        return None
+    rejected = np.where(~np.asarray(order_table["used_for_wavelength_fit"], bool))[0]
+    fit_rms = np.asarray(order_table["fit_rms"], float)
+    ranking = np.argsort(np.nan_to_num(fit_rms, nan=-np.inf))[::-1]
+    selected = list(rejected[:max_peaks])
+    for index in ranking:
+        if int(index) not in selected:
+            selected.append(int(index))
+        if len(selected) >= max_peaks:
+            break
+    selected = selected[:max_peaks]
+    if not selected:
+        return None
+
+    n_columns = 2
+    n_rows = int(np.ceil(len(selected) / n_columns))
+    fig, axes = plt.subplots(n_rows, n_columns, figsize=(12, 3.0 * n_rows), squeeze=False)
+    for ax in axes.ravel():
+        ax.set_visible(False)
+    for ax, table_index in zip(axes.ravel(), selected):
+        ax.set_visible(True)
+        candidate_pixel = int(order_table["candidate_pixel"][table_index])
+        left = max(0, candidate_pixel - config.fit_half_width)
+        right = min(len(counts), candidate_pixel + config.fit_half_width + 1)
+        fit_y = np.arange(left, right, dtype=float)
+        row = order_table[table_index]
+        sigma = float(row["fwhm"]) / (2.0 * np.sqrt(2.0 * np.log(2.0)))
+        fit_model = calibration_line_model(
+            fit_y, float(row["integrated_counts"]), float(row["y"]), sigma,
+            float(row["background"]), float(row["background_slope"]),
+            y_reference=float(candidate_pixel),
+        )
+        ax.scatter(fit_y, np.asarray(counts, float)[left:right], s=20, label="data")
+        ax.plot(fit_y, fit_model, lw=1.2, label="fit")
+        ax.axvline(float(row["y"]), ls="--", lw=0.8)
+        flag_value = int(order_table["quality_flag"][table_index])
+        flag_names = [flag.name for flag in CalibrationPeakFlag
+                      if flag != CalibrationPeakFlag.GOOD and (flag_value & int(flag)) != 0]
+        ax.set_title(
+            f"y={float(row['y']):.3f}, FWHM={float(row['fwhm']):.2f}, S/N={float(row['signal_to_noise']):.1f}\n"
+            f"{', '.join(flag_names) if flag_names else 'GOOD'}", fontsize=9,
+        )
+        ax.set(xlabel=r"Dispersion pixel $y$", ylabel="Counts")
+    axes.ravel()[0].legend(fontsize=8)
+    fibre_text = "" if int(fibre) == -1 else f" | fibre {int(fibre):+d}"
+    fig.suptitle(
+        f"{calibration_type} | CCD {ccd} | exposure {exposure_index}{fibre_text} | "
+        f"order {order}: rejected / worst local fits"
+    )
+    fig.tight_layout()
+    return fig
+
+
+def save_calibration_order_diagnostics(
+    order_diagnostics, peak_table, *, config, calibration_type, ccd,
+    exposure_index, diagnostic_dir, fibre=-1,
+):
+    """Write the multi-page v0.7-style per-order calibration QA PDF."""
+    diagnostic_dir = Path(diagnostic_dir)
+    diagnostic_dir.mkdir(parents=True, exist_ok=True)
+    fibre_suffix = "" if int(fibre) == -1 else f"_fibre{int(fibre):+03d}"
+    filename = diagnostic_dir / (
+        f"{str(calibration_type).lower()}_ccd{ccd}_exposure{int(exposure_index):03d}"
+        f"{fibre_suffix}_peaks.pdf"
+    )
+    orders = np.unique(np.asarray(peak_table["order"], int))
+    with PdfPages(filename) as pdf:
+        for order in orders:
+            subset = peak_table[np.asarray(peak_table["order"], int) == int(order)]
+            diag = order_diagnostics.get(int(order))
+            if diag is None or len(subset) == 0:
+                continue
+            fig = plot_calibration_order_diagnostic(
+                diag["counts"], diag["background"], diag["detection_snr"],
+                diag["candidate_pixels"], subset, config=config,
+                calibration_type=calibration_type, ccd=ccd,
+                exposure_index=exposure_index, order=int(order), fibre=fibre,
+            )
+            pdf.savefig(fig, bbox_inches="tight")
+            plt.close(fig)
+            worst = plot_worst_peak_fits(
+                diag["counts"], subset, config=config,
+                calibration_type=calibration_type, ccd=ccd,
+                exposure_index=exposure_index, order=int(order), fibre=fibre,
+            )
+            if worst is not None:
+                pdf.savefig(worst, bbox_inches="tight")
+                plt.close(worst)
+    return filename
+
+
+def print_wavelength_fit_summary(fit, peak_table, *, calibration_type="FibTh", ccd="", max_outliers=8):
+    """Print final surface-fit usage, robust statistics, and worst clipped lines."""
+    used = np.asarray(peak_table["used_for_wavelength_fit"], bool)
+    finite_residual = np.isfinite(np.asarray(peak_table["velocity_residual_mps"], float))
+    considered = finite_residual
+    v = np.asarray(peak_table["velocity_residual_mps"], float)
+    p = np.asarray(peak_table["pixel_residual"], float)
+    used_v = v[used & finite_residual]
+    used_p = p[used & finite_residual]
+    flags = np.asarray(peak_table["quality_flag"], np.int64)
+    from .calibration import CalibrationPeakFlag
+    clipped = (flags & int(CalibrationPeakFlag.WAVELENGTH_OUTLIER)) != 0
+
+    def _rms(x):
+        return float(np.sqrt(np.nanmean(x*x))) if len(x) else np.nan
+    def _pct(x, q):
+        return float(np.nanpercentile(np.abs(x), q)) if len(x) else np.nan
+
+    degrees = (fit.solution.coefficients.shape[0]-1, fit.solution.coefficients.shape[1]-1)
+    print("\n" + "=" * 78)
+    print(f"Wavelength solution {calibration_type} CCD{ccd}")
+    print(
+        f"  Legendre degrees: y={degrees[0]}, m={degrees[1]} | "
+        f"iterations={fit.n_iterations}"
+    )
+    print(
+        f"  surface input={np.count_nonzero(considered)} | used={np.count_nonzero(used & considered)} | "
+        f"hard-clipped={np.count_nonzero(clipped)} | "
+        f"Huber-downweighted={np.count_nonzero(fit.used & (fit.robust_weight < 0.999))}"
+    )
+    print(
+        f"  RMS={_rms(used_p):.4f} pix / {_rms(used_v):.1f} m/s | "
+        f"median |dv|={np.nanmedian(np.abs(used_v)):.1f} m/s | "
+        f"P95 |dv|={_pct(used_v,95):.1f} m/s | max |dv|={_pct(used_v,100):.1f} m/s"
+    )
+    if np.any(clipped & finite_residual):
+        idx = np.where(clipped & finite_residual)[0]
+        idx = idx[np.argsort(np.abs(v[idx]))[::-1]][:max_outliers]
+        print("  worst hard-clipped lines:")
+        for i in idx:
+            print(
+                f"    order {int(peak_table['order'][i]):3d}  y={float(peak_table['y'][i]):8.3f}  "
+                f"res={p[i]:+7.3f} pix = {v[i]/1000:+7.3f} km/s"
+            )
+
+
+def save_wavelength_diagnostics(
+    fit, peak_table, filename, *, calibration_type="FibTh", ccd="", diagnostics="basic",
+):
+    """Save the v0.7-style presentation-quality static wavelength QA figure.
+
+    Only final surface-fit lines are shown in the residual panels.  Rejected
+    wavelength outliers are reported by ``print_wavelength_fit_summary`` rather
+    than mixed into the fitted residual distribution.
+    """
+    diagnostics = str(diagnostics).lower()
+    if diagnostics == "none":
+        return None
+    used = np.asarray(peak_table["used_for_wavelength_fit"], bool)
+    used &= np.isfinite(np.asarray(peak_table["pixel_residual"], float))
+    if not np.any(used):
+        return None
+
+    y = np.asarray(peak_table["y"], float)[used]
+    m = np.asarray(peak_table["order"], float)[used]
+    phase = np.asarray(peak_table["pixel_phase"], float)[used]
+    pixel_residual = np.asarray(peak_table["pixel_residual"], float)[used]
+    wavelength_residual_angstrom = 10.0 * np.asarray(peak_table["wavelength_residual_nm"], float)[used]
+    velocity_residual_mps = np.asarray(peak_table["velocity_residual_mps"], float)[used]
+    degree_y = fit.solution.coefficients.shape[0] - 1
+    degree_m = fit.solution.coefficients.shape[1] - 1
+
+    rms_pixel = float(np.sqrt(np.nanmean(pixel_residual**2)))
+    rms_angstrom = float(np.sqrt(np.nanmean(wavelength_residual_angstrom**2)))
+    rms_velocity = float(np.sqrt(np.nanmean(velocity_residual_mps**2)))
+    residual_colour_limit = max(float(np.nanpercentile(np.abs(pixel_residual), 99)), 1e-6)
+    velocity_limit = max(1.1 * float(np.nanpercentile(np.abs(velocity_residual_mps), 99)), 1.0)
+    colour_norm = TwoSlopeNorm(vmin=-residual_colour_limit, vcenter=0.0, vmax=residual_colour_limit)
+    unique_orders = np.unique(m)
+    order_limits = (np.nanmin(unique_orders)-0.5, np.nanmax(unique_orders)+0.5)
+    dispersion_limits = (0, 4111)
+
+    with plt.rc_context({"font.size":14,"axes.labelsize":15,"xtick.labelsize":13,
+                         "ytick.labelsize":13,"legend.fontsize":13}):
+        fig = plt.figure(figsize=(16, 9))
+        gs = fig.add_gridspec(
+            5, 3, height_ratios=[0.55,1.0,1.0,0.18,0.78], width_ratios=[1,1,1],
+            left=0.07, right=0.965, bottom=0.085, top=0.965, wspace=0.28, hspace=0.16,
+        )
+        ax_info=fig.add_subplot(gs[0,0]); ax_cb=fig.add_subplot(gs[0,1:3])
+        ax_order=fig.add_subplot(gs[1:3,0]); ax_map=fig.add_subplot(gs[1:3,1:3],sharey=ax_order)
+        ax_phase=fig.add_subplot(gs[4,0]); ax_y=fig.add_subplot(gs[4,1:3],sharex=ax_map)
+
+        ax_info.axis("off")
+        ax_info.text(0.5,0.8,f"Wavelength solution {calibration_type} CCD{ccd}",
+                     transform=ax_info.transAxes,ha="center",va="top",fontsize=18,fontweight="bold")
+        ax_info.text(0.5,0.4,f"2-dim. Legendre fit (deg_y={degree_y}, deg_m={degree_m}) to {len(y):,} lines",
+                     transform=ax_info.transAxes,ha="center",va="top",fontsize=14)
+        ax_info.text(0.5,0.15,
+                     rf"$\mathbf{{RMS}} = {rms_pixel:.4f}$ px; {rms_angstrom:.5f} $\AA$; {rms_velocity:.1f} m s$^{{-1}}$",
+                     transform=ax_info.transAxes,ha="center",va="top",fontsize=14)
+
+        order_median=[]; order_lower=[]; order_upper=[]
+        for order in unique_orders:
+            r=pixel_residual[m==order]; p16,p50,p84=np.nanpercentile(r,[16,50,84])
+            order_median.append(p50); order_lower.append(p50-p16); order_upper.append(p84-p50)
+        ax_order.errorbar(order_median,unique_orders,xerr=np.vstack([order_lower,order_upper]),
+                          fmt="o",markersize=5,capsize=2,linewidth=1.2)
+        ax_order.axvline(0,ls="--",lw=1); ax_order.set_xlim(-residual_colour_limit,residual_colour_limit)
+        ax_order.set_ylim(order_limits); ax_order.set_xlabel(r"Residual$~/~\mathrm{px}$",labelpad=7)
+        ax_order.set_ylabel(r"Echelle order $m$")
+
+        scatter=ax_map.scatter(y,m,c=pixel_residual,s=16,alpha=0.90,cmap="RdBu_r",norm=colour_norm,
+                               linewidths=0,rasterized=True)
+        ax_map.set_xlim(dispersion_limits); ax_map.set_ylim(order_limits)
+        ax_map.set_xlabel(r"Dispersion pixel $y$",labelpad=7); ax_map.set_ylabel(r"Echelle order $m$")
+        ax_cb.axis("off"); cax=ax_cb.inset_axes([0.0,0.40,1.0,0.24])
+        cb=fig.colorbar(scatter,cax=cax,orientation="horizontal")
+        cb.set_label(r"Wavelength-model residual$~/~\mathrm{px}$",fontsize=14,labelpad=4)
+        cb.ax.tick_params(labelsize=12); cb.ax.xaxis.set_ticks_position("bottom"); cb.ax.xaxis.set_label_position("bottom")
+
+        centres,p16,p50,p84=_binned_percentiles(phase,velocity_residual_mps,15)
+        ax_phase.scatter(phase,velocity_residual_mps,s=12,alpha=0.40,linewidths=0,rasterized=True)
+        ax_phase.fill_between(centres,p16,p84,alpha=0.25,linewidth=0); ax_phase.plot(centres,p50,lw=2.5)
+        ax_phase.axhline(0,ls="--",lw=1); ax_phase.set_xlim(-0.5,0.5); ax_phase.set_ylim(-velocity_limit,velocity_limit)
+        ax_phase.set_xlabel("Pixel phase"); ax_phase.set_ylabel(r"Residual$~/~\mathrm{m\,s^{-1}}$")
+
+        centres,p16,p50,p84=_binned_percentiles(y,velocity_residual_mps,20)
+        ax_y.scatter(y,velocity_residual_mps,s=12,alpha=0.40,linewidths=0,rasterized=True)
+        ax_y.fill_between(centres,p16,p84,alpha=0.25,linewidth=0); ax_y.plot(centres,p50,lw=2.5)
+        ax_y.axhline(0,ls="--",lw=1); ax_y.set_xlim(dispersion_limits); ax_y.set_ylim(-velocity_limit,velocity_limit)
+        ax_y.set_xlabel(r"Dispersion pixel $y$"); ax_y.set_ylabel(r"Residual$~/~\mathrm{m\,s^{-1}}$")
+
+        filename=Path(filename); filename.parent.mkdir(parents=True,exist_ok=True)
+        fig.savefig(filename,dpi=200,bbox_inches="tight")
+        if diagnostics == "full":
+            plt.show()
+        plt.close(fig)
+    return filename

@@ -172,7 +172,7 @@ def _normalise_sampled_profile(offset: np.ndarray, profile: np.ndarray) -> np.nd
     profile = np.asarray(profile, dtype=float)
     profile = np.where(np.isfinite(profile), profile, 0.0)
     profile = np.clip(profile, 0.0, None)
-    area = float(np.trapz(profile, offset))
+    area = float(np.trapezoid(profile, offset))
     if not np.isfinite(area) or area <= 0:
         raise ValueError("LSF profile has non-positive normalization")
     return profile / area

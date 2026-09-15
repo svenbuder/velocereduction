@@ -14,11 +14,11 @@ from velocereduction.simlc import (
 
 
 def test_pixel_integrated_moffat_is_symmetric_and_normalised():
-    x = np.arange(-20.0, 20.01, 0.01)
+    x = np.linspace(-20.0, 20.0, 4001)
     p = pixel_integrated_moffat(x, alpha=0.8, beta=2.5)
 
     assert np.allclose(p, p[::-1], atol=1e-12)
-    assert np.isclose(np.trapz(p, x), 1.0, rtol=2e-3)
+    assert np.isclose(np.trapezoid(p, x), 1.0, rtol=2e-3)
     assert 1.0 < effective_fwhm(x, p) < 1.5
 
 
@@ -93,7 +93,7 @@ def test_fit_simlc_lsf_recovers_non_gaussian_profile():
     assert abs(float(row["moffat_alpha"]) - 0.72) < 0.20
     assert abs(float(row["moffat_beta"]) - 2.2) < 1.0
     assert str(row["model"]) in {"moffat", "empirical"}
-    assert np.isclose(np.trapz(lsf.profile[0], lsf.offset), 1.0, rtol=2e-3)
+    assert np.isclose(np.trapezoid(lsf.profile[0], lsf.offset), 1.0, rtol=2e-3)
 
 
 def test_refit_simlc_peaks_improves_centroids_and_preserves_identification():

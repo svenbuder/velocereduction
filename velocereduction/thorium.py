@@ -20,6 +20,7 @@ from .calibration import (
     _match_peak_table_to_predicted_lines,
     _predict_reference_lines_for_order,
     _refresh_used_for_wavelength_fit,
+    calibration_quality_summary,
     measure_calibration_peaks,
 )
 
@@ -233,6 +234,9 @@ def measure_thorium_lines(
     minimum_reference_intensity=None,
     initial_matching_radius_pixel=3.0,
     final_matching_radius_pixel=1.5,
+    diagnostics="none",
+    diagnostic_dir=None,
+    log_level=None,
 ):
     """Measure and identify one FibTh or SimTh extracted spectrum.
 
@@ -258,6 +262,9 @@ def measure_thorium_lines(
         fibre=fibre,
         trace_x_function=trace_x_function,
         config=config,
+        diagnostics=diagnostics,
+        diagnostic_dir=diagnostic_dir,
+        log_level=log_level,
     )
     if len(lines) == 0:
         return CalibrationLineSet(lines, source, np.nan)
@@ -273,6 +280,50 @@ def measure_thorium_lines(
         initial_matching_radius_pixel=initial_matching_radius_pixel,
         final_matching_radius_pixel=final_matching_radius_pixel,
     )
+    debug = (isinstance(log_level, str) and log_level.upper() == "DEBUG") or (
+        not isinstance(log_level, str) and log_level is not None and int(log_level) <= 10
+    )
+    summary = calibration_quality_summary(lines)
+    if debug:
+        fibre_text = "" if int(fibre) == -1 else f" fibre {int(fibre):+d}"
+        print(
+            f"{source} CCD{ccd} exposure {exposure_index}{fibre_text}: "
+            f"{summary['identified']}/{summary['total']} matched; "
+            f"{summary['accepted']} retained | "
+            f"unmatched={summary.get('unmatched', 0)}, "
+            f"atlas_blend={summary.get('atlas_blend', 0)}, "
+            f"measured_blend={summary.get('blend_candidate', 0)}, "
+            f"width={summary.get('width_outlier', 0)}, "
+            f"lowS/N={summary.get('low_snr', 0)}, "
+            f"sigma_y={summary.get('large_centroid_error', 0)}"
+        )
+        for order in np.unique(np.asarray(lines["order"], dtype=int)):
+            subset = lines[np.asarray(lines["order"], dtype=int) == int(order)]
+            order_summary = calibration_quality_summary(subset)
+            print(
+                f"    order {int(order)}: matched={order_summary['identified']}/{order_summary['total']}; "
+                f"retained={order_summary['accepted']}; "
+                f"unmatched={order_summary.get('unmatched', 0)}, "
+                f"atlas_blend={order_summary.get('atlas_blend', 0)}, "
+                f"blend={order_summary.get('blend_candidate', 0)}, "
+                f"width={order_summary.get('width_outlier', 0)}"
+            )
+
+    if str(diagnostics).lower() != "none" and diagnostic_dir is not None:
+        from . import diagnostics as diagnostic_plots
+        fibre_suffix = "" if int(fibre) == -1 else f"_fibre{int(fibre):+03d}"
+        filename = (
+            Path(diagnostic_dir)
+            / f"{source.lower()}_ccd{ccd}_exposure{int(exposure_index):03d}{fibre_suffix}_summary.png"
+        )
+        diagnostic_plots.plot_calibration_summary(
+            lines, calibration_type=source, ccd=str(ccd),
+            exposure_index=int(exposure_index), fibre=int(fibre), filename=filename,
+            show=str(diagnostics).lower() == "full",
+        )
+        if debug:
+            print(f"  calibration summary -> {filename}")
+
     if "lsf_model" not in lines.colnames:
         lines["lsf_model"] = np.full(len(lines), "integrated_gaussian", dtype="U24")
     if "fwhm_pixel" not in lines.colnames:

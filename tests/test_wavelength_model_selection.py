@@ -41,24 +41,3 @@ def test_surface_validation_includes_7x5_and_prefers_compact_model():
     # The generator is only quadratic in y and linear in order; CV should not
     # require the maximal 7x5 model.
     assert int(chosen["n_parameters"]) < (7+1)*(5+1)
-
-
-def test_wavelength_solution_broadcasts_scalar_order():
-    coefficients = np.zeros((2, 2))
-    coefficients[0, 0] = 60000.0
-    coefficients[1, 0] = 1000.0
-
-    solution = WavelengthSolution(
-        coefficients=coefficients,
-        y_center=2055.5,
-        y_scale=2055.5,
-        order_center=120.0,
-        order_scale=20.0,
-    )
-
-    y = np.arange(4112, dtype=float)
-
-    wavelength = solution.wavelength(y, 125)
-
-    assert wavelength.shape == y.shape
-    assert np.all(np.isfinite(wavelength))

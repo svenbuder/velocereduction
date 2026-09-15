@@ -126,7 +126,6 @@ class WavelengthSolution:
             (y - self.y_center) / self.y_scale,
             (order - self.order_center) / self.order_scale,
         )
-    
 
     def m_times_lambda(self, y, order):
         """Evaluate m * lambda at dispersion pixel y and echelle order m."""
@@ -1201,3 +1200,775 @@ def fit_validated_wavelength_from_peak_table(
         max_iterations=max_iterations,
     )
     return fit, fitted_lines, validation, chosen
+
+# -----------------------------------------------------------------------------
+# Differential pixel-shift models: source transfer, fibres, and time
+# -----------------------------------------------------------------------------
+
+
+@dataclass
+class PixelShiftSurface:
+    """Smooth detector-pixel displacement surface ``delta_y(y, m)``.
+
+    The sign convention is always ``y_current - y_reference``.  A positive
+    shift therefore means that a fixed wavelength is measured at a larger
+    detector y coordinate than in the reference solution.
+    """
+
+    coefficients: np.ndarray
+    y_center: float
+    y_scale: float
+    order_center: float
+    order_scale: float
+    covariance: np.ndarray | None = None
+
+    def _normalised_coordinates(self, y, order):
+        y, order = np.broadcast_arrays(
+            np.asarray(y, dtype=float), np.asarray(order, dtype=float)
+        )
+        return (
+            (y - self.y_center) / self.y_scale,
+            (order - self.order_center) / self.order_scale,
+        )
+
+    def shift(self, y, order):
+        y_n, m_n = self._normalised_coordinates(y, order)
+        return legval2d(y_n, m_n, self.coefficients)
+
+    __call__ = shift
+
+
+@dataclass
+class ShiftFitResult:
+    """Pixel-shift surface plus line-by-line fit diagnostics."""
+
+    surface: PixelShiftSurface
+    used: np.ndarray
+    robust_weight: np.ndarray
+    residual_pixel: np.ndarray
+    n_iterations: int
+
+
+def fit_shift_surface(
+    y,
+    order,
+    shift_y,
+    *,
+    shift_uncertainty=None,
+    y_degree=2,
+    order_degree=1,
+    y_bounds=(0.0, 4111.0),
+    order_bounds=None,
+    max_iterations=10,
+    huber_k=1.5,
+    clip_sigma=6.0,
+):
+    """Fit a robust low-order surface to differential detector shifts."""
+
+    y = np.asarray(y, dtype=float)
+    order = np.asarray(order, dtype=float)
+    shift_y = np.asarray(shift_y, dtype=float)
+    if not (y.shape == order.shape == shift_y.shape) or y.ndim != 1:
+        raise ValueError("y, order, and shift_y must be matching 1-D arrays")
+
+    if shift_uncertainty is None:
+        shift_uncertainty = np.zeros_like(y)
+    else:
+        shift_uncertainty = np.broadcast_to(
+            np.asarray(shift_uncertainty, dtype=float), y.shape
+        ).copy()
+
+    finite = (
+        np.isfinite(y)
+        & np.isfinite(order)
+        & np.isfinite(shift_y)
+        & np.isfinite(shift_uncertainty)
+        & (shift_uncertainty >= 0)
+    )
+    if order_bounds is None:
+        order_bounds = (float(np.nanmin(order[finite])), float(np.nanmax(order[finite])))
+
+    y_n, y_center, y_scale = _normalise_coordinate(y, y_bounds)
+    m_n, order_center, order_scale = _normalise_coordinate(order, order_bounds)
+    design = _build_design_matrix(y_n, m_n, y_degree, order_degree)
+    n_parameters = design.shape[1]
+    if np.count_nonzero(finite) <= n_parameters:
+        raise ValueError(
+            f"Not enough shift measurements: {np.count_nonzero(finite)} lines "
+            f"for {n_parameters} coefficients"
+        )
+
+    positive_sigma = finite & (shift_uncertainty > 0)
+    if np.any(positive_sigma):
+        typical_sigma = float(np.nanmedian(shift_uncertainty[positive_sigma]))
+        sigma = np.where(positive_sigma, shift_uncertainty, typical_sigma)
+    else:
+        sigma = np.ones_like(y)
+
+    used = finite.copy()
+    robust_weight = np.ones_like(y)
+    coefficients = None
+
+    for iteration in range(1, max_iterations + 1):
+        old_used = used.copy()
+        weights = robust_weight / sigma**2
+        sqrt_w = np.sqrt(weights[used])
+        coefficients_flat, *_ = np.linalg.lstsq(
+            design[used] * sqrt_w[:, None], shift_y[used] * sqrt_w, rcond=None
+        )
+        coefficients = coefficients_flat.reshape(y_degree + 1, order_degree + 1)
+        model = legval2d(y_n, m_n, coefficients)
+        residual = shift_y - model
+
+        robust_scatter = _safe_residual_scale(
+            residual[used], reference_scale=max(1.0, np.nanmedian(np.abs(shift_y[finite])))
+        )
+        effective_sigma = np.sqrt(sigma**2 + robust_scatter**2)
+        normalised = residual / effective_sigma
+        robust_weight = np.ones_like(y)
+        large = np.abs(normalised) > huber_k
+        robust_weight[large] = huber_k / np.abs(normalised[large])
+        used = finite & (np.abs(normalised) <= clip_sigma)
+
+        if np.count_nonzero(used) <= n_parameters:
+            raise RuntimeError("Shift-surface clipping left too few calibration lines")
+        if np.array_equal(used, old_used):
+            break
+
+    weights = robust_weight / sigma**2
+    sqrt_w = np.sqrt(weights[used])
+    coefficients_flat, *_ = np.linalg.lstsq(
+        design[used] * sqrt_w[:, None], shift_y[used] * sqrt_w, rcond=None
+    )
+    coefficients = coefficients_flat.reshape(y_degree + 1, order_degree + 1)
+
+    weighted_design = design[used] * sqrt_w[:, None]
+    covariance = np.linalg.pinv(weighted_design.T @ weighted_design)
+    model = legval2d(y_n, m_n, coefficients)
+    residual = shift_y - model
+    dof = max(1, np.count_nonzero(used) - n_parameters)
+    scale2 = float(np.sum((residual[used] * sqrt_w) ** 2) / dof)
+    covariance *= max(scale2, 1.0)
+
+    return ShiftFitResult(
+        surface=PixelShiftSurface(
+            coefficients=coefficients,
+            y_center=y_center,
+            y_scale=y_scale,
+            order_center=order_center,
+            order_scale=order_scale,
+            covariance=covariance,
+        ),
+        used=used,
+        robust_weight=robust_weight,
+        residual_pixel=residual,
+        n_iterations=iteration,
+    )
+
+
+def reference_y_from_wavelength(
+    solution: WavelengthSolution,
+    wavelength_nm,
+    order,
+    *,
+    y_bounds=(0.0, 4111.0),
+    grid_size=16385,
+):
+    """Invert a monotonic reference wavelength solution order by order."""
+
+    wavelength_nm = np.asarray(wavelength_nm, dtype=float)
+    order = np.asarray(order, dtype=int)
+    wavelength_nm, order = np.broadcast_arrays(wavelength_nm, order)
+    output = np.full(wavelength_nm.shape, np.nan, dtype=float)
+    y_grid = np.linspace(float(y_bounds[0]), float(y_bounds[1]), int(grid_size))
+
+    for m in np.unique(order):
+        q = order == int(m)
+        wave_grid = np.asarray(solution.wavelength(y_grid, int(m)), dtype=float)
+        finite = np.isfinite(wave_grid)
+        if np.count_nonzero(finite) < 2:
+            continue
+        wave = wave_grid[finite]
+        yy = y_grid[finite]
+        idx = np.argsort(wave)
+        wave, yy = wave[idx], yy[idx]
+        wave, unique = np.unique(wave, return_index=True)
+        yy = yy[unique]
+        target = wavelength_nm[q]
+        inside = np.isfinite(target) & (target >= wave[0]) & (target <= wave[-1])
+        values = np.full(target.shape, np.nan)
+        values[inside] = np.interp(target[inside], wave, yy)
+        output[q] = values
+
+    return output
+
+
+def fit_shift_from_peak_table(
+    peak_table: Table,
+    reference_solution: WavelengthSolution,
+    *,
+    y_bounds,
+    order_bounds,
+    y_degree=2,
+    order_degree=1,
+    max_iterations=10,
+):
+    """Fit ``y_measured - y_reference(lambda,m)`` for an identified line table."""
+
+    table = peak_table.copy(copy_data=True)
+    use = np.asarray(table["used_for_wavelength_fit"], dtype=bool)
+    use &= np.isfinite(np.asarray(table["y"], dtype=float))
+    use &= np.isfinite(np.asarray(table["wavelength_nm"], dtype=float))
+    indices = np.flatnonzero(use)
+    if len(indices) == 0:
+        raise RuntimeError("No accepted identified lines are available for shift fitting")
+
+    y_measured = np.asarray(table["y"][indices], dtype=float)
+    order = np.asarray(table["order"][indices], dtype=int)
+    wave = np.asarray(table["wavelength_nm"][indices], dtype=float)
+    y_reference = reference_y_from_wavelength(
+        reference_solution, wave, order, y_bounds=y_bounds
+    )
+    finite = np.isfinite(y_reference)
+    if not np.any(finite):
+        raise RuntimeError("Reference solution could not be inverted for the supplied lines")
+
+    uncertainty = np.asarray(table["y_uncertainty"][indices], dtype=float)
+    uncertainty = np.where(np.isfinite(uncertainty), uncertainty, 0.0)
+    result = fit_shift_surface(
+        y_reference[finite],
+        order[finite],
+        y_measured[finite] - y_reference[finite],
+        shift_uncertainty=uncertainty[finite],
+        y_degree=y_degree,
+        order_degree=order_degree,
+        y_bounds=y_bounds,
+        order_bounds=order_bounds,
+        max_iterations=max_iterations,
+    )
+
+    for name in ("reference_y", "shift_y", "shift_residual_y"):
+        table[name] = np.full(len(table), np.nan, dtype=float)
+    selected = indices[finite]
+    table["reference_y"][selected] = y_reference[finite]
+    table["shift_y"][selected] = y_measured[finite] - y_reference[finite]
+    table["shift_residual_y"][selected] = result.residual_pixel
+    for local, table_i in enumerate(selected):
+        if not result.used[local]:
+            table["used_for_wavelength_fit"][table_i] = False
+
+    return result, table
+
+
+def _line_table(value):
+    return value.lines if hasattr(value, "lines") else value
+
+
+def build_hybrid_static_peak_table(
+    fibth_lines,
+    simlc_lines,
+    preliminary_solution: WavelengthSolution,
+    *,
+    y_bounds,
+    order_bounds,
+    transfer_y_degree=2,
+    transfer_order_degree=1,
+):
+    """Transfer one SimLC exposure onto the summed-FibTh coordinate system.
+
+    FibTh remains the absolute anchor.  A low-order SimLC source-offset surface
+    is measured against the preliminary FibTh solution and removed from the
+    eLSF-refined comb centroids before the two line tables are stacked.  The
+    returned table can then be used for a denser final static fit.
+    """
+
+    from astropy.table import vstack
+
+    fibth = _line_table(fibth_lines).copy(copy_data=True)
+    simlc = _line_table(simlc_lines).copy(copy_data=True)
+    transfer, simlc_shift_table = fit_shift_from_peak_table(
+        simlc,
+        preliminary_solution,
+        y_bounds=y_bounds,
+        order_bounds=order_bounds,
+        y_degree=transfer_y_degree,
+        order_degree=transfer_order_degree,
+    )
+
+    y_raw = np.asarray(simlc_shift_table["y"], dtype=float).copy()
+    reference_y = np.asarray(simlc_shift_table["reference_y"], dtype=float)
+    predicted_shift = transfer.surface.shift(
+        reference_y, np.asarray(simlc_shift_table["order"], dtype=int)
+    )
+    good = np.isfinite(reference_y) & np.isfinite(predicted_shift)
+    simlc_shift_table["y_source_raw"] = y_raw
+    simlc_shift_table["coordinate_transfer_shift_y"] = np.full(len(simlc), np.nan)
+    simlc_shift_table["coordinate_transfer_shift_y"][good] = predicted_shift[good]
+    simlc_shift_table["y"][good] = y_raw[good] - predicted_shift[good]
+
+    # Astropy vstack needs identical broad schemas.  Keep only common columns;
+    # all source-specific diagnostic products are already persisted separately.
+    common = [name for name in fibth.colnames if name in simlc_shift_table.colnames]
+    hybrid = vstack([fibth[common], simlc_shift_table[common]], metadata_conflicts="silent")
+    return hybrid, transfer, simlc_shift_table
+
+
+@dataclass
+class FibreShiftModel:
+    """Per-fibre differential shift surfaces relative to the summed solution."""
+
+    surfaces: dict[int, PixelShiftSurface]
+
+    @property
+    def fibres(self):
+        return np.asarray(sorted(self.surfaces), dtype=int)
+
+    def shift(self, y, order, fibre):
+        fibre = int(fibre)
+        if fibre in self.surfaces:
+            return self.surfaces[fibre].shift(y, order)
+
+        fibres = self.fibres
+        if len(fibres) == 0:
+            return np.zeros(np.broadcast(np.asarray(y), np.asarray(order)).shape)
+        if len(fibres) == 1:
+            return self.surfaces[int(fibres[0])].shift(y, order)
+
+        # Numeric slit labels allow smooth interpolation/extrapolation to sky
+        # fibres that were not illuminated by FibTh.
+        if fibre <= fibres[0]:
+            lo, hi = fibres[:2]
+        elif fibre >= fibres[-1]:
+            lo, hi = fibres[-2:]
+        else:
+            hi_index = int(np.searchsorted(fibres, fibre))
+            lo, hi = fibres[hi_index - 1], fibres[hi_index]
+        weight = (fibre - lo) / (hi - lo)
+        return (
+            (1.0 - weight) * self.surfaces[int(lo)].shift(y, order)
+            + weight * self.surfaces[int(hi)].shift(y, order)
+        )
+
+
+def fit_fibre_corrections(
+    fibre_line_sets: dict[int, object],
+    static_solution: WavelengthSolution,
+    *,
+    y_bounds,
+    order_bounds,
+    y_degree=2,
+    order_degree=1,
+):
+    """Fit one low-order differential shift surface for each science fibre."""
+
+    surfaces = {}
+    diagnostics = []
+    fitted_tables = {}
+    for fibre, value in fibre_line_sets.items():
+        try:
+            result, table = fit_shift_from_peak_table(
+                _line_table(value),
+                static_solution,
+                y_bounds=y_bounds,
+                order_bounds=order_bounds,
+                y_degree=y_degree,
+                order_degree=order_degree,
+            )
+        except (ValueError, RuntimeError) as error:
+            diagnostics.append(
+                dict(
+                    fibre=int(fibre),
+                    success=False,
+                    n_lines=len(_line_table(value)),
+                    n_used=0,
+                    rms_pixel=np.nan,
+                    message=str(error),
+                )
+            )
+            continue
+
+        surfaces[int(fibre)] = result.surface
+        fitted_tables[int(fibre)] = table
+        diagnostics.append(
+            dict(
+                fibre=int(fibre),
+                success=True,
+                n_lines=len(result.used),
+                n_used=int(np.count_nonzero(result.used)),
+                rms_pixel=float(np.sqrt(np.nanmean(result.residual_pixel[result.used] ** 2))),
+                message="",
+            )
+        )
+
+    if not surfaces:
+        raise RuntimeError("No science fibre had enough usable FibTh lines")
+    return FibreShiftModel(surfaces), Table(rows=diagnostics), fitted_tables
+
+
+@dataclass
+class TimeShiftModel:
+    """Time-interpolated common detector drift relative to a reference epoch."""
+
+    mjd: np.ndarray
+    coefficients: np.ndarray
+    template: PixelShiftSurface
+    source: str
+    reference_mjd: float
+
+    def __post_init__(self):
+        self.mjd = np.asarray(self.mjd, dtype=float)
+        self.coefficients = np.asarray(self.coefficients, dtype=float)
+        idx = np.argsort(self.mjd)
+        self.mjd = self.mjd[idx]
+        self.coefficients = self.coefficients[idx]
+        if self.coefficients.ndim != 3 or self.coefficients.shape[0] != len(self.mjd):
+            raise ValueError("coefficients must have shape (n_times, ny, nm)")
+
+    def coefficients_at(self, mjd):
+        """Linearly interpolate/extrapolate every shift coefficient in time."""
+        t = float(mjd)
+        if len(self.mjd) == 1:
+            return self.coefficients[0]
+        if t <= self.mjd[0]:
+            i0, i1 = 0, 1
+        elif t >= self.mjd[-1]:
+            i0, i1 = len(self.mjd) - 2, len(self.mjd) - 1
+        else:
+            i1 = int(np.searchsorted(self.mjd, t))
+            i0 = i1 - 1
+        dt = self.mjd[i1] - self.mjd[i0]
+        weight = 0.0 if dt == 0 else (t - self.mjd[i0]) / dt
+        return (1.0 - weight) * self.coefficients[i0] + weight * self.coefficients[i1]
+
+    def shift(self, y, order, mjd):
+        coefficients = self.coefficients_at(mjd)
+        y_n, m_n = self.template._normalised_coordinates(y, order)
+        return legval2d(y_n, m_n, coefficients)
+
+
+def _fit_source_shift_series(
+    line_sets,
+    static_solution,
+    *,
+    source,
+    reference_mjd,
+    y_bounds,
+    order_bounds,
+    y_degree,
+    order_degree,
+):
+    exposures = []
+    for value in line_sets or []:
+        table = _line_table(value)
+        if len(table) == 0 or "mjd_mid" not in table.colnames:
+            continue
+        mjd_values = np.asarray(table["mjd_mid"], dtype=float)
+        finite_mjd = mjd_values[np.isfinite(mjd_values)]
+        if len(finite_mjd) == 0:
+            continue
+        mjd = float(np.nanmedian(finite_mjd))
+        try:
+            result, fitted = fit_shift_from_peak_table(
+                table,
+                static_solution,
+                y_bounds=y_bounds,
+                order_bounds=order_bounds,
+                y_degree=y_degree,
+                order_degree=order_degree,
+            )
+        except (ValueError, RuntimeError):
+            continue
+        exposures.append((mjd, result, fitted))
+
+    if not exposures:
+        return None, [], []
+    exposures.sort(key=lambda item: item[0])
+    times = np.asarray([item[0] for item in exposures], dtype=float)
+    raw_coefficients = np.stack([item[1].surface.coefficients for item in exposures])
+    if reference_mjd is None or not np.isfinite(reference_mjd):
+        reference_mjd = float(np.nanmedian(times))
+    else:
+        reference_mjd = float(reference_mjd)
+
+    # Define the temporal zero point at the requested reference epoch, not
+    # merely at the nearest exposure.  This uses exactly the same piecewise
+    # linear interpolation/extrapolation later used by TimeShiftModel.
+    template = exposures[int(np.argmin(np.abs(times - reference_mjd)))][1].surface
+    raw_model = TimeShiftModel(
+        mjd=times,
+        coefficients=raw_coefficients,
+        template=template,
+        source=str(source),
+        reference_mjd=reference_mjd,
+    )
+    reference_coefficients = raw_model.coefficients_at(reference_mjd)
+    relative = raw_coefficients - reference_coefficients[None, :, :]
+    model = TimeShiftModel(
+        mjd=times,
+        coefficients=relative,
+        template=template,
+        source=str(source),
+        reference_mjd=reference_mjd,
+    )
+    return model, exposures, reference_coefficients
+
+
+def fit_time_corrections(
+    *,
+    static_solution: WavelengthSolution,
+    simlc_line_sets=None,
+    simth_line_sets=None,
+    reference_mjd=None,
+    y_bounds,
+    order_bounds,
+    y_degree=2,
+    order_degree=1,
+    preferred_source="SimLC",
+):
+    """Fit common temporal drift, preferring SimLC and using SimTh as fallback.
+
+    Each calibration source is first differenced against its *own* reference
+    exposure.  This removes the fixed SimLC/SimTh illumination/fibre offset
+    before temporal drift is compared or transferred to science spectra.
+    """
+
+    series = {}
+    all_exposures = {}
+    for source, values in (("SimLC", simlc_line_sets), ("SimTh", simth_line_sets)):
+        model, exposures, _ = _fit_source_shift_series(
+            values,
+            static_solution,
+            source=source,
+            reference_mjd=reference_mjd,
+            y_bounds=y_bounds,
+            order_bounds=order_bounds,
+            y_degree=y_degree,
+            order_degree=order_degree,
+        )
+        if model is not None:
+            series[source] = model
+            all_exposures[source] = exposures
+
+    if not series:
+        raise RuntimeError("No usable SimLC or SimTh exposure series for temporal drift")
+
+    preferred_source = str(preferred_source)
+    eligible = {name: model for name, model in series.items() if len(model.mjd) >= 2}
+    if not eligible:
+        raise RuntimeError("At least two usable SimLC or SimTh exposures are required for temporal drift")
+
+    if preferred_source in eligible:
+        primary = preferred_source
+    elif "SimLC" in eligible:
+        primary = "SimLC"
+    elif "SimTh" in eligible:
+        primary = "SimTh"
+    else:
+        primary = next(iter(eligible))
+
+    rows = []
+    for source, model in series.items():
+        exposures = all_exposures[source]
+        for i, (mjd, result, _) in enumerate(exposures):
+            relative_surface = PixelShiftSurface(
+                model.coefficients[i],
+                model.template.y_center,
+                model.template.y_scale,
+                model.template.order_center,
+                model.template.order_scale,
+            )
+            rows.append(
+                dict(
+                    source=source,
+                    mjd=float(mjd),
+                    reference=(abs(mjd - model.reference_mjd) < 1e-10),
+                    n_lines=len(result.used),
+                    n_used=int(np.count_nonzero(result.used)),
+                    rms_surface_pixel=float(
+                        np.sqrt(np.nanmean(result.residual_pixel[result.used] ** 2))
+                    ),
+                    median_relative_shift_pixel=float(
+                        relative_surface.shift(
+                            model.template.y_center, model.template.order_center
+                        )
+                    ),
+                )
+            )
+
+    return series[primary], Table(rows=rows), series
+
+
+@dataclass
+class WavelengthModel:
+    """Hierarchical static + fibre + temporal wavelength calibration."""
+
+    static: WavelengthSolution
+    fibre: FibreShiftModel | None = None
+    time: TimeShiftModel | None = None
+    fixed_point_iterations: int = 3
+
+    def reference_y(self, y, order, *, fibre=None, mjd=None):
+        y, order = np.broadcast_arrays(
+            np.asarray(y, dtype=float), np.asarray(order, dtype=float)
+        )
+        y_reference = y.copy()
+        for _ in range(max(1, int(self.fixed_point_iterations))):
+            shift = np.zeros_like(y_reference)
+            if self.fibre is not None and fibre is not None:
+                shift += self.fibre.shift(y_reference, order, int(fibre))
+            if self.time is not None and mjd is not None:
+                shift += self.time.shift(y_reference, order, float(mjd))
+            y_reference = y - shift
+        return y_reference
+
+    def wavelength(self, y, order, *, fibre=None, mjd=None):
+        y_reference = self.reference_y(y, order, fibre=fibre, mjd=mjd)
+        return self.static.wavelength(y_reference, order)
+
+    def dispersion(self, y, order, *, fibre=None, mjd=None, step=1e-3):
+        y = np.asarray(y, dtype=float)
+        return (
+            self.wavelength(y + step, order, fibre=fibre, mjd=mjd)
+            - self.wavelength(y - step, order, fibre=fibre, mjd=mjd)
+        ) / (2.0 * step)
+
+
+WavelengthCalibration = WavelengthModel
+
+
+# -----------------------------------------------------------------------------
+# Hierarchical wavelength-model FITS I/O
+# -----------------------------------------------------------------------------
+
+
+def _surface_coefficient_rows(surface, **labels):
+    rows = []
+    for iy in range(surface.coefficients.shape[0]):
+        for im in range(surface.coefficients.shape[1]):
+            row = dict(labels)
+            row.update(y_degree=iy, order_degree=im, coefficient=float(surface.coefficients[iy, im]))
+            rows.append(row)
+    return rows
+
+
+def _set_surface_header(header, surface):
+    header["YCENTER"] = float(surface.y_center)
+    header["YSCALE"] = float(surface.y_scale)
+    header["MCENTER"] = float(surface.order_center)
+    header["MSCALE"] = float(surface.order_scale)
+
+
+def write_wavelength_model_fits(
+    model: WavelengthModel,
+    filename: str | Path,
+    *,
+    ccd=None,
+    reference_mjd=np.nan,
+    overwrite=False,
+):
+    """Persist the compact hierarchical wavelength calibration."""
+
+    primary = fits.PrimaryHDU()
+    primary.header["ORIGIN"] = "velocereduction"
+    primary.header["CONTENT"] = "Hierarchical wavelength calibration"
+    if ccd is not None:
+        primary.header["CCD"] = str(ccd)
+    if np.isfinite(reference_mjd):
+        primary.header["MJDREF"] = float(reference_mjd)
+
+    static_hdu = fits.BinTableHDU(
+        Table(rows=_surface_coefficient_rows(model.static)), name="STATIC"
+    )
+    _set_surface_header(static_hdu.header, model.static)
+
+    hdus = [primary, static_hdu]
+    if model.fibre is not None and model.fibre.surfaces:
+        rows = []
+        for fibre, surface in sorted(model.fibre.surfaces.items()):
+            rows.extend(_surface_coefficient_rows(surface, fibre=int(fibre)))
+        hdu = fits.BinTableHDU(Table(rows=rows), name="FIBRE_SHIFT")
+        first = next(iter(model.fibre.surfaces.values()))
+        _set_surface_header(hdu.header, first)
+        hdus.append(hdu)
+
+    if model.time is not None:
+        rows = []
+        for mjd, coefficients in zip(model.time.mjd, model.time.coefficients):
+            surface = PixelShiftSurface(
+                coefficients,
+                model.time.template.y_center,
+                model.time.template.y_scale,
+                model.time.template.order_center,
+                model.time.template.order_scale,
+            )
+            rows.extend(_surface_coefficient_rows(surface, mjd=float(mjd)))
+        hdu = fits.BinTableHDU(Table(rows=rows), name="TIME_SHIFT")
+        _set_surface_header(hdu.header, model.time.template)
+        hdu.header["SOURCE"] = model.time.source
+        hdu.header["MJDREF"] = float(model.time.reference_mjd)
+        hdus.append(hdu)
+
+    fits.HDUList(hdus).writeto(filename, overwrite=overwrite)
+
+
+def _surface_from_table(table, header):
+    ny = int(np.max(table["y_degree"])) + 1
+    nm = int(np.max(table["order_degree"])) + 1
+    coefficients = np.zeros((ny, nm), dtype=float)
+    for row in table:
+        coefficients[int(row["y_degree"]), int(row["order_degree"])] = float(row["coefficient"])
+    return PixelShiftSurface(
+        coefficients,
+        float(header["YCENTER"]),
+        float(header["YSCALE"]),
+        float(header["MCENTER"]),
+        float(header["MSCALE"]),
+    )
+
+
+def read_wavelength_model_fits(filename: str | Path) -> tuple[WavelengthModel, fits.Header]:
+    """Read a hierarchical wavelength calibration written above."""
+
+    with fits.open(filename) as hdul:
+        header = hdul[0].header.copy()
+        static_table = Table(hdul["STATIC"].data)
+        static_shift = _surface_from_table(static_table, hdul["STATIC"].header)
+        static = WavelengthSolution(
+            static_shift.coefficients,
+            static_shift.y_center,
+            static_shift.y_scale,
+            static_shift.order_center,
+            static_shift.order_scale,
+        )
+
+        fibre_model = None
+        if "FIBRE_SHIFT" in hdul:
+            table = Table(hdul["FIBRE_SHIFT"].data)
+            surfaces = {}
+            for fibre in np.unique(np.asarray(table["fibre"], dtype=int)):
+                surfaces[int(fibre)] = _surface_from_table(
+                    table[np.asarray(table["fibre"], dtype=int) == int(fibre)],
+                    hdul["FIBRE_SHIFT"].header,
+                )
+            fibre_model = FibreShiftModel(surfaces)
+
+        time_model = None
+        if "TIME_SHIFT" in hdul:
+            table = Table(hdul["TIME_SHIFT"].data)
+            times = np.unique(np.asarray(table["mjd"], dtype=float))
+            surfaces = [
+                _surface_from_table(
+                    table[np.asarray(table["mjd"], dtype=float) == t],
+                    hdul["TIME_SHIFT"].header,
+                )
+                for t in times
+            ]
+            time_model = TimeShiftModel(
+                times,
+                np.stack([surface.coefficients for surface in surfaces]),
+                surfaces[0],
+                str(hdul["TIME_SHIFT"].header.get("SOURCE", "")),
+                float(hdul["TIME_SHIFT"].header.get("MJDREF", np.nan)),
+            )
+
+    return WavelengthModel(static=static, fibre=fibre_model, time=time_model), header

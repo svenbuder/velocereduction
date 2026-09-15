@@ -13,9 +13,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import IntFlag
+from pathlib import Path
 from typing import Any, Callable
 
 import numpy as np
+from astropy.io import fits
 from astropy.table import Table
 from scipy.ndimage import median_filter
 from scipy.optimize import least_squares, linear_sum_assignment
@@ -38,6 +40,15 @@ class CalibrationLineSet:
     calibration_shift_y: float = np.nan
     lsf: Any | None = None
 
+
+
+# Physical Veloce echelle orders in the row order used by extracted spectra.
+VELOCE_CCD_ORDERS = {
+    "1": np.arange(167, 138 - 1, -1),
+    "2": np.arange(140, 103 - 1, -1),
+    "3": np.arange(104, 65 - 1, -1),
+}
+
 class CalibrationPeakFlag(IntFlag):
     """Bit mask describing why a calibration peak should not be trusted."""
 
@@ -55,6 +66,7 @@ class CalibrationPeakFlag(IntFlag):
     ATLAS_BLEND = 1 << 9
     WAVELENGTH_OUTLIER = 1 << 10
 
+@dataclass
 class CalibrationPeakConfig:
     """Tunable settings for detecting and fitting unresolved calibration lines."""
 
@@ -72,9 +84,9 @@ class CalibrationPeakConfig:
     maximum_sigma: float = 3.0
 
     # Quality cuts on individual fits.
-    minimum_fit_snr: float = 5.0
-    maximum_y_uncertainty: float = 0.30
-    maximum_reduced_chi2: float = 10.0
+    minimum_fit_snr: float = 10.0
+    maximum_y_uncertainty: float = 0.10
+    maximum_reduced_chi2: float | None = None
 
     # Maximum value in the extracted 1D spectrum allowed anywhere in the
     # local fitting window.  Set separately for SimLC/SimTh/FibTh if needed.
@@ -85,10 +97,10 @@ class CalibrationPeakConfig:
     # in each order so the cut can follow the instrumental profile.
     minimum_fwhm_ratio: float = 0.55
     maximum_fwhm_ratio: float = 1.80
-    fwhm_mad_sigma: float = 5.0
+    fwhm_mad_sigma: float = 4.0
 
     # A measured neighbour this close is considered a likely blend.
-    measured_blend_fwhm_factor: float = 1.5
+    measured_blend_fwhm_factor: float = 2.0
 
     # A reference-atlas neighbour this close is considered unresolved.
     atlas_blend_fwhm_factor: float = 1.5
@@ -103,6 +115,38 @@ def robust_sigma(values: np.ndarray) -> float:
 
     median = np.nanmedian(values[finite])
     return 1.4826 * np.nanmedian(np.abs(values[finite] - median))
+
+def calibration_quality_summary(peak_table: Table) -> dict[str, int]:
+    """Count accepted/identified lines and every active quality flag.
+
+    Flag counts are intentionally non-exclusive: a rejected line can contribute
+    to more than one reason.  This makes attrition between detection, profile
+    quality, reference matching, and wavelength fitting explicit in DEBUG QA.
+    """
+    summary = {"total": int(len(peak_table)), "accepted": 0, "identified": 0}
+    if len(peak_table) == 0:
+        return summary
+
+    if "used_for_wavelength_fit" in peak_table.colnames:
+        summary["accepted"] = int(np.count_nonzero(peak_table["used_for_wavelength_fit"]))
+    if "wavelength_nm" in peak_table.colnames:
+        summary["identified"] = int(
+            np.count_nonzero(np.isfinite(np.asarray(peak_table["wavelength_nm"], dtype=float)))
+        )
+
+    flags = np.asarray(peak_table["quality_flag"], dtype=np.int64)
+    for flag in CalibrationPeakFlag:
+        if flag == CalibrationPeakFlag.GOOD:
+            continue
+        summary[flag.name.lower()] = int(np.count_nonzero((flags & int(flag)) != 0))
+    return summary
+
+
+def _debug_enabled(log_level) -> bool:
+    if isinstance(log_level, str):
+        return log_level.upper() == "DEBUG"
+    return bool(log_level is not None and int(log_level) <= 10)
+
 
 def sum_extracted_calibration_order(
     extracted_counts: np.ndarray,
@@ -432,7 +476,12 @@ def fit_calibration_peak(
         flag |= CalibrationPeakFlag.LOW_SNR
     if not np.isfinite(y_uncertainty) or y_uncertainty > config.maximum_y_uncertainty:
         flag |= CalibrationPeakFlag.LARGE_CENTROID_ERROR
-    if not np.isfinite(reduced_chi2) or reduced_chi2 > config.maximum_reduced_chi2:
+    if not np.isfinite(reduced_chi2):
+        flag |= CalibrationPeakFlag.BAD_PROFILE_FIT
+    elif (
+        config.maximum_reduced_chi2 is not None
+        and reduced_chi2 > config.maximum_reduced_chi2
+    ):
         flag |= CalibrationPeakFlag.BAD_PROFILE_FIT
 
     return dict(
@@ -571,30 +620,26 @@ def measure_calibration_peaks(
     fibre: int = -1,
     trace_x_function: Callable[[int, float], float] | None = None,
     config: CalibrationPeakConfig | None = None,
+    diagnostics: str = "none",
+    diagnostic_dir: str | Path | None = None,
+    log_level: str | int | None = None,
 ) -> Table:
     """Measure every candidate calibration peak in one extracted exposure.
 
-    Parameters
-    ----------
-    counts
-        Array with shape ``(n_orders, n_dispersion_pixels)``.
-    orders
-        Physical echelle order corresponding to each row of ``counts``.
-    variance
-        Optional array with the same shape as counts.
-    trace_x_function
-        Optional function ``trace_x_function(order, y) -> x``.  For a summed
-        extraction this fills the table column ``x`` from the trace model.
-        ``x_source='trace_model'`` makes explicit that x was not independently
-        measured from the 1D summed spectrum.
+    ``log_level='DEBUG'`` prints progress and a quality summary for every order.
+    ``diagnostics='full'`` additionally writes the v0.7-style per-order peak QA
+    pages (plus rejected/worst local fits) to ``diagnostic_dir``.
     """
-
     if config is None:
         config = CalibrationPeakConfig()
 
+    diagnostics = str(diagnostics).lower()
+    if diagnostics not in {"none", "basic", "full"}:
+        raise ValueError("diagnostics must be 'none', 'basic', or 'full'")
+    debug = _debug_enabled(log_level)
+
     counts = np.asarray(counts, dtype=float)
     orders = np.asarray(orders, dtype=int)
-
     if counts.ndim != 2:
         raise ValueError("counts must have shape (n_orders, n_dispersion_pixels)")
     if len(orders) != counts.shape[0]:
@@ -607,83 +652,117 @@ def measure_calibration_peaks(
 
     rows = []
     peak_id = 0
+    order_diagnostics = {}
+    fibre_text = "" if int(fibre) == -1 else f" fibre {int(fibre):+d}"
+
+    if debug:
+        print("\n" + "=" * 78)
+        print(f"Measuring {calibration_type} CCD{ccd} exposure {exposure_index}{fibre_text}")
+        print(
+            f"  detection S/N >= {config.detection_snr:.1f}; "
+            f"prominence >= {config.prominence_snr:.1f}; "
+            f"fit S/N >= {config.minimum_fit_snr:.1f}; "
+            f"sigma_y <= {config.maximum_y_uncertainty:.3f} pix; "
+            f"FWHM ratio={config.minimum_fwhm_ratio:.2f}--{config.maximum_fwhm_ratio:.2f}; "
+            f"measured blend < {config.measured_blend_fwhm_factor:.1f} FWHM"
+        )
 
     for order_index, order in enumerate(orders):
         order_counts = counts[order_index]
         order_variance = None if variance is None else variance[order_index]
-
-        (
-            candidates,
-            background,
-            local_noise,
-            _,
-            _,
-        ) = detect_calibration_peaks(
-            order_counts,
-            config=config,
+        candidates, background, local_noise, detection_snr, _ = detect_calibration_peaks(
+            order_counts, config=config
         )
 
-        for candidate in candidates:
-            result = fit_calibration_peak(
-                order_counts,
-                int(candidate),
-                variance=order_variance,
-                background=background,
-                noise=local_noise,
-                config=config,
+        if debug:
+            print(
+                f"{calibration_type} CCD{ccd} exposure {exposure_index}"
+                f"{fibre_text} order {int(order)}: fitting {len(candidates)} candidates"
             )
+
+        for candidate in candidates:
+            try:
+                result = fit_calibration_peak(
+                    order_counts,
+                    int(candidate),
+                    variance=order_variance,
+                    background=background,
+                    noise=local_noise,
+                    config=config,
+                )
+            except Exception as error:
+                if debug:
+                    print(f"    y={int(candidate)} fit failed: {error}")
+                continue
 
             trace_x = np.nan
             if trace_x_function is not None:
                 trace_x = float(trace_x_function(int(order), result["y"]))
 
-            row = dict(
-                peak_id=int(peak_id),
+            rows.append(dict(
+                peak_id=int(peak_id), candidate_pixel=int(candidate),
                 calibration_type=str(calibration_type),
                 ccd=str(ccd) if ccd is not None else "",
-                exposure_index=(
-                    int(exposure_index) if exposure_index is not None else -1
-                ),
-                mjd_mid=float(mjd_mid),
-                fibre=int(fibre),
-                order=int(order),
-                y=result["y"],
-                y_uncertainty=result["y_uncertainty"],
-                x=trace_x,
-                x_uncertainty=np.nan,
+                exposure_index=int(exposure_index) if exposure_index is not None else -1,
+                mjd_mid=float(mjd_mid), fibre=int(fibre), order=int(order),
+                y=result["y"], y_uncertainty=result["y_uncertainty"],
+                x=trace_x, x_uncertainty=np.nan,
                 x_source=("trace_model" if np.isfinite(trace_x) else ""),
-                pixel_phase=result["pixel_phase"],
-                fwhm=result["fwhm"],
+                pixel_phase=result["pixel_phase"], fwhm=result["fwhm"],
                 fwhm_uncertainty=result["fwhm_uncertainty"],
                 fwhm_pixel=result["fwhm"],
                 fwhm_uncertainty_pixel=result["fwhm_uncertainty"],
                 integrated_counts=result["integrated_counts"],
-                integrated_counts_uncertainty=result[
-                    "integrated_counts_uncertainty"
-                ],
+                integrated_counts_uncertainty=result["integrated_counts_uncertainty"],
                 intrinsic_peak_amplitude=result["intrinsic_peak_amplitude"],
                 maximum_signal=result["maximum_signal"],
                 signal_to_noise=result["signal_to_noise"],
-                background=result["background"],
-                background_slope=result["background_slope"],
-                reduced_chi2=result["reduced_chi2"],
-                fit_rms=result["fit_rms"],
-                fit_success=result["fit_success"],
-                nearest_peak_distance_pixel=np.inf,
-                quality_flag=int(result["quality_flag"]),
-                **_blank_identification_columns(),
-            )
-            rows.append(row)
+                background=result["background"], background_slope=result["background_slope"],
+                reduced_chi2=result["reduced_chi2"], fit_rms=result["fit_rms"],
+                fit_success=result["fit_success"], nearest_peak_distance_pixel=np.inf,
+                quality_flag=int(result["quality_flag"]), **_blank_identification_columns(),
+            ))
             peak_id += 1
 
-    peak_table = Table(rows=rows)
+        order_diagnostics[int(order)] = dict(
+            counts=order_counts, background=background, detection_snr=detection_snr,
+            candidate_pixels=candidates,
+        )
 
+    peak_table = Table(rows=rows)
     if len(peak_table) > 0:
-        # Empty strings otherwise lead Astropy to infer one-character string
-        # columns, which would truncate later LC/Th identifiers.
         peak_table["reference_id"] = np.full(len(peak_table), "", dtype="U64")
         peak_table["species"] = np.full(len(peak_table), "", dtype="U32")
         _apply_ensemble_peak_flags(peak_table, config=config)
+        peak_table["used_for_wavelength_fit"] = (
+            np.asarray(peak_table["quality_flag"], dtype=np.int64) == 0
+        )
+
+    if debug:
+        for order in orders:
+            subset = peak_table[np.asarray(peak_table["order"], int) == int(order)] if len(peak_table) else peak_table
+            summary = calibration_quality_summary(subset)
+            if len(subset):
+                print(
+                    f"    order {int(order)}: {summary['accepted']}/{summary['total']} profile-good; "
+                    f"median FWHM={np.nanmedian(subset['fwhm']):.3f} px; "
+                    f"median sigma_y={np.nanmedian(subset['y_uncertainty']):.4f} px; "
+                    f"median S/N={np.nanmedian(subset['signal_to_noise']):.1f}; "
+                    f"width={summary.get('width_outlier', 0)}, "
+                    f"blend={summary.get('blend_candidate', 0)}, "
+                    f"lowS/N={summary.get('low_snr', 0)}"
+                )
+
+    if diagnostics == "full" and diagnostic_dir is not None and len(peak_table):
+        from . import diagnostics as diagnostic_plots
+        diagnostic_pdf = diagnostic_plots.save_calibration_order_diagnostics(
+            order_diagnostics, peak_table, config=config,
+            calibration_type=calibration_type, ccd=str(ccd),
+            exposure_index=-1 if exposure_index is None else int(exposure_index),
+            fibre=int(fibre), diagnostic_dir=diagnostic_dir,
+        )
+        if debug:
+            print(f"  full peak diagnostics -> {diagnostic_pdf}")
 
     return peak_table
 
@@ -975,3 +1054,49 @@ def _refresh_used_for_wavelength_fit(peak_table: Table) -> None:
         identified & good_flag & finite_measurement
     )
 
+
+
+# -----------------------------------------------------------------------------
+# Compact line-table FITS I/O
+# -----------------------------------------------------------------------------
+
+def write_calibration_line_fits(
+    line_set: CalibrationLineSet | Table,
+    filename,
+    *,
+    source: str | None = None,
+    calibration_shift_y: float | None = None,
+    overwrite: bool = False,
+) -> None:
+    """Write a common identified calibration-line table to FITS."""
+    if isinstance(line_set, CalibrationLineSet):
+        table = line_set.lines
+        source = line_set.source if source is None else source
+        if calibration_shift_y is None:
+            calibration_shift_y = line_set.calibration_shift_y
+    else:
+        table = line_set
+
+    primary = fits.PrimaryHDU()
+    primary.header["ORIGIN"] = "velocereduction"
+    primary.header["CONTENT"] = "Identified calibration lines"
+    if source is not None:
+        primary.header["CALTYPE"] = str(source)
+    if calibration_shift_y is not None and np.isfinite(calibration_shift_y):
+        primary.header["CALSHFTY"] = (float(calibration_shift_y), "residual line-match shift [pix]")
+
+    hdu = fits.table_to_hdu(table)
+    hdu.name = "LINES"
+    fits.HDUList([primary, hdu]).writeto(filename, overwrite=overwrite)
+
+
+def read_calibration_line_fits(filename) -> CalibrationLineSet:
+    """Read a common identified calibration-line FITS product."""
+    with fits.open(filename) as hdul:
+        header = hdul[0].header
+        table = Table(hdul["LINES"].data)
+    return CalibrationLineSet(
+        table,
+        str(header.get("CALTYPE", "")),
+        float(header.get("CALSHFTY", np.nan)),
+    )
