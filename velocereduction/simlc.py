@@ -50,6 +50,7 @@ from .calibration import (
     CalibrationLineSet,
     CalibrationPeakConfig,
     CalibrationPeakFlag,
+    calibration_quality_summary,
     _clear_identification,
     _match_peak_table_to_predicted_lines,
     _predict_reference_lines_for_order,
@@ -172,7 +173,7 @@ def _normalise_sampled_profile(offset: np.ndarray, profile: np.ndarray) -> np.nd
     profile = np.asarray(profile, dtype=float)
     profile = np.where(np.isfinite(profile), profile, 0.0)
     profile = np.clip(profile, 0.0, None)
-    area = float(np.trapezoid(profile, offset))
+    area = float(np.trapz(profile, offset))
     if not np.isfinite(area) or area <= 0:
         raise ValueError("LSF profile has non-positive normalization")
     return profile / area
@@ -942,6 +943,26 @@ def refit_simlc_peaks(
         output["y_uncertainty_initial"] = np.asarray(
             output["y_uncertainty"], dtype=float
         ).copy()
+    if "fwhm_initial" not in output.colnames and "fwhm" in output.colnames:
+        output["fwhm_initial"] = np.asarray(output["fwhm"], dtype=float).copy()
+    if "fwhm_uncertainty_initial" not in output.colnames and "fwhm_uncertainty" in output.colnames:
+        output["fwhm_uncertainty_initial"] = np.asarray(
+            output["fwhm_uncertainty"], dtype=float
+        ).copy()
+    if "signal_to_noise_initial" not in output.colnames and "signal_to_noise" in output.colnames:
+        output["signal_to_noise_initial"] = np.asarray(
+            output["signal_to_noise"], dtype=float
+        ).copy()
+    if "fit_rms_initial" not in output.colnames and "fit_rms" in output.colnames:
+        output["fit_rms_initial"] = np.asarray(output["fit_rms"], dtype=float).copy()
+    if "reduced_chi2_initial" not in output.colnames and "reduced_chi2" in output.colnames:
+        output["reduced_chi2_initial"] = np.asarray(
+            output["reduced_chi2"], dtype=float
+        ).copy()
+    if "fit_success_initial" not in output.colnames and "fit_success" in output.colnames:
+        output["fit_success_initial"] = np.asarray(
+            output["fit_success"], dtype=bool
+        ).copy()
     if "lsf_y_shift" not in output.colnames:
         output["lsf_y_shift"] = np.full(n, np.nan)
     if "lsf_model" not in output.colnames:
@@ -1418,6 +1439,9 @@ def measure_simlc_lines(
     comb_reference_table=None,
     repetition_rate_hz=25.0e9,
     offset_frequency_hz=9.56e9,
+    diagnostics="none",
+    diagnostic_dir=None,
+    log_level=None,
 ):
     """Measure SimLC lines, infer the LSF, and return final comb centroids.
 
@@ -1440,6 +1464,9 @@ def measure_simlc_lines(
         fibre=fibre,
         trace_x_function=trace_x_function,
         config=peak_config,
+        diagnostics=diagnostics,
+        diagnostic_dir=diagnostic_dir,
+        log_level=log_level,
     )
     if len(lines) == 0:
         return CalibrationLineSet(lines, "SimLC", np.nan, None)
@@ -1471,6 +1498,47 @@ def measure_simlc_lines(
         lines["fwhm_pixel"] = np.asarray(lines["fwhm"], dtype=float)
     if "fwhm_uncertainty_pixel" not in lines.colnames:
         lines["fwhm_uncertainty_pixel"] = np.asarray(lines["fwhm_uncertainty"], dtype=float)
+
+    debug = (isinstance(log_level, str) and log_level.upper() == "DEBUG") or (
+        not isinstance(log_level, str) and log_level is not None and int(log_level) <= 10
+    )
+    summary = calibration_quality_summary(lines)
+    if debug:
+        fibre_text = "" if int(fibre) == -1 else f" fibre {int(fibre):+d}"
+        print(
+            f"SimLC CCD{ccd} exposure {exposure_index}{fibre_text}: "
+            f"{summary['identified']}/{summary['total']} modes matched; "
+            f"{summary['accepted']} retained | "
+            f"unmatched={summary.get('unmatched', 0)}, "
+            f"blend={summary.get('blend_candidate', 0)}, "
+            f"width={summary.get('width_outlier', 0)}, "
+            f"lowS/N={summary.get('low_snr', 0)}, "
+            f"sigma_y={summary.get('large_centroid_error', 0)}"
+        )
+        for order in np.unique(np.asarray(lines["order"], dtype=int)):
+            subset = lines[np.asarray(lines["order"], dtype=int) == int(order)]
+            q = calibration_quality_summary(subset)
+            print(
+                f"    order {int(order)}: matched={q['identified']}/{q['total']}; "
+                f"retained={q['accepted']}; unmatched={q.get('unmatched', 0)}, "
+                f"blend={q.get('blend_candidate', 0)}, width={q.get('width_outlier', 0)}"
+            )
+
+    if str(diagnostics).lower() != "none" and diagnostic_dir is not None:
+        from . import diagnostics as diagnostic_plots
+        fibre_suffix = "" if int(fibre) == -1 else f"_fibre{int(fibre):+03d}"
+        filename = (
+            Path(diagnostic_dir)
+            / f"simlc_ccd{ccd}_exposure{int(exposure_index):03d}{fibre_suffix}_summary.png"
+        )
+        diagnostic_plots.plot_calibration_summary(
+            lines, calibration_type="SimLC", ccd=str(ccd),
+            exposure_index=int(exposure_index), fibre=int(fibre), filename=filename,
+            show=str(diagnostics).lower() == "full",
+        )
+        if debug:
+            print(f"  calibration summary -> {filename}")
+
     return CalibrationLineSet(lines, "SimLC", shift, lsf)
 
 

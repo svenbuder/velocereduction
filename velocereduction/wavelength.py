@@ -1059,18 +1059,19 @@ def cross_validate_wavelength_surface(
     *,
     y_bounds,
     order_bounds,
-    y_degrees=range(4, 11),
-    order_degrees=range(2, 9),
+    y_degrees=range(3, 13),
+    order_degrees=range(1, 9),
     n_folds=5,
     y_blocks=10,
     max_iterations=12,
 ):
     """Blocked cross-validation for the 2-D Legendre wavelength surface.
 
-    Returns one row per (y_degree, order_degree) with training and held-out RMS
-    in pixels/velocity.  This is intended for selecting the *shape complexity*
-    of the static surface; the final chosen model is subsequently refit to all
-    accepted lines.
+    One row is returned per viable ``(y_degree, order_degree)`` pair.  In
+    addition to training/held-out RMS, the table records robust held-out
+    residual statistics and the largest design-matrix condition number across
+    folds.  These diagnostics make it possible to distinguish genuine
+    predictive improvement from over-fitting or an ill-conditioned basis.
     """
     use = np.asarray(peak_table["used_for_wavelength_fit"], dtype=bool)
     use &= np.isfinite(np.asarray(peak_table["y"], dtype=float))
@@ -1093,65 +1094,127 @@ def cross_validate_wavelength_surface(
         y, order.astype(int), y_bounds=y_bounds, n_folds=n_folds, y_blocks=y_blocks
     )
 
+    y_normalised, _, _ = _normalise_coordinate(y, y_bounds)
+    order_normalised, _, _ = _normalise_coordinate(order, order_bounds)
+
     rows = []
     for y_degree in y_degrees:
         for order_degree in order_degrees:
-            n_parameters = (int(y_degree) + 1) * (int(order_degree) + 1)
+            y_degree = int(y_degree)
+            order_degree = int(order_degree)
+            n_parameters = (y_degree + 1) * (order_degree + 1)
+            design_matrix = _build_design_matrix(
+                y_normalised, order_normalised, y_degree, order_degree
+            )
+
             train_pixel, valid_pixel = [], []
             train_velocity, valid_velocity = [], []
-            n_train, n_valid = [], []
+            all_valid_pixel, all_valid_velocity = [], []
+            condition_numbers, n_train, n_valid = [], [], []
 
+            viable = True
             for fold in range(n_folds):
                 validation = folds == fold
                 training = ~validation
                 if np.count_nonzero(training) <= n_parameters or not np.any(validation):
-                    continue
-                fit = fit_wavelength_surface(
-                    y[training],
-                    order[training],
-                    wavelength[training],
-                    y_uncertainty=y_uncertainty[training],
-                    wavelength_uncertainty=wavelength_uncertainty[training],
-                    y_degree=int(y_degree),
-                    order_degree=int(order_degree),
-                    y_bounds=y_bounds,
-                    order_bounds=order_bounds,
-                    max_iterations=max_iterations,
-                )
+                    viable = False
+                    break
+
+                try:
+                    fit = fit_wavelength_surface(
+                        y[training],
+                        order[training],
+                        wavelength[training],
+                        y_uncertainty=y_uncertainty[training],
+                        wavelength_uncertainty=wavelength_uncertainty[training],
+                        y_degree=y_degree,
+                        order_degree=order_degree,
+                        y_bounds=y_bounds,
+                        order_bounds=order_bounds,
+                        max_iterations=max_iterations,
+                    )
+                except (RuntimeError, ValueError, np.linalg.LinAlgError):
+                    viable = False
+                    break
+
                 tr_pix, tr_vel = _surface_validation_residuals(
                     fit.solution, y[training], order[training], wavelength[training]
                 )
                 va_pix, va_vel = _surface_validation_residuals(
                     fit.solution, y[validation], order[validation], wavelength[validation]
                 )
+
                 train_pixel.append(float(np.sqrt(np.nanmean(tr_pix**2))))
                 valid_pixel.append(float(np.sqrt(np.nanmean(va_pix**2))))
                 train_velocity.append(float(np.sqrt(np.nanmean(tr_vel**2))))
                 valid_velocity.append(float(np.sqrt(np.nanmean(va_vel**2))))
+                all_valid_pixel.append(np.asarray(va_pix, dtype=float))
+                all_valid_velocity.append(np.asarray(va_vel, dtype=float))
+                condition_numbers.append(float(np.linalg.cond(design_matrix[training])))
                 n_train.append(int(np.count_nonzero(training)))
                 n_valid.append(int(np.count_nonzero(validation)))
 
-            if not valid_pixel:
+            if not viable or len(valid_pixel) != n_folds:
                 continue
-            valid_pixel = np.asarray(valid_pixel)
-            valid_velocity = np.asarray(valid_velocity)
+
+            valid_pixel = np.asarray(valid_pixel, dtype=float)
+            valid_velocity = np.asarray(valid_velocity, dtype=float)
+            heldout_pixel = np.concatenate(all_valid_pixel)
+            heldout_velocity = np.concatenate(all_valid_velocity)
+            finite_pixel = heldout_pixel[np.isfinite(heldout_pixel)]
+            finite_velocity = heldout_velocity[np.isfinite(heldout_velocity)]
+            abs_pixel = np.abs(finite_pixel)
+            abs_velocity = np.abs(finite_velocity)
+
+            # Fold-level statistics are intentionally retained in several robust
+            # summaries.  A single spatially blocked fold can occasionally become
+            # poorly constrained for an otherwise ordinary degree pair; the mean
+            # RMS alone then looks catastrophic even when four of five folds are
+            # well behaved.  Keep the mean/SE for the one-standard-error selector,
+            # but expose the median, robust scatter, upper tail, and max/median
+            # ratio so those unstable models are immediately recognisable in QA.
+            valid_pixel_median = float(np.nanmedian(valid_pixel))
+            valid_pixel_mad = float(
+                1.4826 * np.nanmedian(np.abs(valid_pixel - valid_pixel_median))
+            )
+            valid_pixel_max = float(np.nanmax(valid_pixel))
+            valid_pixel_ratio = (
+                valid_pixel_max / valid_pixel_median
+                if np.isfinite(valid_pixel_median) and valid_pixel_median > 0
+                else np.inf
+            )
+
             rows.append(dict(
-                y_degree=int(y_degree),
-                order_degree=int(order_degree),
+                y_degree=y_degree,
+                order_degree=order_degree,
                 n_parameters=int(n_parameters),
-                n_folds=int(len(valid_pixel)),
+                n_folds=int(n_folds),
                 mean_n_train=float(np.mean(n_train)),
                 mean_n_validation=float(np.mean(n_valid)),
                 train_rms_pixel=float(np.mean(train_pixel)),
                 validation_rms_pixel=float(np.mean(valid_pixel)),
-                validation_rms_pixel_std=float(np.std(valid_pixel, ddof=1)) if len(valid_pixel) > 1 else 0.0,
-                validation_rms_pixel_se=float(np.std(valid_pixel, ddof=1) / np.sqrt(len(valid_pixel))) if len(valid_pixel) > 1 else 0.0,
+                validation_rms_pixel_std=float(np.std(valid_pixel, ddof=1)),
+                validation_rms_pixel_se=float(np.std(valid_pixel, ddof=1) / np.sqrt(n_folds)),
+                validation_median_fold_rms_pixel=valid_pixel_median,
+                validation_mad_fold_rms_pixel=valid_pixel_mad,
+                validation_p90_fold_rms_pixel=float(np.nanpercentile(valid_pixel, 90)),
+                validation_max_fold_rms_pixel=valid_pixel_max,
+                validation_fold_rms_ratio=float(valid_pixel_ratio),
+                validation_median_pixel=float(np.nanmedian(finite_pixel)),
+                validation_median_abs_pixel=float(np.nanmedian(abs_pixel)),
+                validation_p95_abs_pixel=float(np.nanpercentile(abs_pixel, 95)),
                 train_rms_velocity_mps=float(np.mean(train_velocity)),
                 validation_rms_velocity_mps=float(np.mean(valid_velocity)),
-                validation_rms_velocity_mps_std=float(np.std(valid_velocity, ddof=1)) if len(valid_velocity) > 1 else 0.0,
+                validation_rms_velocity_mps_std=float(np.std(valid_velocity, ddof=1)),
+                validation_median_fold_rms_velocity_mps=float(np.nanmedian(valid_velocity)),
+                validation_max_fold_rms_velocity_mps=float(np.nanmax(valid_velocity)),
+                validation_median_abs_velocity_mps=float(np.nanmedian(abs_velocity)),
+                validation_p95_abs_velocity_mps=float(np.nanpercentile(abs_velocity, 95)),
+                generalisation_gap_pixel=float(np.mean(valid_pixel) - np.mean(train_pixel)),
+                max_condition_number=float(np.nanmax(condition_numbers)),
             ))
-    return Table(rows=rows)
 
+    return Table(rows=rows)
 
 def select_wavelength_surface_degree(validation_table):
     """Choose the simplest surface within one standard error of the best CV RMS."""
@@ -1173,8 +1236,8 @@ def fit_validated_wavelength_from_peak_table(
     *,
     y_bounds,
     order_bounds,
-    y_degrees=range(4, 11),
-    order_degrees=range(2, 9),
+    y_degrees=range(3, 13),
+    order_degrees=range(1, 9),
     n_folds=5,
     y_blocks=10,
     max_iterations=12,
