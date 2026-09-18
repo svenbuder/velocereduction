@@ -1009,3 +1009,214 @@ def plot_fibre_profile_order(product, filename):
     axes[1].plot(m, observed - model); axes[1].axhline(0, ls="--", lw=1)
     axes[1].set(xlabel="Cross-dispersion pixel", ylabel="Residual")
     return _save(fig, filename)
+
+
+# -----------------------------------------------------------------------------
+# SimLC two-pass LSF diagnostics
+# -----------------------------------------------------------------------------
+
+
+def plot_simlc_lsf_diagnostics(peak_table, lsf_model, *, filename=None, show=False):
+    """Compare first-pass shape measurements with the smooth optimized SimLC LSF."""
+    if len(peak_table) == 0:
+        return None
+
+    y = np.asarray(peak_table["y_initial"], float)
+    order = np.asarray(peak_table["order"], int)
+    used_shape = np.asarray(peak_table["used_for_lsf_fit"], bool)
+    fwhm_initial = np.asarray(peak_table["fwhm_initial"], float)
+    fwhm_model = np.asarray(peak_table["fwhm_model"], float)
+    fwhm_unc = np.asarray(peak_table["fwhm_initial_uncertainty"], float)
+
+    finite_width = np.isfinite(fwhm_initial) & np.isfinite(fwhm_model)
+    if np.any(finite_width):
+        lo, hi = np.nanpercentile(
+            np.r_[fwhm_initial[finite_width], fwhm_model[finite_width]], [2, 98]
+        )
+    else:
+        lo, hi = 0.5, 2.0
+
+    fig, axes = plt.subplots(3, 2, figsize=(13, 11))
+
+    ax = axes[0, 0]
+    sc = ax.scatter(y[finite_width], order[finite_width], c=fwhm_initial[finite_width],
+                    s=np.where(used_shape[finite_width], 9, 3), vmin=lo, vmax=hi)
+    fig.colorbar(sc, ax=ax, label="Initial FWHM [pixel]")
+    ax.set(xlabel=r"Dispersion pixel $y$", ylabel=r"Echelle order $m$",
+           title="First-pass local width measurements")
+
+    ax = axes[0, 1]
+    sc = ax.scatter(y[finite_width], order[finite_width], c=fwhm_model[finite_width],
+                    s=6, vmin=lo, vmax=hi)
+    fig.colorbar(sc, ax=ax, label="Fitted FWHM [pixel]")
+    ax.set(xlabel=r"Dispersion pixel $y$", ylabel=r"Echelle order $m$",
+           title=r"Smooth fitted FWHM$(y,m)$")
+
+    ax = axes[1, 0]
+    normalized = np.divide(
+        fwhm_initial-fwhm_model, fwhm_unc,
+        out=np.full(len(peak_table), np.nan),
+        where=np.isfinite(fwhm_unc) & (fwhm_unc > 0),
+    )
+    q = used_shape & np.isfinite(normalized)
+    ax.scatter(y[q], normalized[q], s=7)
+    ax.axhline(0, lw=0.8, ls="--")
+    ax.set(xlabel=r"Dispersion pixel $y$", ylabel=r"$(\mathrm{FWHM}_{i}-\mathrm{FWHM}_{\rm model})/\sigma_i$",
+           title="Width-model residuals used in the smooth fit")
+
+    ax = axes[1, 1]
+    orders = np.array(sorted(lsf_model.order_snr_thresholds), int)
+    thresholds = np.array([lsf_model.order_snr_thresholds[o] for o in orders], float)
+    nlines = np.array([lsf_model.order_n_shape_lines.get(o, 0) for o in orders], int)
+    ax.plot(orders, thresholds, marker="o", lw=1, label="adaptive S/N threshold")
+    ax.set(xlabel=r"Echelle order $m$", ylabel="Minimum S/N", title="LSF-training selection by order")
+    ax2 = ax.twinx()
+    ax2.plot(orders, nlines, marker=".", lw=0.8, alpha=0.65, label="shape lines")
+    ax2.set_ylabel("Number of LSF-training lines")
+
+    ax = axes[2, 0]
+    phase = np.asarray(peak_table["y_initial"], float) - np.round(np.asarray(peak_table["y_initial"], float))
+    shift = np.asarray(peak_table["lsf_y_shift"], float)
+    q = np.isfinite(phase) & np.isfinite(shift)
+    ax.scatter(phase[q], shift[q], s=5, alpha=0.45)
+    centres, p16, p50, p84 = _binned_percentiles(phase[q], shift[q], n_bins=16, minimum=5)
+    good = np.isfinite(p50)
+    if np.any(good):
+        ax.plot(centres[good], p50[good], lw=1.5)
+        ax.fill_between(centres[good], p16[good], p84[good], alpha=0.15)
+    ax.axhline(0, lw=0.8, ls="--")
+    ax.set(xlabel="Initial pixel phase", ylabel=r"Optimized $y-y_{\rm initial}$ [pixel]",
+           title="Centroid correction")
+
+    ax = axes[2, 1]
+    initial_unc = np.asarray(peak_table["y_uncertainty_initial"], float)
+    final_unc = np.asarray(peak_table["y_uncertainty"], float)
+    snr = np.asarray(peak_table["signal_to_noise"], float)
+    q = np.isfinite(initial_unc) & np.isfinite(final_unc) & np.isfinite(snr)
+    ax.scatter(snr[q], initial_unc[q], s=5, alpha=0.35, label="initial Gaussian")
+    ax.scatter(snr[q], final_unc[q], s=5, alpha=0.35, label="optimized LSF")
+    ax.set(xscale="log", yscale="log", xlabel="Line S/N", ylabel=r"$\sigma_y$ [pixel]",
+           title="Centroid uncertainty")
+    ax.legend(fontsize=8)
+
+    # Add the order-only shape parameter(s) as compact text rather than adding
+    # another panel; the fitted values are also stored line-by-line in FITS.
+    if lsf_model.shape == "moffat":
+        mgrid = np.linspace(np.nanmin(order), np.nanmax(order), 8)
+        qbeta = lsf_model.parameter("one_over_beta", mgrid)
+        shape_text = r"Moffat: fitted $1/\beta(m)$ = " + f"{np.nanmin(qbeta):.3f}--{np.nanmax(qbeta):.3f}"
+    elif lsf_model.shape == "core_wing_gaussians":
+        mgrid = np.linspace(np.nanmin(order), np.nanmax(order), 8)
+        qwing = lsf_model.parameter("wing_fraction", mgrid)
+        ratio = lsf_model.parameter("wing_sigma_ratio", mgrid)
+        shape_text = (
+            f"Core+wing: q(m)={np.nanmin(qwing):.2f}--{np.nanmax(qwing):.2f}; "
+            f"sigma_wing/sigma_core={np.nanmin(ratio):.2f}--{np.nanmax(ratio):.2f}"
+        )
+    else:
+        shape_text = "Integrated Gaussian: FWHM(y,m) only"
+
+    fig.suptitle(f"SimLC LSF optimization: {lsf_model.shape}\n{shape_text}")
+    fig.tight_layout()
+    if filename is not None:
+        _save(fig, filename)
+    elif show:
+        plt.show()
+    else:
+        plt.close(fig)
+    return filename if filename is not None else fig
+
+
+def save_simlc_fit_examples(
+    counts, orders, peak_table, lsf_model, *, filename, variance=None,
+    fit_half_width=3, maximum_examples=16,
+):
+    """Save representative first-pass and optimized SimLC line fits."""
+    from .utils import pixel_integrated_lsf
+
+    counts = np.asarray(counts, float)
+    orders = np.asarray(orders, int)
+    lookup = {int(order): i for i, order in enumerate(orders)}
+    available = (
+        np.asarray(peak_table["lsf_initial_fit_success"], bool)
+        & np.isfinite(np.asarray(peak_table["y"], float))
+        & (np.asarray(peak_table["comb_mode"], np.int64) >= 0)
+    )
+    idx = np.flatnonzero(available)
+    if len(idx) == 0:
+        return None
+    # Sort in detector/order space and choose evenly so examples span the CCD.
+    sort = np.lexsort((np.asarray(peak_table["y_initial"], float)[idx], np.asarray(peak_table["order"], int)[idx]))
+    idx = idx[sort]
+    if len(idx) > maximum_examples:
+        idx = idx[np.unique(np.linspace(0, len(idx)-1, maximum_examples).round().astype(int))]
+
+    filename = Path(filename)
+    filename.parent.mkdir(parents=True, exist_ok=True)
+    with PdfPages(filename) as pdf:
+        ncol = 2
+        nrow = 4
+        per_page = ncol*nrow
+        for start in range(0, len(idx), per_page):
+            selected = idx[start:start+per_page]
+            fig, axes = plt.subplots(nrow, ncol, figsize=(12, 11), squeeze=False)
+            for ax in axes.ravel():
+                ax.set_visible(False)
+            for ax, i in zip(axes.ravel(), selected):
+                ax.set_visible(True)
+                row = peak_table[i]
+                order = int(row["order"])
+                center_pixel = int(round(float(row["y_initial"])))
+                pix = np.arange(center_pixel-fit_half_width, center_pixel+fit_half_width+1)
+                if pix[0] < 0 or pix[-1] >= counts.shape[1] or order not in lookup:
+                    continue
+                signal = counts[lookup[order], pix]
+                ax.scatter(pix, signal, s=18, label="data")
+
+                # Free first-pass LSF fit.
+                initial_kwargs = dict(fwhm=float(row["fwhm_initial"]))
+                if lsf_model.shape == "moffat":
+                    initial_kwargs["one_over_beta"] = float(row["one_over_beta_initial"])
+                elif lsf_model.shape == "core_wing_gaussians":
+                    initial_kwargs["wing_fraction"] = float(row["wing_fraction_initial"])
+                    initial_kwargs["wing_sigma_ratio"] = float(row["wing_sigma_ratio_initial"])
+                p0 = pixel_integrated_lsf(
+                    pix-float(row["y_lsf_initial"]), lsf_model.shape, **initial_kwargs
+                )
+                yref0 = float(round(float(row["y_lsf_initial"])))
+                model0 = (
+                    float(row["lsf_background_initial"])
+                    + float(row["lsf_background_slope_initial"])*(pix-yref0)
+                    + float(row["lsf_integrated_counts_initial"])*p0
+                )
+                ax.plot(pix, model0, ls="--", lw=1.1, label="first LSF fit")
+
+                # Final centroid fit with smooth shape field.
+                final_kwargs = dict(fwhm=float(row["fwhm_model"]))
+                if lsf_model.shape == "moffat":
+                    final_kwargs["one_over_beta"] = float(row["one_over_beta_model"])
+                elif lsf_model.shape == "core_wing_gaussians":
+                    final_kwargs["wing_fraction"] = float(row["wing_fraction_model"])
+                    final_kwargs["wing_sigma_ratio"] = float(row["wing_sigma_ratio_model"])
+                pf = pixel_integrated_lsf(pix-float(row["y"]), lsf_model.shape, **final_kwargs)
+                yreff = float(round(float(row["y"])))
+                modelf = (
+                    float(row["background"])
+                    + float(row["background_slope"])*(pix-yreff)
+                    + float(row["integrated_counts"])*pf
+                )
+                ax.plot(pix, modelf, lw=1.2, label="optimized centroid")
+                ax.axvline(float(row["y_initial"]), ls=":", lw=0.8)
+                ax.axvline(float(row["y"]), ls="-.", lw=0.8)
+                ax.set_title(
+                    f"m={order}, y={float(row['y']):.3f}, S/N={float(row['signal_to_noise']):.1f}\n"
+                    f"FWHM={float(row['fwhm_model']):.3f} pix",
+                    fontsize=9,
+                )
+                ax.set(xlabel=r"Dispersion pixel $y$", ylabel="Counts")
+            axes.ravel()[0].legend(fontsize=7)
+            fig.suptitle(f"SimLC first-pass vs optimized fits: {lsf_model.shape}")
+            fig.tight_layout()
+            pdf.savefig(fig, bbox_inches="tight")
+            plt.close(fig)
+    return filename

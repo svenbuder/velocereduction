@@ -24,6 +24,8 @@ from scipy.optimize import least_squares, linear_sum_assignment
 from scipy.signal import find_peaks
 from scipy.special import ndtr
 
+from .utils import pixel_integrated_gaussian
+
 
 @dataclass
 class CalibrationLineSet:
@@ -183,25 +185,6 @@ def sum_extracted_calibration_order(
         variance = np.nansum(extracted_variance, axis=1)
 
     return counts, variance
-
-def pixel_integrated_gaussian(
-    y: np.ndarray,
-    integrated_counts: float,
-    y_center: float,
-    sigma: float,
-) -> np.ndarray:
-    """Gaussian line-spread function integrated over finite detector pixels.
-
-    This is preferable to evaluating a Gaussian only at pixel centres when
-    the calibration lines are only sampled by a few detector pixels.
-    """
-
-    y = np.asarray(y, dtype=float)
-
-    lower_edge = (y - 0.5 - y_center) / sigma
-    upper_edge = (y + 0.5 - y_center) / sigma
-
-    return integrated_counts * (ndtr(upper_edge) - ndtr(lower_edge))
 
 def calibration_line_model(
     y: np.ndarray,

@@ -38,6 +38,11 @@ from .calibration import CalibrationPeakFlag
 
 SPEED_OF_LIGHT_MPS = 299_792_458.0
 
+# Production Veloce wavelength-surface defaults.
+WAVELENGTH_Y_DEGREES = 7
+WAVELENGTH_ORDER_DEGREES = 5
+WAVELENGTH_Y_BOUNDS = (0.0, 4111.0)
+
 
 def _normalise_coordinate(values, bounds):
     """Map a detector coordinate onto the Legendre interval [-1, +1]."""
@@ -196,8 +201,8 @@ def fit_wavelength_surface(
     *,
     y_uncertainty=None,
     wavelength_uncertainty=None,
-    y_degree=4,
-    order_degree=3,
+    y_degree=WAVELENGTH_Y_DEGREES,
+    order_degree=WAVELENGTH_ORDER_DEGREES,
     y_bounds=None,
     order_bounds=None,
     max_iterations=12,
@@ -546,8 +551,8 @@ def fit_wavelength_from_peak_table(
     *,
     y_bounds: tuple[float, float],
     order_bounds: tuple[float, float],
-    y_degree: int = 4,
-    order_degree: int = 3,
+    y_degree: int = WAVELENGTH_Y_DEGREES,
+    order_degree: int = WAVELENGTH_ORDER_DEGREES,
     max_iterations: int = 12,
 ) -> tuple[WavelengthFitResult, Table]:
     """Fit a global wavelength surface from an identified calibration table."""

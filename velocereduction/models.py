@@ -245,3 +245,104 @@ class ScienceExposure:
     mode: str
     orders: list
     berv_kms: float = np.nan
+
+
+@dataclass
+class LineSpreadFunctionModel:
+    """Smooth detector-coordinate LSF model for one calibration exposure.
+
+    ``fwhm_coefficients`` stores a 2-D Legendre surface in normalized
+    dispersion coordinate and physical echelle order.  Additional dimensionless
+    shape parameters (for example ``one_over_beta`` or ``wing_fraction``) are
+    represented by one-dimensional Legendre series in order.
+    """
+    shape: str
+    fwhm_coefficients: np.ndarray
+    y_center: float
+    y_scale: float
+    order_center: float
+    order_scale: float
+    fwhm_covariance: np.ndarray | None = None
+    parameter_coefficients: dict = field(default_factory=dict)
+    parameter_covariances: dict = field(default_factory=dict)
+    order_snr_thresholds: dict = field(default_factory=dict)
+    order_n_shape_lines: dict = field(default_factory=dict)
+    reference_source: str = ""
+
+    def _coordinates(self, y, order):
+        y, order = np.broadcast_arrays(
+            np.asarray(y, dtype=float), np.asarray(order, dtype=float)
+        )
+        return (
+            (y - self.y_center) / self.y_scale,
+            (order - self.order_center) / self.order_scale,
+        )
+
+    @property
+    def fwhm_y_degree(self):
+        return int(np.asarray(self.fwhm_coefficients).shape[0] - 1)
+
+    @property
+    def fwhm_order_degree(self):
+        return int(np.asarray(self.fwhm_coefficients).shape[1] - 1)
+
+    def fwhm(self, y, order):
+        from numpy.polynomial.legendre import legval2d
+        yn, mn = self._coordinates(y, order)
+        return legval2d(yn, mn, np.asarray(self.fwhm_coefficients, float))
+
+    def fwhm_uncertainty(self, y, order):
+        if self.fwhm_covariance is None:
+            return np.full(np.broadcast(y, order).shape, np.nan, dtype=float)
+        from numpy.polynomial.legendre import legvander
+        yn, mn = self._coordinates(y, order)
+        yn = np.asarray(yn, float).ravel()
+        mn = np.asarray(mn, float).ravel()
+        yv = legvander(yn, self.fwhm_y_degree)
+        mv = legvander(mn, self.fwhm_order_degree)
+        design = np.einsum("ni,nj->nij", yv, mv).reshape(len(yn), -1)
+        cov = np.asarray(self.fwhm_covariance, float)
+        variance = np.einsum("ni,ij,nj->n", design, cov, design)
+        shape = np.broadcast(np.asarray(y), np.asarray(order)).shape
+        return np.sqrt(np.clip(variance, 0.0, None)).reshape(shape)
+
+    def parameter(self, name, order, default=np.nan):
+        coeff = self.parameter_coefficients.get(str(name))
+        if coeff is None:
+            return np.full(np.asarray(order).shape, default, dtype=float)
+        from numpy.polynomial.legendre import legval
+        order = np.asarray(order, dtype=float)
+        mn = (order - self.order_center) / self.order_scale
+        return legval(mn, np.asarray(coeff, float))
+
+    def parameter_uncertainty(self, name, order):
+        coeff = self.parameter_coefficients.get(str(name))
+        cov = self.parameter_covariances.get(str(name))
+        order = np.asarray(order, dtype=float)
+        if coeff is None or cov is None:
+            return np.full(order.shape, np.nan, dtype=float)
+        from numpy.polynomial.legendre import legvander
+        mn = ((order - self.order_center) / self.order_scale).ravel()
+        design = legvander(mn, len(np.asarray(coeff)) - 1)
+        variance = np.einsum(
+            "ni,ij,nj->n", design, np.asarray(cov, float), design
+        )
+        return np.sqrt(np.clip(variance, 0.0, None)).reshape(order.shape)
+
+    def evaluate(self, offset, y, order):
+        """Evaluate the normalized pixel-integrated LSF at one line location."""
+        from .utils import pixel_integrated_lsf
+
+        kwargs = dict(fwhm=float(np.asarray(self.fwhm(y, order))))
+        if self.shape == "moffat":
+            kwargs["one_over_beta"] = float(
+                np.asarray(self.parameter("one_over_beta", order, 0.0))
+            )
+        elif self.shape == "core_wing_gaussians":
+            kwargs["wing_fraction"] = float(
+                np.asarray(self.parameter("wing_fraction", order, 0.30))
+            )
+            kwargs["wing_sigma_ratio"] = float(
+                np.asarray(self.parameter("wing_sigma_ratio", order, 1.9))
+            )
+        return pixel_integrated_lsf(offset, self.shape, **kwargs)
