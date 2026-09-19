@@ -4,7 +4,10 @@ import logging
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.colors import TwoSlopeNorm
+from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 import numpy as np
+
+from .constants import N_DISPERSION
 
 logger = logging.getLogger(__name__)
 
@@ -957,6 +960,184 @@ def plot_lc_drift(drift_by_ccd, filename):
     ax.axhline(0, ls="--", lw=1); ax.set(xlabel="MJD", ylabel="SimLC drift / m/s", title="Laser-comb drift through the night")
     if drift_by_ccd: ax.legend()
     return _save(fig, filename)
+
+
+def plot_fibre_displacement_qa(
+    matched_lines,
+    *,
+    ccd,
+    quantity="displacement",
+    filename,
+    minimum_snr=5.0,
+    maximum_snr=100.0,
+    dpi=300,
+):
+    """Plot measured fibre displacements or post-model residuals for one CCD."""
+    ccd = str(ccd)
+
+    if quantity == "displacement":
+        value_name = "delta_y"
+        colourbar_label = r"$\Delta y = y_{\rm fibre}-y_{\rm reference}$ / px"
+        maximum = 1.0
+    elif quantity == "residual":
+        value_name = "residual_y"
+        colourbar_label = r"$\Delta y-\Delta y_{\rm model}$ / px"
+        maximum = 0.2
+    else:
+        raise ValueError("quantity must be 'displacement' or 'residual'")
+
+    data = matched_lines[np.asarray(matched_lines["ccd"], str) == ccd]
+    if len(data) == 0:
+        raise ValueError(f"No matched fibre lines are available for CCD{ccd}")
+
+    norm = TwoSlopeNorm(
+        vmin=-maximum,
+        vcenter=0.0,
+        vmax=maximum,
+    )
+
+    with plt.rc_context({
+        "font.size": 6,
+        "axes.labelsize": 6,
+        "xtick.labelsize": 4,
+        "ytick.labelsize": 4,
+    }):
+        fig, axes = plt.subplots(
+            5,
+            4,
+            figsize=(9 / 2.54, 12 / 2.54),
+            sharex=True,
+            sharey=True,
+        )
+        axes = axes.ravel()
+
+        fig.subplots_adjust(
+            left=0.12,
+            right=0.98,
+            bottom=0.08,
+            top=0.88,
+            wspace=0.08,
+            hspace=0.08,
+        )
+
+        # --------------------------------------------------------------
+        # Top-left: summed-spectrum S/N as black points (size only)
+        # --------------------------------------------------------------
+
+        peak_id = np.asarray(data["summed_peak_id"], int)
+        _, first = np.unique(peak_id, return_index=True)
+        summed = data[np.sort(first)]
+
+        summed_snr = np.asarray(summed["summed_signal_to_noise"], float)
+        good_summed = np.isfinite(summed_snr) & (summed_snr >= minimum_snr)
+
+        ax = axes[0]
+        ax.scatter(
+            np.asarray(summed["y_reference"], float)[good_summed],
+            np.asarray(summed["order"], float)[good_summed],
+            s=0.01 * np.clip(
+                summed_snr[good_summed],
+                minimum_snr,
+                maximum_snr,
+            ),
+            color="black",
+            alpha=0.8,
+            lw = 0,
+            rasterized=True,
+        )
+
+        ax.text(
+            0.5,
+            0.95,
+            "Summed",
+            fontsize=6,
+            transform=ax.transAxes,
+            va="top",
+            ha="center",
+            bbox=dict(boxstyle="round", facecolor="white", edgecolor="none", alpha=0.5, pad=0.0)
+        )
+
+        # --------------------------------------------------------------
+        # Remaining 19 panels: fibres
+        # --------------------------------------------------------------
+
+        scatter = None
+
+        for ax, fibre in zip(axes[1:], range(1, 20)):
+            fibre_data = data[np.asarray(data["fibre"], int) == fibre]
+
+            fibre_values = np.asarray(fibre_data[value_name], float)
+            fibre_snr = np.asarray(fibre_data["signal_to_noise"], float)
+
+            scatter = ax.scatter(
+                np.asarray(fibre_data["y_reference"], float),
+                np.asarray(fibre_data["order"], float),
+                c=fibre_values,
+                s=0.1 * np.clip(
+                    fibre_snr,
+                    minimum_snr,
+                    maximum_snr,
+                ),
+                lw = 0,
+                cmap="coolwarm",
+                norm=norm,
+                rasterized=True,
+            )
+
+            rms = (
+                float(np.sqrt(np.nanmean(fibre_values**2)))
+                if np.any(np.isfinite(fibre_values))
+                else np.nan
+            )
+
+            ax.text(
+                0.5,
+                0.95,
+                f"Fibre {fibre}\nRMS = {rms:.3f} px",
+                fontsize=6,
+                transform=ax.transAxes,
+                va="top",
+                ha="center"
+            )
+
+            ax.set_xlim(-5, N_DISPERSION - 1 + 5)
+            ax.set_xticks([0,2055.5,4111])
+
+        # --------------------------------------------------------------
+        # Shared colourbar across the top of the full figure
+        # --------------------------------------------------------------
+
+        if scatter is not None:
+            cax = fig.add_axes([0.24, 0.945, 0.56, 0.018])
+            cbar = fig.colorbar(
+                scatter,
+                cax=cax,
+                orientation="horizontal",
+            )
+            cbar.set_label(colourbar_label, fontsize=6, labelpad=2)
+            cbar.ax.tick_params(labelsize=6, pad=1)
+
+        # --------------------------------------------------------------
+        # Axis labels only at outer edges
+        # --------------------------------------------------------------
+
+        for row in range(5):
+            axes[4 * row].set_ylabel("Order", fontsize=7)
+
+        for ax in axes[-4:]:
+            ax.set_xlabel(r"Dispersion $y$", fontsize=7)
+
+        filename = Path(filename)
+        filename.parent.mkdir(parents=True, exist_ok=True)
+
+        fig.savefig(
+            filename,
+            dpi=dpi,
+            bbox_inches="tight",
+        )
+        plt.close(fig)
+
+    return filename
 
 
 def plot_fibre_wavelength_offsets(offsets_by_ccd, filename):

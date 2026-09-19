@@ -16,6 +16,7 @@ class ReductionConfig:
     use_poisson_variance: bool = True
     gain_file: str | Path | None = None
     reference_night: str = REFERENCE_NIGHT
+    fibre_displacement_reference_night: str | None = None
     flat_smooth_sigma: float = 50.0
     fibre_sample_step: int = 16
     fibre_sample_half_width: int = 4
@@ -26,6 +27,12 @@ class ReductionConfig:
             value = getattr(self, name)
             if len(value) != 6 or not value.isdigit():
                 raise ValueError(f"{name} must be a six-digit YYMMDD string")
+        if self.fibre_displacement_reference_night is not None:
+            value = self.fibre_displacement_reference_night
+            if len(value) != 6 or not value.isdigit():
+                raise ValueError(
+                    "fibre_displacement_reference_night must be a six-digit YYMMDD string"
+                )
         if self.log_level not in {"DEBUG", "INFO", "WARNING", "ERROR"}:
             raise ValueError(f"Unknown log level: {self.log_level}")
         if self.diagnostics not in {"none", "basic", "full"}:

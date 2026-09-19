@@ -22,7 +22,10 @@ from .calibration import (
     _refresh_used_for_wavelength_fit,
     calibration_quality_summary,
     measure_calibration_peaks,
+    read_calibration_line_fits,
+    write_calibration_line_fits,
 )
+from .constants import SCIENCE_FIBRES
 
 def load_murphy_thorium_atlas(filename: str | Path) -> Table:
     """Read the Murphy UVES ThAr atlas and retain only thorium lines.
@@ -331,6 +334,59 @@ def measure_thorium_lines(
     if "fwhm_uncertainty_pixel" not in lines.colnames:
         lines["fwhm_uncertainty_pixel"] = np.asarray(lines["fwhm_uncertainty"], dtype=float)
     return CalibrationLineSet(lines, source, calibration_shift_y)
+
+
+def ensure_fibth_fibre_lines(
+    exposure,
+    *,
+    ccd,
+    night,
+    output_directory,
+    thorium_atlas,
+    reference_wavelength_function,
+    exposure_index=0,
+    overwrite=False,
+    log_level="INFO",
+    minimum_reference_intensity=1.5,
+):
+    """Load or measure FibTh lines for all 19 extracted science fibres."""
+    output_directory = Path(output_directory)
+    output_directory.mkdir(parents=True, exist_ok=True)
+    if exposure.fibre_flux is None or exposure.fibre_variance is None:
+        raise ValueError("The FibTh exposure has no per-fibre extraction")
+
+    results = {}
+    for fibre_index, fibre in enumerate(SCIENCE_FIBRES):
+        fibre = int(fibre)
+        filename = output_directory / f"fibth_fibre{fibre:+03d}_{night}_ccd{ccd}.fits"
+        result = None
+        if filename.exists() and not overwrite:
+            try:
+                result = read_calibration_line_fits(filename)
+            except Exception as error:
+                print(f"Could not read {filename.name} ({error}); remeasuring")
+
+        if result is None:
+            result = measure_thorium_lines(
+                np.asarray(exposure.fibre_flux[:, :, fibre_index], dtype=float).T,
+                exposure.orders,
+                thorium_atlas,
+                variance=np.asarray(exposure.fibre_variance[:, :, fibre_index], dtype=float).T,
+                source="FibTh",
+                ccd=str(ccd),
+                exposure_index=int(exposure_index),
+                mjd_mid=exposure.mjd_mid,
+                fibre=fibre,
+                reference_wavelength_function=reference_wavelength_function,
+                detector_shift_y=0.0,
+                minimum_reference_intensity=minimum_reference_intensity,
+                diagnostics="none",
+                log_level=log_level,
+            )
+            write_calibration_line_fits(result, filename, overwrite=True)
+
+        results[fibre] = result
+    return results
 
 
 # Backwards-compatible name while the notebooks are migrated.

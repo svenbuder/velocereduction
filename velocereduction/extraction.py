@@ -151,6 +151,96 @@ def recombine_fibres(result, components=SCIENCE_FIBRES):
     return flux, variance
 
 
+def _reference_pixel_overlaps(left, right, n_output):
+    """Return output-pixel overlap fractions for one transformed source pixel."""
+    lo, hi = sorted((float(left), float(right)))
+    width = hi - lo
+    if not np.isfinite(width) or width <= 0:
+        return []
+    first = max(0, int(np.floor(lo + 0.5)))
+    last = min(int(n_output) - 1, int(np.floor(hi + 0.5)))
+    result = []
+    for pixel in range(first, last + 1):
+        overlap = max(0.0, min(hi, pixel + 0.5) - max(lo, pixel - 0.5))
+        if overlap > 0:
+            result.append((pixel, overlap / width))
+    return result
+
+
+def recombine_fibres_on_reference_grid(
+    result,
+    fibre_displacement_model,
+    *,
+    ccd,
+    order,
+    components=SCIENCE_FIBRES,
+    n_output=None,
+):
+    """Flux-conservingly align and recombine fibres on the summed-FibTh grid.
+
+    The native extracted spectra remain untouched.  This is the single
+    interpolation/resampling step used when a recombined spectrum is requested.
+    Same-row inter-fibre extraction covariance is propagated when available.
+    """
+    idx = result.component_indices(components)
+    fibres = tuple(int(value) for value in components)
+    flux = np.asarray(result.flux[:, idx], float)
+    variance = np.asarray(result.variance[:, idx], float)
+    n_dispersion = flux.shape[0]
+    n_output = n_dispersion if n_output is None else int(n_output)
+    output_flux = np.zeros(n_output, dtype=float)
+    output_variance = np.zeros(n_output, dtype=float)
+    output_weight = np.zeros(n_output, dtype=float)
+
+    edge = np.arange(n_dispersion + 1, dtype=float) - 0.5
+    overlaps = [[None] * n_dispersion for _ in fibres]
+    for local_fibre, fibre in enumerate(fibres):
+        reference_edge = fibre_displacement_model.fibre_to_reference_y(
+            str(ccd), fibre, edge, int(order)
+        )
+        for pixel in range(n_dispersion):
+            overlaps[local_fibre][pixel] = _reference_pixel_overlaps(
+                reference_edge[pixel], reference_edge[pixel + 1], n_output
+            )
+            if not np.isfinite(flux[pixel, local_fibre]):
+                continue
+            for output_pixel, weight in overlaps[local_fibre][pixel]:
+                output_flux[output_pixel] += weight * flux[pixel, local_fibre]
+                output_weight[output_pixel] += weight
+
+    covariance = None
+    if result.covariance is not None:
+        covariance = np.asarray(result.covariance[:, idx][:, :, idx], float)
+
+    for pixel in range(n_dispersion):
+        per_output = {}
+        for local_fibre in range(len(fibres)):
+            if not np.isfinite(flux[pixel, local_fibre]):
+                continue
+            for output_pixel, weight in overlaps[local_fibre][pixel]:
+                per_output.setdefault(
+                    output_pixel, np.zeros(len(fibres), float)
+                )[local_fibre] = weight
+        for output_pixel, weight_vector in per_output.items():
+            if covariance is None:
+                good = np.isfinite(variance[pixel])
+                output_variance[output_pixel] += np.nansum(
+                    variance[pixel, good] * weight_vector[good] ** 2
+                )
+            else:
+                local_covariance = np.where(
+                    np.isfinite(covariance[pixel]), covariance[pixel], 0.0
+                )
+                output_variance[output_pixel] += float(
+                    weight_vector @ local_covariance @ weight_vector
+                )
+
+    empty = output_weight == 0
+    output_flux[empty] = np.nan
+    output_variance[empty] = np.nan
+    return output_flux, output_variance
+
+
 def fibre_recombination_qa(summed, fibre, summed_component="Science"):
     """Compare direct summed flux with independently recombined science fibres."""
     summed_flux = summed.flux[:, summed.component_indices([summed_component])[0]]

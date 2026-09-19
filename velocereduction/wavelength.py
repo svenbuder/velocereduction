@@ -34,6 +34,7 @@ from astropy.table import Table
 from numpy.polynomial.legendre import legder, legval2d, legvander
 
 from .calibration import CalibrationPeakFlag
+from .constants import CCD_ORDERS, N_DISPERSION, SCIENCE_FIBRES
 
 
 SPEED_OF_LIGHT_MPS = 299_792_458.0
@@ -41,7 +42,27 @@ SPEED_OF_LIGHT_MPS = 299_792_458.0
 # Production Veloce wavelength-surface defaults.
 WAVELENGTH_Y_DEGREES = 7
 WAVELENGTH_ORDER_DEGREES = 5
-WAVELENGTH_Y_BOUNDS = (0.0, 4111.0)
+WAVELENGTH_Y_BOUNDS = (0.0, float(N_DISPERSION - 1))
+
+
+def _full_order_bounds(order):
+    """Return the full physical order range of the CCD containing ``order``."""
+    values = np.asarray(order, dtype=float)
+    finite = values[np.isfinite(values)]
+    if len(finite) == 0:
+        raise ValueError("Cannot infer CCD order bounds from an empty order array")
+    lower, upper = float(np.nanmin(finite)), float(np.nanmax(finite))
+    matches = []
+    for ccd, ccd_orders in CCD_ORDERS.items():
+        lo, hi = float(np.min(ccd_orders)), float(np.max(ccd_orders))
+        if lower >= lo and upper <= hi:
+            matches.append((ccd, (lo, hi)))
+    if len(matches) != 1:
+        raise ValueError(
+            "Could not uniquely infer a Veloce CCD from order range "
+            f"[{lower:g}, {upper:g}]"
+        )
+    return matches[0][1]
 
 
 def _normalise_coordinate(values, bounds):
@@ -284,16 +305,10 @@ def fit_wavelength_surface(
         raise ValueError("No finite calibration lines were supplied")
 
     if y_bounds is None:
-        y_bounds = (
-            float(np.nanmin(y[finite])),
-            float(np.nanmax(y[finite])),
-        )
+        y_bounds = WAVELENGTH_Y_BOUNDS
 
     if order_bounds is None:
-        order_bounds = (
-            float(np.nanmin(order[finite])),
-            float(np.nanmax(order[finite])),
-        )
+        order_bounds = _full_order_bounds(order[finite])
 
     y_normalised, y_center, y_scale = _normalise_coordinate(
         y,
@@ -549,8 +564,8 @@ def fit_wavelength_surface(
 def fit_wavelength_from_peak_table(
     peak_table: Table,
     *,
-    y_bounds: tuple[float, float],
-    order_bounds: tuple[float, float],
+    y_bounds: tuple[float, float] | None = None,
+    order_bounds: tuple[float, float] | None = None,
     y_degree: int = WAVELENGTH_Y_DEGREES,
     order_degree: int = WAVELENGTH_ORDER_DEGREES,
     max_iterations: int = 12,
@@ -1062,8 +1077,8 @@ def make_surface_cv_folds(
 def cross_validate_wavelength_surface(
     peak_table,
     *,
-    y_bounds,
-    order_bounds,
+    y_bounds=None,
+    order_bounds=None,
     y_degrees=range(3, 13),
     order_degrees=range(1, 9),
     n_folds=5,
@@ -1088,6 +1103,10 @@ def cross_validate_wavelength_surface(
     y = np.asarray(peak_table["y"][indices], dtype=float)
     order = np.asarray(peak_table["order"][indices], dtype=float)
     wavelength = np.asarray(peak_table["wavelength_nm"][indices], dtype=float)
+    if y_bounds is None:
+        y_bounds = WAVELENGTH_Y_BOUNDS
+    if order_bounds is None:
+        order_bounds = _full_order_bounds(order)
     y_uncertainty = np.asarray(peak_table["y_uncertainty"][indices], dtype=float)
     wavelength_uncertainty = np.asarray(
         peak_table["wavelength_uncertainty_nm"][indices], dtype=float
@@ -1239,8 +1258,8 @@ def select_wavelength_surface_degree(validation_table):
 def fit_validated_wavelength_from_peak_table(
     peak_table,
     *,
-    y_bounds,
-    order_bounds,
+    y_bounds=None,
+    order_bounds=None,
     y_degrees=range(3, 13),
     order_degrees=range(1, 9),
     n_folds=5,
@@ -1325,7 +1344,7 @@ def fit_shift_surface(
     shift_uncertainty=None,
     y_degree=2,
     order_degree=1,
-    y_bounds=(0.0, 4111.0),
+    y_bounds=WAVELENGTH_Y_BOUNDS,
     order_bounds=None,
     max_iterations=10,
     huber_k=1.5,
@@ -1475,8 +1494,8 @@ def fit_shift_from_peak_table(
     peak_table: Table,
     reference_solution: WavelengthSolution,
     *,
-    y_bounds,
-    order_bounds,
+    y_bounds=None,
+    order_bounds=None,
     y_degree=2,
     order_degree=1,
     max_iterations=10,
@@ -1493,6 +1512,10 @@ def fit_shift_from_peak_table(
 
     y_measured = np.asarray(table["y"][indices], dtype=float)
     order = np.asarray(table["order"][indices], dtype=int)
+    if y_bounds is None:
+        y_bounds = WAVELENGTH_Y_BOUNDS
+    if order_bounds is None:
+        order_bounds = _full_order_bounds(order)
     wave = np.asarray(table["wavelength_nm"][indices], dtype=float)
     y_reference = reference_y_from_wavelength(
         reference_solution, wave, order, y_bounds=y_bounds
@@ -1537,8 +1560,8 @@ def build_hybrid_static_peak_table(
     simlc_lines,
     preliminary_solution: WavelengthSolution,
     *,
-    y_bounds,
-    order_bounds,
+    y_bounds=None,
+    order_bounds=None,
     transfer_y_degree=2,
     transfer_order_degree=1,
 ):
@@ -1582,95 +1605,683 @@ def build_hybrid_static_peak_table(
 
 
 @dataclass
-class FibreShiftModel:
-    """Per-fibre differential shift surfaces relative to the summed solution."""
+class FibreDisplacementModel:
+    """Joint fibre-to-summed-FibTh displacement model for all three CCDs.
 
-    surfaces: dict[int, PixelShiftSurface]
+    The sign convention is ``delta_y = y_fibre - y_reference``, where
+    ``y_reference`` is the summed-FibTh detector coordinate.  Fibre-mode
+    amplitudes are shared across CCDs while each mode has a separate smooth
+    Legendre surface on each CCD.
+    """
+
+    fibres: np.ndarray
+    fibre_modes: np.ndarray
+    offsets: dict[str, np.ndarray]
+    surface_coefficients: dict[str, np.ndarray]
+    y_center: dict[str, float]
+    y_scale: dict[str, float]
+    order_center: dict[str, float]
+    order_scale: dict[str, float]
+    degree: int = 4
+    reference_night: str = ""
+    fit_rms_pixel: dict[str, float] | None = None
+    fit_n_lines: dict[str, int] | None = None
+
+    def __post_init__(self):
+        self.fibres = np.asarray(self.fibres, dtype=int)
+        self.fibre_modes = np.asarray(self.fibre_modes, dtype=float)
+        if self.fibre_modes.ndim != 2 or self.fibre_modes.shape[0] != len(self.fibres):
+            raise ValueError("fibre_modes must have shape (n_fibres, rank)")
+        for ccd in self.surface_coefficients:
+            ccd = str(ccd)
+            coeff = np.asarray(self.surface_coefficients[ccd], dtype=float)
+            expected = (self.rank, self.degree + 1, self.degree + 1)
+            if coeff.shape != expected:
+                raise ValueError(f"CCD{ccd} coefficient shape {coeff.shape}; expected {expected}")
+            self.surface_coefficients[ccd] = coeff
+            self.offsets[ccd] = np.asarray(self.offsets[ccd], dtype=float)
 
     @property
-    def fibres(self):
-        return np.asarray(sorted(self.surfaces), dtype=int)
+    def rank(self):
+        return int(self.fibre_modes.shape[1])
 
-    def shift(self, y, order, fibre):
-        fibre = int(fibre)
-        if fibre in self.surfaces:
-            return self.surfaces[fibre].shift(y, order)
+    def _fibre_index(self, fibre):
+        match = np.flatnonzero(self.fibres == int(fibre))
+        if len(match) != 1:
+            raise KeyError(f"Fibre {fibre} is not present in the displacement model")
+        return int(match[0])
 
-        fibres = self.fibres
-        if len(fibres) == 0:
-            return np.zeros(np.broadcast(np.asarray(y), np.asarray(order)).shape)
-        if len(fibres) == 1:
-            return self.surfaces[int(fibres[0])].shift(y, order)
-
-        # Numeric slit labels allow smooth interpolation/extrapolation to sky
-        # fibres that were not illuminated by FibTh.
-        if fibre <= fibres[0]:
-            lo, hi = fibres[:2]
-        elif fibre >= fibres[-1]:
-            lo, hi = fibres[-2:]
-        else:
-            hi_index = int(np.searchsorted(fibres, fibre))
-            lo, hi = fibres[hi_index - 1], fibres[hi_index]
-        weight = (fibre - lo) / (hi - lo)
+    def _normalised_coordinates(self, ccd, y_reference, order):
+        ccd = str(ccd)
+        y_reference, order = np.broadcast_arrays(
+            np.asarray(y_reference, dtype=float), np.asarray(order, dtype=float)
+        )
         return (
-            (1.0 - weight) * self.surfaces[int(lo)].shift(y, order)
-            + weight * self.surfaces[int(hi)].shift(y, order)
+            (y_reference - self.y_center[ccd]) / self.y_scale[ccd],
+            (order - self.order_center[ccd]) / self.order_scale[ccd],
         )
 
+    def displacement(self, ccd, fibre, y_reference, order):
+        """Evaluate ``y_fibre - y_reference`` in detector pixels."""
+        ccd = str(ccd)
+        fibre_index = self._fibre_index(fibre)
+        y_normalised, order_normalised = self._normalised_coordinates(ccd, y_reference, order)
+        result = np.full(
+            np.broadcast(y_normalised, order_normalised).shape,
+            self.offsets[ccd][fibre_index],
+            dtype=float,
+        )
+        for mode in range(self.rank):
+            result += self.fibre_modes[fibre_index, mode] * legval2d(
+                y_normalised,
+                order_normalised,
+                self.surface_coefficients[ccd][mode],
+            )
+        return result
 
-def fit_fibre_corrections(
-    fibre_line_sets: dict[int, object],
-    static_solution: WavelengthSolution,
+    def fibre_to_reference_y(
+        self,
+        ccd,
+        fibre,
+        y_fibre,
+        order,
+        *,
+        fixed_point_iterations=3,
+    ):
+        """Map native fibre pixels onto the summed-FibTh reference coordinate."""
+        y_fibre, order = np.broadcast_arrays(
+            np.asarray(y_fibre, dtype=float), np.asarray(order, dtype=float)
+        )
+        y_reference = y_fibre.copy()
+        for _ in range(max(1, int(fixed_point_iterations))):
+            y_reference = y_fibre - self.displacement(ccd, fibre, y_reference, order)
+        return y_reference
+
+
+def _fibre_legendre_terms(degree):
+    return [
+        (iy, total_degree - iy)
+        for total_degree in range(1, int(degree) + 1)
+        for iy in range(total_degree, -1, -1)
+    ]
+
+
+def _fibre_legendre_basis(y_reference, order, ccd, degree):
+    """Total-degree Legendre basis excluding the constant term."""
+    ccd = str(ccd)
+    y_reference = np.asarray(y_reference, dtype=float)
+    order = np.asarray(order, dtype=float)
+    y_center = 0.5 * (N_DISPERSION - 1)
+    y_scale = 0.5 * (N_DISPERSION - 1)
+    order_values = np.asarray(CCD_ORDERS[ccd], dtype=float)
+    order_center = 0.5 * (np.min(order_values) + np.max(order_values))
+    order_scale = 0.5 * (np.max(order_values) - np.min(order_values))
+    yn = (y_reference - y_center) / y_scale
+    mn = (order - order_center) / order_scale
+    y_basis = legvander(yn, degree)
+    order_basis = legvander(mn, degree)
+    terms = _fibre_legendre_terms(degree)
+    design = np.column_stack([
+        y_basis[:, iy] * order_basis[:, im] for iy, im in terms
+    ])
+    return design, terms, y_center, y_scale, order_center, order_scale
+
+
+def match_fibre_lines_to_summed(
+    summed_lines,
+    fibre_line_sets,
     *,
-    y_bounds,
-    order_bounds,
-    y_degree=2,
-    order_degree=1,
+    ccd,
+    maximum_y_difference=1.0,
+    minimum_snr=5.0,
+    maximum_snr=100.0,
 ):
-    """Fit one low-order differential shift surface for each science fibre."""
+    """Match fibre FibTh peaks directly to measured summed-FibTh peaks."""
+    summed = _line_table(summed_lines)
+    rows = []
+    summed_order = np.asarray(summed["order"], dtype=int)
+    for fibre, value in sorted(fibre_line_sets.items()):
+        fibre_lines = _line_table(value)
+        fibre_order = np.asarray(fibre_lines["order"], dtype=int)
+        fibre_snr = np.asarray(fibre_lines["signal_to_noise"], dtype=float)
+        good_fibre = (
+            np.isfinite(np.asarray(fibre_lines["y"], dtype=float))
+            & np.isfinite(fibre_snr)
+            & (fibre_snr >= float(minimum_snr))
+            & (fibre_snr <= float(maximum_snr))
+        )
+        if "fit_success" in fibre_lines.colnames:
+            good_fibre &= np.asarray(fibre_lines["fit_success"], dtype=bool)
 
-    surfaces = {}
-    diagnostics = []
-    fitted_tables = {}
-    for fibre, value in fibre_line_sets.items():
-        try:
-            result, table = fit_shift_from_peak_table(
-                _line_table(value),
-                static_solution,
-                y_bounds=y_bounds,
-                order_bounds=order_bounds,
-                y_degree=y_degree,
-                order_degree=order_degree,
-            )
-        except (ValueError, RuntimeError) as error:
-            diagnostics.append(
-                dict(
+        for order_value in np.intersect1d(np.unique(summed_order), np.unique(fibre_order)):
+            summed_index = np.flatnonzero(summed_order == int(order_value))
+            fibre_index = np.flatnonzero((fibre_order == int(order_value)) & good_fibre)
+            if not len(summed_index) or not len(fibre_index):
+                continue
+            y_reference = np.asarray(summed["y"][summed_index], dtype=float)
+            y_fibre = np.asarray(fibre_lines["y"][fibre_index], dtype=float)
+            distance = np.abs(y_reference[:, None] - y_fibre[None, :])
+            candidates = np.argwhere(distance < float(maximum_y_difference))
+            if len(candidates) == 0:
+                continue
+            candidates = candidates[np.argsort(distance[candidates[:, 0], candidates[:, 1]])]
+            used_reference, used_fibre = set(), set()
+            for reference_local, fibre_local in candidates:
+                reference_local, fibre_local = int(reference_local), int(fibre_local)
+                if reference_local in used_reference or fibre_local in used_fibre:
+                    continue
+                used_reference.add(reference_local)
+                used_fibre.add(fibre_local)
+                si = int(summed_index[reference_local])
+                fi = int(fibre_index[fibre_local])
+                yr = float(summed["y"][si])
+                yf = float(fibre_lines["y"][fi])
+                rows.append(dict(
+                    ccd=str(ccd),
                     fibre=int(fibre),
-                    success=False,
-                    n_lines=len(_line_table(value)),
-                    n_used=0,
-                    rms_pixel=np.nan,
-                    message=str(error),
-                )
-            )
-            continue
+                    order=int(order_value),
+                    summed_peak_id=int(summed["peak_id"][si]),
+                    fibre_peak_id=int(fibre_lines["peak_id"][fi]),
+                    y_reference=yr,
+                    y_fibre=yf,
+                    delta_y=yf - yr,
+                    signal_to_noise=float(fibre_lines["signal_to_noise"][fi]),
+                    summed_signal_to_noise=float(summed["signal_to_noise"][si]),
+                    y_uncertainty_fibre=float(fibre_lines["y_uncertainty"][fi]),
+                    y_uncertainty_summed=float(summed["y_uncertainty"][si]),
+                ))
+    return Table(rows=rows)
 
-        surfaces[int(fibre)] = result.surface
-        fitted_tables[int(fibre)] = table
-        diagnostics.append(
-            dict(
-                fibre=int(fibre),
-                success=True,
-                n_lines=len(result.used),
-                n_used=int(np.count_nonzero(result.used)),
-                rms_pixel=float(np.sqrt(np.nanmean(result.residual_pixel[result.used] ** 2))),
-                message="",
+
+def _initial_fibre_modes(matched_lines, fibres, rank, degree, used):
+    terms = _fibre_legendre_terms(degree)
+    n_terms = len(terms)
+    features = np.zeros((len(fibres), 3 * n_terms), dtype=float)
+    ccd_values = np.asarray(matched_lines["ccd"], dtype=str)
+    fibre_values = np.asarray(matched_lines["fibre"], dtype=int)
+    delta_y = np.asarray(matched_lines["delta_y"], dtype=float)
+    for ccd_index, ccd in enumerate(("1", "2", "3")):
+        for fibre_index, fibre in enumerate(fibres):
+            select = used & (ccd_values == ccd) & (fibre_values == int(fibre))
+            if np.count_nonzero(select) <= n_terms + 1:
+                continue
+            basis, _, *_ = _fibre_legendre_basis(
+                np.asarray(matched_lines["y_reference"], float)[select],
+                np.asarray(matched_lines["order"], float)[select],
+                ccd,
+                degree,
             )
+            design = np.column_stack((np.ones(np.count_nonzero(select)), basis))
+            coefficients, *_ = np.linalg.lstsq(design, delta_y[select], rcond=None)
+            lo, hi = ccd_index * n_terms, (ccd_index + 1) * n_terms
+            features[fibre_index, lo:hi] = coefficients[1:]
+    features -= np.mean(features, axis=0, keepdims=True)
+    u, _, _ = np.linalg.svd(features, full_matrices=False)
+    if u.shape[1] < rank:
+        raise RuntimeError("Could not initialise the requested fibre-displacement rank")
+    return u[:, :rank]
+
+
+def _fit_fibre_displacement_once(
+    matched_lines,
+    *,
+    fibres,
+    rank,
+    degree,
+    used,
+    initial_fibre_modes=None,
+    max_iterations=30,
+):
+    fibres = np.asarray(fibres, dtype=int)
+    fibre_modes = (
+        _initial_fibre_modes(matched_lines, fibres, rank, degree, used)
+        if initial_fibre_modes is None
+        else np.asarray(initial_fibre_modes, dtype=float).copy()
+    )
+    fibre_modes, _ = np.linalg.qr(fibre_modes)
+    fibre_modes = fibre_modes[:, :rank]
+    fibre_lookup = {int(f): i for i, f in enumerate(fibres)}
+
+    ccd_values = np.asarray(matched_lines["ccd"], dtype=str)
+    fibre_values = np.asarray(matched_lines["fibre"], dtype=int)
+    y_reference = np.asarray(matched_lines["y_reference"], dtype=float)
+    order = np.asarray(matched_lines["order"], dtype=float)
+    delta_y = np.asarray(matched_lines["delta_y"], dtype=float)
+    terms = _fibre_legendre_terms(degree)
+    n_terms = len(terms)
+    surfaces = {ccd: np.zeros((rank, n_terms), dtype=float) for ccd in ("1", "2", "3")}
+    offsets = {ccd: np.zeros(len(fibres), dtype=float) for ccd in ("1", "2", "3")}
+
+    previous_rms = np.inf
+    for _ in range(int(max_iterations)):
+        for ccd in ("1", "2", "3"):
+            rows = np.flatnonzero(used & (ccd_values == ccd))
+            if len(rows) == 0:
+                continue
+            basis, _, *_ = _fibre_legendre_basis(y_reference[rows], order[rows], ccd, degree)
+            fibre_index = np.array([fibre_lookup[int(f)] for f in fibre_values[rows]])
+            offset_design = np.zeros((len(rows), len(fibres)), dtype=float)
+            offset_design[np.arange(len(rows)), fibre_index] = 1.0
+            mode_design = np.hstack([
+                fibre_modes[fibre_index, mode, None] * basis for mode in range(rank)
+            ])
+            coefficients, *_ = np.linalg.lstsq(
+                np.hstack((offset_design, mode_design)), delta_y[rows], rcond=None
+            )
+            offsets[ccd] = coefficients[:len(fibres)]
+            surfaces[ccd] = coefficients[len(fibres):].reshape(rank, n_terms)
+
+        new_modes = np.zeros_like(fibre_modes)
+        new_offsets = {ccd: offsets[ccd].copy() for ccd in offsets}
+        for fibre_index, fibre in enumerate(fibres):
+            rows = np.flatnonzero(used & (fibre_values == int(fibre)))
+            if len(rows) == 0:
+                continue
+            intercept = np.zeros((len(rows), 3), dtype=float)
+            mode_value = np.zeros((len(rows), rank), dtype=float)
+            for ccd_index, ccd in enumerate(("1", "2", "3")):
+                local = np.flatnonzero(ccd_values[rows] == ccd)
+                if not len(local):
+                    continue
+                intercept[local, ccd_index] = 1.0
+                basis, _, *_ = _fibre_legendre_basis(
+                    y_reference[rows[local]], order[rows[local]], ccd, degree
+                )
+                mode_value[local] = basis @ surfaces[ccd].T
+            coefficients, *_ = np.linalg.lstsq(
+                np.hstack((intercept, mode_value)), delta_y[rows], rcond=None
+            )
+            for ccd_index, ccd in enumerate(("1", "2", "3")):
+                new_offsets[ccd][fibre_index] = coefficients[ccd_index]
+            new_modes[fibre_index] = coefficients[3:]
+
+        q, r = np.linalg.qr(new_modes)
+        q, r = q[:, :rank], r[:rank, :rank]
+        for mode in range(rank):
+            pivot = int(np.argmax(np.abs(q[:, mode])))
+            if q[pivot, mode] < 0:
+                q[:, mode] *= -1.0
+                r[mode, :] *= -1.0
+        fibre_modes = q
+        offsets = new_offsets
+        for ccd in surfaces:
+            surfaces[ccd] = r @ surfaces[ccd]
+
+        prediction = np.full(len(matched_lines), np.nan, dtype=float)
+        for ccd in ("1", "2", "3"):
+            rows = np.flatnonzero(used & (ccd_values == ccd))
+            if not len(rows):
+                continue
+            basis, _, *_ = _fibre_legendre_basis(y_reference[rows], order[rows], ccd, degree)
+            fibre_index = np.array([fibre_lookup[int(f)] for f in fibre_values[rows]])
+            prediction[rows] = offsets[ccd][fibre_index] + np.sum(
+                fibre_modes[fibre_index] * (basis @ surfaces[ccd].T), axis=1
+            )
+        rms = float(np.sqrt(np.nanmean((delta_y[used] - prediction[used]) ** 2)))
+        if abs(previous_rms - rms) < 1e-10:
+            break
+        previous_rms = rms
+
+    coefficient_matrices = {}
+    for ccd in ("1", "2", "3"):
+        matrix = np.zeros((rank, degree + 1, degree + 1), dtype=float)
+        for term_index, (iy, im) in enumerate(terms):
+            matrix[:, iy, im] = surfaces[ccd][:, term_index]
+        coefficient_matrices[ccd] = matrix
+    return fibre_modes, offsets, coefficient_matrices
+
+
+def _canonicalise_fibre_displacement_modes(
+    fibre_modes,
+    surface_coefficients,
+    matched_lines,
+    used,
+):
+    """Fix the rank-space rotation/order/sign for reproducible saved modes."""
+    fibre_modes = np.asarray(fibre_modes, dtype=float).copy()
+    rank = fibre_modes.shape[1]
+    mode_values = np.zeros((np.count_nonzero(used), rank), dtype=float)
+    used_rows = np.flatnonzero(used)
+    row_lookup = {int(row): i for i, row in enumerate(used_rows)}
+    ccd_values = np.asarray(matched_lines["ccd"], str)
+    y_reference = np.asarray(matched_lines["y_reference"], float)
+    order = np.asarray(matched_lines["order"], float)
+
+    for ccd in ("1", "2", "3"):
+        rows = np.flatnonzero(used & (ccd_values == ccd))
+        if not len(rows):
+            continue
+        order_values = np.asarray(CCD_ORDERS[ccd], float)
+        yn = (y_reference[rows] - 0.5 * (N_DISPERSION - 1)) / (0.5 * (N_DISPERSION - 1))
+        mn = (order[rows] - 0.5 * (order_values.min() + order_values.max())) / (0.5 * (order_values.max() - order_values.min()))
+        for mode in range(rank):
+            values = legval2d(yn, mn, surface_coefficients[ccd][mode])
+            mode_values[[row_lookup[int(row)] for row in rows], mode] = values
+
+    gram = mode_values.T @ mode_values
+    eigenvalue, rotation = np.linalg.eigh(gram)
+    rotation = rotation[:, np.argsort(eigenvalue)[::-1]]
+    fibre_modes = fibre_modes @ rotation
+    surface_coefficients = {
+        ccd: np.einsum("ab,bij->aij", rotation.T, np.asarray(coefficients, float))
+        for ccd, coefficients in surface_coefficients.items()
+    }
+    for mode in range(rank):
+        pivot = int(np.argmax(np.abs(fibre_modes[:, mode])))
+        if fibre_modes[pivot, mode] < 0:
+            fibre_modes[:, mode] *= -1.0
+            for ccd in surface_coefficients:
+                surface_coefficients[ccd][mode] *= -1.0
+    return fibre_modes, surface_coefficients
+
+
+def fit_fibre_displacement_model(
+    summed_line_sets,
+    fibre_line_sets,
+    *,
+    rank=2,
+    degree=4,
+    maximum_y_difference=1.0,
+    minimum_snr=5.0,
+    maximum_snr=100.0,
+    clip_sigma=6.0,
+    max_clip_iterations=4,
+    reference_night="",
+):
+    """Fit the joint low-rank fibre displacement model across CCD1--3."""
+    from astropy.table import vstack
+
+    tables = [
+        match_fibre_lines_to_summed(
+            summed_line_sets[ccd], fibre_line_sets[ccd], ccd=ccd,
+            maximum_y_difference=maximum_y_difference,
+            minimum_snr=minimum_snr,
+            maximum_snr=maximum_snr,
+        )
+        for ccd in ("1", "2", "3")
+    ]
+    matched_lines = vstack(tables, metadata_conflicts="silent")
+    if len(matched_lines) == 0:
+        raise RuntimeError("No fibre FibTh peaks matched the summed-FibTh line sets")
+
+    fibres = np.asarray(SCIENCE_FIBRES, dtype=int)
+    used = np.ones(len(matched_lines), dtype=bool)
+    fibre_modes = None
+    for _ in range(int(max_clip_iterations)):
+        fibre_modes, offsets, coefficients = _fit_fibre_displacement_once(
+            matched_lines,
+            fibres=fibres,
+            rank=int(rank),
+            degree=int(degree),
+            used=used,
+            initial_fibre_modes=fibre_modes,
+        )
+        y_center, y_scale, order_center, order_scale = {}, {}, {}, {}
+        for ccd in ("1", "2", "3"):
+            _, _, yc, ys, mc, ms = _fibre_legendre_basis(
+                np.array([0.0]), np.array([np.mean(CCD_ORDERS[ccd])]), ccd, degree
+            )
+            y_center[ccd], y_scale[ccd] = yc, ys
+            order_center[ccd], order_scale[ccd] = mc, ms
+        fibre_displacement_model = FibreDisplacementModel(
+            fibres=fibres,
+            fibre_modes=fibre_modes,
+            offsets=offsets,
+            surface_coefficients=coefficients,
+            y_center=y_center,
+            y_scale=y_scale,
+            order_center=order_center,
+            order_scale=order_scale,
+            degree=int(degree),
+            reference_night=str(reference_night),
+        )
+        prediction = np.array([
+            fibre_displacement_model.displacement(ccd, fibre, y_ref, order_value)
+            for ccd, fibre, y_ref, order_value in zip(
+                matched_lines["ccd"], matched_lines["fibre"],
+                matched_lines["y_reference"], matched_lines["order"],
+            )
+        ], dtype=float)
+        residual = np.asarray(matched_lines["delta_y"], float) - prediction
+        new_used = used.copy()
+        ccd_values = np.asarray(matched_lines["ccd"], str)
+        for ccd in ("1", "2", "3"):
+            select = used & (ccd_values == ccd)
+            scale = _mad_std(residual[select])
+            if np.isfinite(scale) and scale > 0:
+                new_used &= ~((ccd_values == ccd) & (np.abs(residual) > float(clip_sigma) * scale))
+        if np.array_equal(new_used, used):
+            break
+        used = new_used
+
+    # Refit once on the final clipped mask so the persisted coefficients and
+    # diagnostics correspond to exactly the same accepted lines.
+    fibre_modes, offsets, coefficients = _fit_fibre_displacement_once(
+        matched_lines, fibres=fibres, rank=int(rank), degree=int(degree),
+        used=used, initial_fibre_modes=fibre_modes,
+    )
+    fibre_modes, coefficients = _canonicalise_fibre_displacement_modes(
+        fibre_modes, coefficients, matched_lines, used
+    )
+    fibre_displacement_model = FibreDisplacementModel(
+        fibres=fibres, fibre_modes=fibre_modes, offsets=offsets,
+        surface_coefficients=coefficients, y_center=y_center, y_scale=y_scale,
+        order_center=order_center, order_scale=order_scale, degree=int(degree),
+        reference_night=str(reference_night),
+    )
+    prediction = np.array([
+        fibre_displacement_model.displacement(ccd, fibre, y_ref, order_value)
+        for ccd, fibre, y_ref, order_value in zip(
+            matched_lines["ccd"], matched_lines["fibre"],
+            matched_lines["y_reference"], matched_lines["order"],
+        )
+    ], dtype=float)
+    residual = np.asarray(matched_lines["delta_y"], float) - prediction
+
+    matched_lines["model_delta_y"] = prediction
+    matched_lines["residual_y"] = residual
+    matched_lines["used_for_fibre_displacement_fit"] = used
+    fit_rms, fit_n_lines = {}, {}
+    ccd_values = np.asarray(matched_lines["ccd"], str)
+    for ccd in ("1", "2", "3"):
+        select = used & (ccd_values == ccd)
+        fit_rms[ccd] = float(np.sqrt(np.nanmean(residual[select] ** 2)))
+        fit_n_lines[ccd] = int(np.count_nonzero(select))
+    fibre_displacement_model.fit_rms_pixel = fit_rms
+    fibre_displacement_model.fit_n_lines = fit_n_lines
+    return fibre_displacement_model, matched_lines
+
+
+def write_fibre_displacement_model(fibre_displacement_model, filename, *, overwrite=False):
+    """Persist a compact joint fibre displacement reference model."""
+    primary = fits.PrimaryHDU()
+    primary.header["ORIGIN"] = "velocereduction"
+    primary.header["CONTENT"] = "Joint fibre displacement model"
+    primary.header["REFNIGHT"] = str(fibre_displacement_model.reference_night)
+    primary.header["RANK"] = int(fibre_displacement_model.rank)
+    primary.header["DEGREE"] = int(fibre_displacement_model.degree)
+    primary.header["DYDEF"] = "Y_FIBRE-Y_REFERENCE"
+    primary.header["YFRAME"] = "SUMMED_FIBTH"
+
+    fibre_rows = []
+    for fibre_index, fibre in enumerate(fibre_displacement_model.fibres):
+        row = dict(fibre=int(fibre))
+        for mode in range(fibre_displacement_model.rank):
+            row[f"mode_{mode + 1}"] = float(fibre_displacement_model.fibre_modes[fibre_index, mode])
+        fibre_rows.append(row)
+
+    offset_rows, surface_rows, scaling_rows = [], [], []
+    for ccd in ("1", "2", "3"):
+        for fibre_index, fibre in enumerate(fibre_displacement_model.fibres):
+            offset_rows.append(dict(
+                ccd=ccd,
+                fibre=int(fibre),
+                offset=float(fibre_displacement_model.offsets[ccd][fibre_index]),
+            ))
+        coefficients = fibre_displacement_model.surface_coefficients[ccd]
+        for mode in range(fibre_displacement_model.rank):
+            for iy in range(coefficients.shape[1]):
+                for im in range(coefficients.shape[2]):
+                    if iy == 0 and im == 0:
+                        continue
+                    if iy + im > fibre_displacement_model.degree:
+                        continue
+                    surface_rows.append(dict(
+                        ccd=ccd,
+                        mode=mode + 1,
+                        y_degree=iy,
+                        order_degree=im,
+                        coefficient=float(coefficients[mode, iy, im]),
+                    ))
+        scaling_rows.append(dict(
+            ccd=ccd,
+            y_center=float(fibre_displacement_model.y_center[ccd]),
+            y_scale=float(fibre_displacement_model.y_scale[ccd]),
+            order_center=float(fibre_displacement_model.order_center[ccd]),
+            order_scale=float(fibre_displacement_model.order_scale[ccd]),
+            rms_pixel=float((fibre_displacement_model.fit_rms_pixel or {}).get(ccd, np.nan)),
+            n_lines=int((fibre_displacement_model.fit_n_lines or {}).get(ccd, 0)),
+        ))
+
+    fits.HDUList([
+        primary,
+        fits.BinTableHDU(Table(rows=fibre_rows), name="FIBRE_MODES"),
+        fits.BinTableHDU(Table(rows=offset_rows), name="OFFSETS"),
+        fits.BinTableHDU(Table(rows=surface_rows), name="SURFACES"),
+        fits.BinTableHDU(Table(rows=scaling_rows), name="SCALING"),
+    ]).writeto(filename, overwrite=overwrite)
+
+
+def read_fibre_displacement_model(filename):
+    """Read a joint fibre displacement reference model."""
+    with fits.open(filename) as hdul:
+        header = hdul[0].header.copy()
+        fibre_table = Table(hdul["FIBRE_MODES"].data)
+        offset_table = Table(hdul["OFFSETS"].data)
+        surface_table = Table(hdul["SURFACES"].data)
+        scaling_table = Table(hdul["SCALING"].data)
+
+    rank = int(header["RANK"])
+    degree = int(header["DEGREE"])
+    fibres = np.asarray(fibre_table["fibre"], dtype=int)
+    fibre_modes = np.column_stack([
+        np.asarray(fibre_table[f"mode_{mode + 1}"], dtype=float)
+        for mode in range(rank)
+    ])
+    offsets, coefficients = {}, {}
+    y_center, y_scale, order_center, order_scale = {}, {}, {}, {}
+    fit_rms, fit_n_lines = {}, {}
+    for ccd in ("1", "2", "3"):
+        rows = offset_table[np.asarray(offset_table["ccd"], str) == ccd]
+        by_fibre = {int(row["fibre"]): float(row["offset"]) for row in rows}
+        offsets[ccd] = np.array([by_fibre[int(f)] for f in fibres], dtype=float)
+        matrix = np.zeros((rank, degree + 1, degree + 1), dtype=float)
+        rows = surface_table[np.asarray(surface_table["ccd"], str) == ccd]
+        for row in rows:
+            matrix[int(row["mode"]) - 1, int(row["y_degree"]), int(row["order_degree"])] = float(row["coefficient"])
+        coefficients[ccd] = matrix
+        row = scaling_table[np.asarray(scaling_table["ccd"], str) == ccd][0]
+        y_center[ccd], y_scale[ccd] = float(row["y_center"]), float(row["y_scale"])
+        order_center[ccd], order_scale[ccd] = float(row["order_center"]), float(row["order_scale"])
+        fit_rms[ccd], fit_n_lines[ccd] = float(row["rms_pixel"]), int(row["n_lines"])
+
+    return FibreDisplacementModel(
+        fibres=fibres,
+        fibre_modes=fibre_modes,
+        offsets=offsets,
+        surface_coefficients=coefficients,
+        y_center=y_center,
+        y_scale=y_scale,
+        order_center=order_center,
+        order_scale=order_scale,
+        degree=degree,
+        reference_night=str(header.get("REFNIGHT", "")),
+        fit_rms_pixel=fit_rms,
+        fit_n_lines=fit_n_lines,
+    )
+
+
+def ensure_fibre_displacement_model(
+    *,
+    config,
+    paths,
+    calibration_exposures,
+    summed_fibth_line_sets,
+    static_wavelength,
+    thorium_atlas,
+    static_fibth_reference_index=0,
+    rank=2,
+    degree=4,
+    minimum_snr=5.0,
+    maximum_snr=100.0,
+    maximum_y_difference=1.0,
+):
+    """Load the reference fibre model, or construct a local candidate if absent."""
+    if config.extraction_mode != "fibre":
+        return None
+
+    reference_night = (
+        config.fibre_displacement_reference_night or config.reference_night
+    )
+    reference_file = paths.reference_product("fibre_displacement_model", reference_night)
+    if reference_file.exists():
+        return read_fibre_displacement_model(reference_file)
+
+    candidate_file = paths.calibrations / f"fibre_displacement_model_{config.night}.fits"
+    if candidate_file.exists() and not config.overwrite:
+        return read_fibre_displacement_model(candidate_file)
+
+    from . import diagnostics, thorium
+
+    fibre_line_sets = {}
+    for ccd in ("1", "2", "3"):
+        exposure = calibration_exposures["FibTh"][ccd][int(static_fibth_reference_index)]
+        if exposure.fibre_flux is None:
+            raise RuntimeError(f"CCD{ccd} reference FibTh has no fibre extraction")
+        fibre_line_sets[ccd] = thorium.ensure_fibth_fibre_lines(
+            exposure,
+            ccd=ccd,
+            night=config.night,
+            output_directory=paths.calibrations,
+            thorium_atlas=thorium_atlas,
+            reference_wavelength_function=static_wavelength[ccd].wavelength,
+            exposure_index=int(static_fibth_reference_index),
+            overwrite=config.overwrite,
+            log_level=config.log_level,
         )
 
-    if not surfaces:
-        raise RuntimeError("No science fibre had enough usable FibTh lines")
-    return FibreShiftModel(surfaces), Table(rows=diagnostics), fitted_tables
+    fibre_displacement_model, matched_lines = fit_fibre_displacement_model(
+        summed_fibth_line_sets,
+        fibre_line_sets,
+        rank=rank,
+        degree=degree,
+        minimum_snr=minimum_snr,
+        maximum_snr=maximum_snr,
+        maximum_y_difference=maximum_y_difference,
+        reference_night=config.night,
+    )
+    write_fibre_displacement_model(fibre_displacement_model, candidate_file, overwrite=True)
+
+    if config.diagnostics != "none":
+        for ccd in ("1", "2", "3"):
+            for quantity in ("displacement", "residual"):
+                diagnostics.plot_fibre_displacement_qa(
+                    matched_lines,
+                    ccd=ccd,
+                    quantity=quantity,
+                    filename=(
+                        paths.figures / "calibration"
+                        / f"fibth_fibre_{quantity}_{config.night}_ccd{ccd}.png"
+                    ),
+                    minimum_snr=minimum_snr,
+                    maximum_snr=maximum_snr,
+                    dpi=300,
+                )
+    return (fibre_displacement_model, matched_lines)
+
+
+# Backwards-compatible class name while external callers migrate.
+FibreShiftModel = FibreDisplacementModel
 
 
 @dataclass
@@ -1787,8 +2398,8 @@ def fit_time_corrections(
     simlc_line_sets=None,
     simth_line_sets=None,
     reference_mjd=None,
-    y_bounds,
-    order_bounds,
+    y_bounds=None,
+    order_bounds=None,
     y_degree=2,
     order_degree=1,
     preferred_source="SimLC",
@@ -1871,33 +2482,37 @@ class WavelengthModel:
     """Hierarchical static + fibre + temporal wavelength calibration."""
 
     static: WavelengthSolution
-    fibre: FibreShiftModel | None = None
+    fibre: FibreDisplacementModel | None = None
     time: TimeShiftModel | None = None
+    ccd: str | None = None
     fixed_point_iterations: int = 3
 
-    def reference_y(self, y, order, *, fibre=None, mjd=None):
-        y, order = np.broadcast_arrays(
-            np.asarray(y, dtype=float), np.asarray(order, dtype=float)
+    def reference_y(self, y_fibre, order, *, fibre=None, mjd=None):
+        """Map current detector/fibre pixels onto the static summed-FibTh frame."""
+        y_fibre, order = np.broadcast_arrays(
+            np.asarray(y_fibre, dtype=float), np.asarray(order, dtype=float)
         )
-        y_reference = y.copy()
+        y_reference = y_fibre.copy()
         for _ in range(max(1, int(self.fixed_point_iterations))):
             shift = np.zeros_like(y_reference)
             if self.fibre is not None and fibre is not None:
-                shift += self.fibre.shift(y_reference, order, int(fibre))
+                if self.ccd is None:
+                    raise ValueError("ccd is required when a fibre displacement model is present")
+                shift += self.fibre.displacement(self.ccd, int(fibre), y_reference, order)
             if self.time is not None and mjd is not None:
                 shift += self.time.shift(y_reference, order, float(mjd))
-            y_reference = y - shift
+            y_reference = y_fibre - shift
         return y_reference
 
-    def wavelength(self, y, order, *, fibre=None, mjd=None):
-        y_reference = self.reference_y(y, order, fibre=fibre, mjd=mjd)
+    def wavelength(self, y_fibre, order, *, fibre=None, mjd=None):
+        y_reference = self.reference_y(y_fibre, order, fibre=fibre, mjd=mjd)
         return self.static.wavelength(y_reference, order)
 
-    def dispersion(self, y, order, *, fibre=None, mjd=None, step=1e-3):
-        y = np.asarray(y, dtype=float)
+    def dispersion(self, y_fibre, order, *, fibre=None, mjd=None, step=1e-3):
+        y_fibre = np.asarray(y_fibre, dtype=float)
         return (
-            self.wavelength(y + step, order, fibre=fibre, mjd=mjd)
-            - self.wavelength(y - step, order, fibre=fibre, mjd=mjd)
+            self.wavelength(y_fibre + step, order, fibre=fibre, mjd=mjd)
+            - self.wavelength(y_fibre - step, order, fibre=fibre, mjd=mjd)
         ) / (2.0 * step)
 
 
@@ -1939,10 +2554,15 @@ def write_wavelength_model_fits(
     primary = fits.PrimaryHDU()
     primary.header["ORIGIN"] = "velocereduction"
     primary.header["CONTENT"] = "Hierarchical wavelength calibration"
+    if ccd is None:
+        ccd = model.ccd
     if ccd is not None:
         primary.header["CCD"] = str(ccd)
     if np.isfinite(reference_mjd):
         primary.header["MJDREF"] = float(reference_mjd)
+    if model.fibre is not None:
+        reference_night = model.fibre.reference_night or "UNKNOWN"
+        primary.header["FIBREF"] = f"fibre_displacement_model_{reference_night}.fits"
 
     static_hdu = fits.BinTableHDU(
         Table(rows=_surface_coefficient_rows(model.static)), name="STATIC"
@@ -1950,15 +2570,6 @@ def write_wavelength_model_fits(
     _set_surface_header(static_hdu.header, model.static)
 
     hdus = [primary, static_hdu]
-    if model.fibre is not None and model.fibre.surfaces:
-        rows = []
-        for fibre, surface in sorted(model.fibre.surfaces.items()):
-            rows.extend(_surface_coefficient_rows(surface, fibre=int(fibre)))
-        hdu = fits.BinTableHDU(Table(rows=rows), name="FIBRE_SHIFT")
-        first = next(iter(model.fibre.surfaces.values()))
-        _set_surface_header(hdu.header, first)
-        hdus.append(hdu)
-
     if model.time is not None:
         rows = []
         for mjd, coefficients in zip(model.time.mjd, model.time.coefficients):
@@ -2010,15 +2621,6 @@ def read_wavelength_model_fits(filename: str | Path) -> tuple[WavelengthModel, f
         )
 
         fibre_model = None
-        if "FIBRE_SHIFT" in hdul:
-            table = Table(hdul["FIBRE_SHIFT"].data)
-            surfaces = {}
-            for fibre in np.unique(np.asarray(table["fibre"], dtype=int)):
-                surfaces[int(fibre)] = _surface_from_table(
-                    table[np.asarray(table["fibre"], dtype=int) == int(fibre)],
-                    hdul["FIBRE_SHIFT"].header,
-                )
-            fibre_model = FibreShiftModel(surfaces)
 
         time_model = None
         if "TIME_SHIFT" in hdul:
@@ -2039,4 +2641,7 @@ def read_wavelength_model_fits(filename: str | Path) -> tuple[WavelengthModel, f
                 float(hdul["TIME_SHIFT"].header.get("MJDREF", np.nan)),
             )
 
-    return WavelengthModel(static=static, fibre=fibre_model, time=time_model), header
+    return WavelengthModel(
+        static=static, fibre=fibre_model, time=time_model,
+        ccd=str(header.get("CCD", "")) or None,
+    ), header
