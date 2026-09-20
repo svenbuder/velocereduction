@@ -12,6 +12,23 @@ from .constants import N_DISPERSION
 logger = logging.getLogger(__name__)
 
 
+REGION_COLOURS = {
+    "SimTh": "C1",
+    "Sky_1": "C0",
+    "Science": "C4",
+    "Sky_2": "C0",
+    "SimLC": "C3",
+}
+
+REGION_LABELS = {
+    "SimTh": "SimTh",
+    "Sky_1": "Sky",
+    "Science": "Science",
+    "Sky_2": None,     # avoid duplicate legend entry
+    "SimLC": "SimLC",
+}
+
+
 def _save(fig, filename, dpi=160):
     filename = Path(filename)
     filename.parent.mkdir(parents=True, exist_ok=True)
@@ -40,7 +57,6 @@ def _binned_percentiles(x, y, n_bins=20, minimum=5):
         if use.sum() >= minimum:
             p16[i], p50[i], p84[i] = np.nanpercentile(y[use], [16, 50, 84])
     return centres, p16, p50, p84
-
 
 
 def _calibration_quality_summary(peak_table):
@@ -717,46 +733,86 @@ def plot_read_noise(read_noise_table, filename):
 
 
 def plot_order_geometry_summary(geometries, filename):
-    """Show trace quality and extraction-region boundaries versus physical order."""
-    fig, axes = plt.subplots(2, 3, figsize=(12, 6), constrained_layout=True)
+    """Trace quality and extraction regions versus physical echelle order."""
+    fig, axes = plt.subplots(
+        2, 3,
+        figsize=(12, 6),
+        constrained_layout=True,
+    )
+
     for column, ccd in enumerate(("1", "2", "3")):
-        subset = sorted([g for g in geometries if g.ccd == ccd], key=lambda g: g.order)
+        subset = sorted([g for g in geometries if g.ccd == ccd],key=lambda g: g.order,)
+
         order = np.array([g.order for g in subset])
         rms = np.array([g.trace_rms for g in subset])
-        axes[0, column].plot(order, rms, "o-")
-        axes[0, column].set(title=f"CCD{ccd}", ylabel="Trace RMS / pixel" if column == 0 else None)
+
+        axes[0, column].plot(order, rms, "o-", lw=1)
+        axes[0, column].set_title(f"CCD{ccd}")
+
+        if column == 0:
+            axes[0, column].set_ylabel("Trace RMS / pixel")
+
         for region in ("SimTh", "Sky_1", "Science", "Sky_2", "SimLC"):
-            begin = np.array([g.regions.get(region, (np.nan, np.nan))[0] for g in subset])
-            end = np.array([g.regions.get(region, (np.nan, np.nan))[1] for g in subset])
-            centre = 0.5 * (begin + end)
-            axes[1, column].plot(order, centre, ".-", label=region)
-        axes[1, column].set(xlabel="Echelle order", ylabel="Region centre / relative pixel" if column == 0 else None)
+            begin = np.array([ g.regions.get(region, (np.nan, np.nan))[0] for g in subset])
+            end = np.array([ g.regions.get(region, (np.nan, np.nan))[1] for g in subset])
+
+            colour = REGION_COLOURS[region]
+            label = REGION_LABELS[region]
+
+            axes[1, column].plot(order,begin,color=colour,lw=1.0,label=label,)
+            axes[1, column].plot(order,end,color=colour,lw=1.0,)
+            axes[1, column].fill_between(order,begin,end,color=colour,alpha=0.08,)
+
+        axes[1, column].set_xlabel("Echelle order")
+
+        if column == 0:
+            axes[1, column].set_ylabel("Relative cross-dispersion pixel")
+
     axes[1, 0].legend(fontsize=7, ncol=2)
     fig.suptitle("Order geometry")
     return _save(fig, filename)
 
 
 def plot_order_matrix_examples(combined_flats, geometries, filename):
-    """Representative 81-pixel Flat order with its named extraction regions."""
+    """Representative 81-pixel OrderMatrix and extraction regions."""
     from . import orders
-    fig, axes = plt.subplots(2, 3, figsize=(12, 6), constrained_layout=True)
+
+    fig, axes = plt.subplots(2, 3, figsize=(12, 6), constrained_layout=True,)
+
     for column, ccd in enumerate(("1", "2", "3")):
-        subset = sorted([g for g in geometries if g.ccd == ccd], key=lambda g: g.order)
+        subset = sorted([g for g in geometries if g.ccd == ccd], key=lambda g: g.order,)
         if not subset:
             continue
+
         geometry = subset[len(subset) // 2]
-        matrix = orders.extract_order_matrix(combined_flats[ccd], geometry)
+        matrix = orders.extract_order_matrix(combined_flats[ccd],geometry,)
+
         finite = matrix.flux[np.isfinite(matrix.flux)]
-        vmin, vmax = np.nanpercentile(finite, [5, 99]) if finite.size else (0, 1)
-        axes[0, column].imshow(matrix.flux, origin="lower", aspect="auto", vmin=vmin, vmax=vmax)
-        axes[0, column].set(title=f"CCD{ccd} order {geometry.order}", xlabel="Relative cross-dispersion pixel")
+        vmin, vmax = (np.nanpercentile(finite, [5, 99]) if finite.size else (0, 1))
+
+        axes[0, column].imshow(matrix.flux, origin="lower", aspect="auto", cmap="Greys", vmin=vmin, vmax=vmax, interpolation="none",)
+
+        axes[0, column].set_title(f"CCD{ccd} order {geometry.order}")
+
         profile = np.nanmedian(matrix.flux, axis=0)
-        axes[1, column].plot(matrix.relative_x, profile)
-        for region, (begin, end) in geometry.regions.items():
-            if region in ("Sky_1", "Science", "Sky_2"):
-                axes[1, column].axvspan(begin, end, alpha=0.12, label=region)
-        axes[1, column].set(xlabel="Relative cross-dispersion pixel", ylabel="Median Flat counts" if column == 0 else None)
-    axes[1, 0].legend(fontsize=7)
+        axes[1, column].plot(matrix.relative_x, profile, color="0.2", lw=1,)
+
+        for region in (
+            "SimTh", "Sky_1", "Science", "Sky_2", "SimLC"
+        ):
+            if region not in geometry.regions:
+                continue
+
+            begin, end = geometry.regions[region]
+            axes[1, column].axvspan(begin, end, color=REGION_COLOURS[region], alpha=0.18, lw=0, label=REGION_LABELS[region],)
+
+        axes[1, column].set_xlabel("Relative cross-dispersion pixel")
+
+        if column == 0:
+            axes[0, column].set_ylabel("Dispersion pixel")
+            axes[1, column].set_ylabel("Median Flat counts")
+
+    axes[1, 0].legend(fontsize=7, ncol=2)
     fig.suptitle("Representative OrderMatrix products")
     return _save(fig, filename)
 
@@ -786,26 +842,62 @@ def plot_fibre_geometry_summary(geometries, filename):
 
 
 def plot_fibre_profile_summary(geometries, flat_order_matrices, filename):
-    """Observed collapsed Flat profile, model and residual for one order per CCD."""
+    """Observed collapsed Flat profile, fibre model and residual."""
     from . import fibres
+
     names = list(flat_order_matrices)
-    fig, axes = plt.subplots(2, 3, figsize=(12, 6), sharex="col", constrained_layout=True)
+    fig, axes = plt.subplots(
+        2, 3,
+        figsize=(12, 5),
+        sharex="col",
+        constrained_layout=True,
+        gridspec_kw={"height_ratios": [4, 1]},
+    )
+
     for column, ccd in enumerate(("1", "2", "3")):
         name = _representative_name(names, ccd)
         if name is None:
             continue
-        matrix, geometry = flat_order_matrices[name], geometries[name]
+
+        matrix = flat_order_matrices[name]
         collapsed = fibres.fit_collapsed_fibre_profile(matrix)
-        axes[0, column].plot(collapsed["x"], collapsed["profile"], label="Flat")
-        axes[0, column].plot(collapsed["x"], collapsed["model"], label="fibre model")
-        axes[0, column].set_title(name.replace("ccd_", "CCD ").replace("_order_", " order "))
+
+        axes[0, column].plot(
+            collapsed["x"],
+            collapsed["profile"],
+            lw=1.0,
+            label="Flat",
+        )
+        axes[0, column].plot(
+            collapsed["x"],
+            collapsed["model"],
+            color="C3",
+            lw=1.0,
+            label="fibre model",
+        )
+
+        axes[1, column].plot(
+            collapsed["x"],
+            collapsed["profile"] - collapsed["model"],
+            lw=0.8,
+        )
+        axes[1, column].axhline(0, color="0.5", ls="--", lw=0.8)
+
+        axes[0, column].set_title(
+            name.replace("ccd_", "CCD ").replace("_order_", " order ")
+        )
         axes[0, column].legend(fontsize=8)
-        axes[1, column].plot(collapsed["x"], collapsed["profile"] - collapsed["model"])
-        axes[1, column].axhline(0, ls="--", lw=1)
         axes[1, column].set_xlabel("Relative cross-dispersion pixel")
+
+        axes[0, column].set_xlim(-1,81)
+        axes[0, column].set_xticks([0, 20, 40, 60, 80],[-40, -20, 0, 20, 40])
+        axes[1, column].set_xlim(-41,41)
+        axes[1, column].set_xticks([-40, -20, 0, 20, 40])
+
         if column == 0:
             axes[0, column].set_ylabel("Counts")
-            axes[1, column].set_ylabel("Flat - model")
+            axes[1, column].set_ylabel("Residual")
+
     fig.suptitle("Representative fibre-profile fits")
     return _save(fig, filename)
 
@@ -829,6 +921,122 @@ def plot_fibre_geometry_order(geometry, order_matrix, filename):
     return _save(fig, filename)
 
 
+
+
+def _native_order_coordinates(order_matrix):
+    """Return native detector x coordinates for an OrderMatrix."""
+    n = order_matrix.flux.shape[0]
+    trace = order_matrix.geometry.trace(n)
+    centre_pixel = np.rint(trace - order_matrix.trace_offset).astype(int)
+    x_native = centre_pixel[:, None] + order_matrix.relative_x[None, :]
+    return trace, centre_pixel, x_native
+
+
+def plot_fibre_extraction_detector(order_matrix, fibre_geometry, filename, rows=None, half_height=150):
+    """Show fitted fibre centres over native detector pixels at three order locations."""
+    n = order_matrix.flux.shape[0]
+    if rows is None:
+        # rows = [int(f * (n - 1)) for f in (0.1, 0.5, 0.9)]
+        rows = [500, 2055, 3500]
+
+    trace, centre_pixel, x_native = _native_order_coordinates(order_matrix)
+    centres, sigma, _, _ = fibre_geometry.evaluate(n, order_matrix.trace_offset)
+    centres_native = centre_pixel[:, None] + centres
+
+    fig, axes = plt.subplots(1, len(rows), figsize=(10, 4), constrained_layout=True)
+    axes = np.atleast_1d(axes)
+
+    for ax, ycentre in zip(axes, rows):
+        y0, y1 = max(0, ycentre - half_height), min(n, ycentre + half_height)
+        use = slice(y0, y1)
+
+        xmin = int(np.nanmin(x_native[use]))
+        xmax = int(np.nanmax(x_native[use]))
+        image = np.full((y1 - y0, xmax - xmin + 1), np.nan)
+
+        for j, y in enumerate(range(y0, y1)):
+            x = x_native[y].astype(int) - xmin
+            image[j, x] = order_matrix.flux[y]
+
+        finite = image[np.isfinite(image)]
+        vmin, vmax = np.nanpercentile(finite, [5, 99.5])
+
+        ax.imshow(
+            image, origin="lower", cmap="Greys", aspect="auto", interpolation="none",
+            extent=(xmin - 0.5, xmax + 0.5, y0 - 0.5, y1 - 0.5),
+            vmin=vmin, vmax=1.2*vmax,
+        )
+
+        science_label, sky_label = True, True
+        for i, component in enumerate(fibre_geometry.components):
+            science = isinstance(component, (int, np.integer))
+            colour = "C4" if science else "C0"
+            label = "Science fibres" if science and science_label else "Sky fibres" if not science and sky_label else None
+            ax.plot(centres_native[use, i], np.arange(y0, y1), color=colour, lw=1.0, label=label)
+            science_label &= not science
+            sky_label &= science
+
+        ax.plot(trace[use], np.arange(y0, y1), color="0.15", lw=1.0, label="Order trace")
+        ax.plot(centre_pixel[use], np.arange(y0, y1), color="0.5", lw=1.0,
+                drawstyle="steps-mid", label="OrderMatrix centre")
+        ax.set(xlabel="Native cross-dispersion pixel", title=f"y = {ycentre}")
+
+    axes[0].set_ylabel("Dispersion pixel")
+    axes[0].legend(fontsize=7)
+    fig.suptitle(f"CCD{order_matrix.ccd} order {order_matrix.order}: native fibre extraction geometry")
+    return _save(fig, filename)
+
+
+def plot_fibre_extraction_rows(order_matrix, fibre_geometry, filename, rows=None):
+    """Show observed profiles and the actual fibre model used for extraction."""
+    from . import extraction
+
+    n = order_matrix.flux.shape[0]
+    if rows is None:
+        # rows = [int(f * (n - 1)) for f in (0.1, 0.5, 0.9)]
+        rows = [500, 2055, 3500]
+
+    result = extraction.extract_fibre_order(order_matrix, fibre_geometry)
+    _, centre_pixel, _ = _native_order_coordinates(order_matrix)
+    centres, sigma, _, _ = fibre_geometry.evaluate(n, order_matrix.trace_offset)
+
+    fig, axes = plt.subplots(
+        2, len(rows), figsize=(13, 5), sharex="col", constrained_layout=True,
+        gridspec_kw={"height_ratios": [4, 1]},
+    )
+
+    for column, y in enumerate(rows):
+        x = centre_pixel[y] + order_matrix.relative_x
+        profiles = extraction.integrated_gaussian_cube(
+            order_matrix.relative_x, centres[y:y + 1], sigma[y:y + 1]
+        )[0]
+
+        background = 0.0 if result.background is None else result.background[y]
+        components = profiles * result.flux[y][None, :]
+        model = background + np.nansum(components, axis=1)
+        data = order_matrix.flux[y]
+
+        axes[0, column].step(x, data, where="mid", color="0.2", lw=1.0, label="Flat")
+        for i, component in enumerate(fibre_geometry.components):
+            colour = "C4" if isinstance(component, (int, np.integer)) else "C0"
+            axes[0, column].plot(x, components[:, i], color=colour, lw=0.5, alpha=0.45)
+
+        axes[0, column].plot(x, model, color="C3", lw=1.1, label="extraction model")
+        axes[0, column].set_title(f"y = {y}, σ = {sigma[y]:.2f} px")
+
+        axes[1, column].step(x, data - model, where="mid", lw=0.8)
+        axes[1, column].axhline(0, color="0.5", ls="--", lw=0.7)
+        axes[1, column].set_xlabel("Native cross-dispersion pixel")
+
+        if column == 0:
+            axes[0, column].set_ylabel("Counts")
+            axes[1, column].set_ylabel("Residual")
+
+    axes[0, 0].legend(fontsize=8)
+    fig.suptitle(f"CCD{order_matrix.ccd} order {order_matrix.order}: fibre extraction profiles")
+    return _save(fig, filename)
+
+
 def _representative_product(products, ccd):
     names = list(products)
     name = _representative_name(names, ccd)
@@ -836,63 +1044,166 @@ def _representative_product(products, ccd):
 
 
 def plot_flat_summed_response(products, filename):
-    fig, axes = plt.subplots(3, 3, figsize=(12, 7), sharex="col", constrained_layout=True)
+    """Summed Flat, smooth illumination model and resulting 1D response."""
+    fig, axes = plt.subplots(
+        2, 3,
+        figsize=(12, 5),
+        sharex="col",
+        constrained_layout=True,
+        gridspec_kw={"height_ratios": [4, 1]},
+    )
+
     for column, ccd in enumerate(("1", "2", "3")):
         product = _representative_product(products, ccd)
-        if product is None: continue
-        for row, (data, label) in enumerate((
-            (product.summed_flat, "Summed Flat"),
-            (product.summed_smooth, "Smooth Flat"),
-            (product.summed_response, "Response"),
-        )):
-            axes[row, column].plot(np.asarray(data))
-            if column == 0: axes[row, column].set_ylabel(label)
-        axes[0, column].set_title(f"CCD{ccd} order {product.order}")
-        axes[2, column].axhline(1, ls="--", lw=1)
-        axes[2, column].set_xlabel("Dispersion pixel")
+        if product is None:
+            continue
+
+        axes[0, column].plot(
+            product.summed_flat,
+            lw=0.8,
+            label="summed Flat",
+        )
+        axes[0, column].plot(
+            product.summed_smooth,
+            color="C3",
+            lw=1.0,
+            label="smooth Flat",
+        )
+
+        axes[1, column].plot(
+            product.summed_response,
+            lw=0.8,
+        )
+        axes[1, column].axhline(
+            1, color="0.5", ls="--", lw=0.8
+        )
+        axes[1, column].set_ylim(0.5, 1.5)
+
+        axes[0, column].set_title(
+            f"CCD{ccd} order {product.order}"
+        )
+        axes[0, column].legend(fontsize=8)
+        axes[1, column].set_xlabel("Dispersion pixel")
+
+        if column == 0:
+            axes[0, column].set_ylabel("Flat counts")
+            axes[1, column].set_ylabel("Response")
+
     fig.suptitle("Summed Flat response")
     return _save(fig, filename)
 
 
 def plot_flat_fibre_response(products, filename):
-    fig, axes = plt.subplots(2, 3, figsize=(12, 6), sharex="col", constrained_layout=True)
+    """Smooth individual-fibre Flats and their 1D responses."""
+    fig, axes = plt.subplots(
+        2, 3,
+        figsize=(12, 5),
+        sharex="col",
+        constrained_layout=True,
+        gridspec_kw={"height_ratios": [4, 1]},
+    )
+
     for column, ccd in enumerate(("1", "2", "3")):
         product = _representative_product(products, ccd)
-        if product is None or product.fibre_response is None: continue
-        axes[0, column].plot(product.fibre_smooth)
-        axes[1, column].plot(product.fibre_response)
-        axes[1, column].axhline(1, ls="--", lw=1)
-        axes[0, column].set_title(f"CCD{ccd} order {product.order}")
+        if product is None or product.fibre_response is None:
+            continue
+
+        axes[0, column].plot(
+            product.fibre_smooth,
+            lw=0.7,
+        )
+
+        axes[1, column].plot(
+            product.fibre_response,
+            lw=0.6,
+        )
+        axes[1, column].axhline(
+            1, color="0.5", ls="--", lw=0.8
+        )
+        axes[1, column].set_ylim(0.5, 1.5)
+
+        axes[0, column].set_title(
+            f"CCD{ccd} order {product.order}"
+        )
         axes[1, column].set_xlabel("Dispersion pixel")
+
         if column == 0:
             axes[0, column].set_ylabel("Smooth fibre Flat")
-            axes[1, column].set_ylabel("Fibre response")
+            axes[1, column].set_ylabel("Response")
+
     fig.suptitle("Fibre-resolved Flat response")
     return _save(fig, filename)
 
 
 def plot_flat_recombination_qa(products, fibre_geometries, filename):
-    """Compare direct summed Flat with sum of extracted science fibres."""
-    fig, axes = plt.subplots(2, 3, figsize=(12, 6), sharex="col", constrained_layout=True)
+    """Compare direct summed Flat with recombined science fibres."""
+    fig, axes = plt.subplots(
+        2, 3,
+        figsize=(12, 5),
+        sharex="col",
+        constrained_layout=True,
+        gridspec_kw={"height_ratios": [4, 1]},
+    )
+
     for column, ccd in enumerate(("1", "2", "3")):
         product = _representative_product(products, ccd)
-        if product is None or product.fibre_flat is None: continue
+        if product is None or product.fibre_flat is None:
+            continue
+
         geometry = fibre_geometries[product.name]
-        science = [geometry.components.index(f) for f in geometry.components if isinstance(f, (int, np.integer))]
-        recombined = np.nansum(product.fibre_flat[:, science], axis=1)
+        science = [
+            geometry.components.index(fibre)
+            for fibre in geometry.components
+            if isinstance(fibre, (int, np.integer))
+        ]
+
+        recombined = np.nansum(
+            product.fibre_flat[:, science],
+            axis=1,
+        )
         summed = np.asarray(product.summed_flat, float)
+
         scale = np.nanmedian(summed / recombined)
         recombined *= scale
-        ratio = np.divide(recombined, summed, out=np.full_like(summed, np.nan), where=summed != 0)
-        axes[0, column].plot(summed, label="direct sum")
-        axes[0, column].plot(recombined, label="recombined fibres")
-        axes[1, column].plot(ratio - 1)
-        axes[1, column].axhline(0, ls="--", lw=1)
-        axes[0, column].set_title(f"CCD{ccd} order {product.order}")
+
+        ratio = np.divide(
+            recombined,
+            summed,
+            out=np.full_like(summed, np.nan),
+            where=np.isfinite(summed) & (summed != 0),
+        )
+
+        axes[0, column].plot(
+            summed,
+            lw=0.8,
+            label="direct sum",
+        )
+        axes[0, column].plot(
+            recombined,
+            color="C3",
+            lw=1.0,
+            label="recombined fibres",
+        )
+
+        axes[1, column].plot(
+            ratio - 1,
+            lw=0.8,
+        )
+        axes[1, column].axhline(
+            0, color="0.5", ls="--", lw=0.8
+        )
+
+        axes[0, column].set_title(
+            f"CCD{ccd} order {product.order}"
+        )
         axes[1, column].set_xlabel("Dispersion pixel")
+
         if column == 0:
             axes[0, column].set_ylabel("Flat counts")
-            axes[1, column].set_ylabel("Recombined / summed - 1")
+            axes[1, column].set_ylabel(
+                "Recombined / summed - 1"
+            )
+
     axes[0, 0].legend(fontsize=8)
     fig.suptitle("Flat fibre-recombination QA")
     return _save(fig, filename)
@@ -951,6 +1262,43 @@ def plot_wavelength_fit(data, node, filename, calibration_type=None):
     axes[2, 1].axvline(0, ls="--", lw=1); axes[2, 1].axvline(-rms_pixel, ls=":", lw=1); axes[2, 1].axvline(rms_pixel, ls=":", lw=1)
     axes[2, 1].set(xlabel="Residual / pixel", ylabel="Lines", title=f"Residual distribution; RMS={rms_pixel:.4f} px")
     return _save(fig, filename, dpi=200)
+
+
+def plot_wavelength_surface_validation(validation, *, filename=None):
+    """Plot blocked-CV RMS and overfitting gap versus Legendre complexity."""
+    y_degree = np.asarray(validation["y_degree"], int)
+    m_degree = np.asarray(validation["order_degree"], int)
+    value = np.asarray(validation["validation_rms_pixel"], float)
+    train = np.asarray(validation["train_rms_pixel"], float)
+    ys = np.unique(y_degree); ms = np.unique(m_degree)
+    image = np.full((len(ms), len(ys)), np.nan)
+    gap = np.full_like(image, np.nan)
+    for i, md in enumerate(ms):
+        for j, yd in enumerate(ys):
+            q = (y_degree == yd) & (m_degree == md)
+            if np.any(q):
+                image[i, j] = value[q][0]
+                gap[i, j] = value[q][0] - train[q][0]
+
+    fig, axes = plt.subplots(1, 2, figsize=(10, 4), constrained_layout=True)
+    for ax, z, title in [
+        (axes[0], image, "Held-out RMS"),
+        (axes[1], gap, "Held-out minus training RMS"),
+    ]:
+        im = ax.imshow(z, origin="lower", aspect="auto")
+        fig.colorbar(im, ax=ax, label="pixel")
+        ax.set_xticks(np.arange(len(ys)), ys)
+        ax.set_yticks(np.arange(len(ms)), ms)
+        ax.set_xlabel("Legendre degree in y")
+        ax.set_ylabel("Legendre degree in order m")
+        ax.set_title(title)
+        for i in range(len(ms)):
+            for j in range(len(ys)):
+                if np.isfinite(z[i, j]):
+                    ax.text(j, i, f"{z[i,j]:.3f}", ha="center", va="center", fontsize=7)
+    if filename is not None:
+        fig.savefig(filename, dpi=200, bbox_inches="tight")
+    return fig
 
 
 def plot_lc_drift(drift_by_ccd, filename):

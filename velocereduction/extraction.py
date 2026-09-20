@@ -1,5 +1,6 @@
 """Measure 1D spectra from OrderMatrices using fixed extraction geometry."""
 from pathlib import Path
+from dataclasses import dataclass
 import logging
 import numpy as np
 from astropy.io import fits
@@ -260,64 +261,476 @@ def fibre_recombination_qa(summed, fibre, summed_component="Science"):
     }
 
 
+PRIMARY_SIGNAL_REGION = {
+    "Flat": "Science",
+    "FibTh": "Science",
+    "Science": "Science",
+    "SimTh": "SimTh",
+    "SimLC": "SimLC",
+}
+
+
+@dataclass(frozen=True)
+class SignalCheck:
+    """Compact CCD3 signal-presence diagnostic for one extraction region."""
+
+    detected: bool
+    region: str
+    mode: str
+    score: float
+    median_snr: float
+    p95_snr: float
+    n_significant: int
+    n_orders: int
+    n_orders_detected: int
+
+
+def measure_region_signal(
+    frame,
+    order_geometries,
+    region,
+    *,
+    mode="line",
+    continuum_snr=3.0,
+    line_sigma=5.0,
+    min_line_pixels=3,
+    min_orders=3,
+):
+    """Measure whether an expected extraction region contains useful signal.
+
+    ``mode='continuum'`` is intended for Science/Flat light and uses the median
+    aperture S/N in each order. ``mode='line'`` subtracts a low-percentile
+    baseline order by order and looks for repeated positive narrow-line signal,
+    appropriate for FibTh, SimTh and SimLC. The returned metrics are retained so
+    the thresholds can be tuned from real nights rather than treated as magic.
+    """
+    order_scores, all_snr = [], []
+    n_significant = n_orders_detected = n_orders = 0
+
+    for geometry in orders.geometry_for_ccd(order_geometries, str(frame.ccd)):
+        if hasattr(geometry, "available") and region in geometry.available:
+            if not geometry.available.get(region, False):
+                continue
+        try:
+            order_matrix = orders.extract_order_matrix(frame, geometry)
+            result = extract_summed_order(order_matrix, components=(region,))
+        except (KeyError, ValueError):
+            continue
+
+        flux = np.asarray(result.flux[:, 0], float)
+        variance = np.asarray(result.variance[:, 0], float)
+        good = np.isfinite(flux) & np.isfinite(variance) & (variance > 0)
+        if np.count_nonzero(good) < 10:
+            continue
+
+        n_orders += 1
+        sigma = np.sqrt(variance[good])
+        values = flux[good]
+        if mode == "continuum":
+            snr = values / sigma
+            score = float(np.nanmedian(snr))
+            detected = np.isfinite(score) and score >= continuum_snr
+        elif mode == "line":
+            baseline = float(np.nanpercentile(values, 20.0))
+            snr = (values - baseline) / sigma
+            significant = int(np.count_nonzero(snr >= line_sigma))
+            n_significant += significant
+            score = float(np.nanpercentile(snr, 99.0))
+            detected = significant >= min_line_pixels and score >= line_sigma
+        else:
+            raise ValueError(f"Unknown signal-check mode: {mode}")
+
+        all_snr.append(snr)
+        order_scores.append(score)
+        n_orders_detected += int(detected)
+
+    if all_snr:
+        snr = np.concatenate(all_snr)
+        median_snr = float(np.nanmedian(snr))
+        p95_snr = float(np.nanpercentile(snr, 95.0))
+    else:
+        median_snr = p95_snr = np.nan
+
+    required_orders = min(min_orders, n_orders) if n_orders else min_orders
+    detected = n_orders > 0 and n_orders_detected >= required_orders
+    score = float(np.nanmedian(order_scores)) if order_scores else np.nan
+    return SignalCheck(
+        detected=bool(detected), region=region, mode=mode, score=score,
+        median_snr=median_snr, p95_snr=p95_snr,
+        n_significant=int(n_significant), n_orders=int(n_orders),
+        n_orders_detected=int(n_orders_detected),
+    )
+
+
+def _signal_check(frame, order_geometries, region, mode, config):
+    """Run a signal check using optional ReductionConfig threshold overrides."""
+    return measure_region_signal(
+        frame,
+        order_geometries,
+        region,
+        mode=mode,
+        continuum_snr=float(getattr(config, "signal_qa_continuum_snr", 3.0)),
+        line_sigma=float(getattr(config, "signal_qa_line_sigma", 5.0)),
+        min_line_pixels=int(getattr(config, "signal_qa_min_line_pixels", 3)),
+        min_orders=int(getattr(config, "signal_qa_min_orders", 3)),
+    )
+
+
+def _set_issue(table, index, message):
+    current = str(table["issue"][index]).strip()
+    text = f"{current}; {message}" if current else message
+    table["issue"][index] = text[:255]
+
+
+def inspect_ccd3_signals(reduction_input, order_geometries, config, *, verbose=True, force=False):
+    """Inspect CCD3 before calibration co-addition and record per-run signal QA.
+
+    Primary signal is checked in Science for Flat/FibTh/Science, in SimTh for
+    SimTh, and in SimLC for dedicated SimLC. Failed calibration exposures are
+    excluded from later combinations. Science exposures are always retained
+    unless already marked bad, but a weak primary signal is recorded as QA.
+
+    SimLC presence is a separate image-based decision: the SimLC region is
+    inspected for every Science exposure, every 15-s SimTh candidate, and every
+    dedicated SimLC exposure. Recorded LC flags are not consulted.
+    """
+    table = reduction_input
+    if "primary_signal_status" in table.colnames and not force:
+        return table
+
+    n = len(table)
+    table["primary_signal_status"] = np.full(n, "not_checked", dtype="U16")
+    table["primary_signal_score"] = np.full(n, np.nan, float)
+    table["primary_signal_orders"] = np.zeros(n, np.int16)
+    table["simlc_signal_status"] = np.full(n, "not_checked", dtype="U16")
+    table["simlc_signal_score"] = np.full(n, np.nan, float)
+    table["simlc_signal_orders"] = np.zeros(n, np.int16)
+    table["simlc_signal"] = np.zeros(n, bool)
+    base_use = np.asarray(
+        table["calibration_use"] if "calibration_use" in table.colnames else table["use"],
+        bool,
+    )
+    table["signal_use"] = base_use.copy()
+
+    for i, row in enumerate(table):
+        kind = str(row["type"])
+        if kind not in PRIMARY_SIGNAL_REGION or not bool(row["use"]):
+            continue
+        if kind != "Science" and "calibration_use" in table.colnames and not bool(row["calibration_use"]):
+            table["signal_use"][i] = False
+            continue
+
+        if not bool(row["has_ccd3"]):
+            table["primary_signal_status"][i] = "missing"
+            if kind != "Science":
+                table["signal_use"][i] = False
+                _set_issue(table, i, "CCD3 signal QA unavailable")
+            continue
+
+        try:
+            frame = detector.preprocess_image(row["file_ccd3"], "3", config)
+            primary_region = PRIMARY_SIGNAL_REGION[kind]
+            primary_mode = "continuum" if kind in ("Flat", "Science") else "line"
+            primary = _signal_check(frame, order_geometries, primary_region, primary_mode, config)
+            table["primary_signal_status"][i] = "present" if primary.detected else "absent"
+            table["primary_signal_score"][i] = primary.score
+            table["primary_signal_orders"][i] = primary.n_orders_detected
+
+            if kind != "Science" and not primary.detected:
+                table["signal_use"][i] = False
+                _set_issue(table, i, f"No significant {primary_region} signal on CCD3")
+            elif kind == "Science" and not primary.detected:
+                _set_issue(table, i, "Low/absent Science-region signal on CCD3; Science retained")
+
+            lc_candidate = kind == "SimLC" or (
+                "block_SimLC" in table.colnames and bool(str(row["block_SimLC"]).strip())
+            )
+            if lc_candidate:
+                lc = primary if kind == "SimLC" else _signal_check(
+                    frame, order_geometries, "SimLC", "line", config
+                )
+                table["simlc_signal_status"][i] = "present" if lc.detected else "absent"
+                table["simlc_signal_score"][i] = lc.score
+                table["simlc_signal_orders"][i] = lc.n_orders_detected
+                table["simlc_signal"][i] = lc.detected
+        except Exception as exc:
+            table["primary_signal_status"][i] = "error"
+            if kind != "Science":
+                table["signal_use"][i] = False
+            _set_issue(table, i, f"CCD3 signal QA failed: {type(exc).__name__}")
+            logger.warning("CCD3 signal QA failed for run %s: %s", row["run"], exc)
+
+    table.meta["signal_qa_done"] = True
+    if verbose:
+        _print_signal_qa_summary(table)
+    return table
+
+
+def _print_signal_qa_summary(table):
+    """Print concise exposure-level QA after the CCD3 inspection pass."""
+    print("\nCCD3 exposure signal QA")
+    kinds = np.asarray(table["type"]).astype(str)
+    calibration_use = np.asarray(
+        table["calibration_use"] if "calibration_use" in table.colnames else table["use"], bool
+    )
+    signal_use = np.asarray(table["signal_use"], bool)
+
+    rejected = calibration_use & ~signal_use & np.isin(kinds, ["Flat", "FibTh", "SimTh", "SimLC"])
+    if np.any(rejected):
+        for kind in ("Flat", "FibTh", "SimTh", "SimLC"):
+            rows = table[rejected & (kinds == kind)]
+            if len(rows):
+                print(f"  rejected {kind:<6}: {observations._format_runs(rows['run'])}")
+    else:
+        print("  primary calibration signal: no failed exposures")
+
+    science_low = (
+        (kinds == "Science")
+        & np.asarray(table["use"], bool)
+        & (np.asarray(table["primary_signal_status"]).astype(str) == "absent")
+    )
+    if np.any(science_low):
+        print(f"  low-signal Science retained: {observations._format_runs(table[science_low]['run'])}")
+
+    detected = np.asarray(table["simlc_signal"], bool)
+    if np.any(detected):
+        print(f"  SimLC detected from CCD3: {observations._format_runs(table[detected]['run'])}")
+    candidates = np.asarray(table["block_SimLC"]).astype(str) != "" if "block_SimLC" in table.colnames else np.zeros(len(table), bool)
+    absent = candidates & ~detected & (np.asarray(table["simlc_signal_status"]).astype(str) == "absent")
+    if np.any(absent):
+        print(f"  SimLC candidates without detected signal: {observations._format_runs(table[absent]['run'])}")
+
+
 def _calibration_region(kind):
     return "Science" if kind == "FibTh" else kind
 
 
-def _calibration_rows(reduction_input, kind):
-    if kind != "SimLC":
-        return observations.select(reduction_input, kind)
-    mask = np.asarray(reduction_input["use"], bool) & (
-        (np.asarray(reduction_input["type"]).astype(str) == "SimLC")
-        | np.asarray(reduction_input["lc_requested"], bool)
+def _combine_detector_frames(frames):
+    """Streaming equal-weight mean of frames with variance propagation."""
+    sum_image = sum_variance = n_good = quality = None
+    shape = ccd = readout_mode = header = None
+    n_frames = 0
+    overscan_median, overscan_rms = {}, {}
+
+    for frame in frames:
+        if n_frames == 0:
+            shape = frame.image.shape
+            ccd, readout_mode = frame.ccd, frame.readout_mode
+            header = frame.header.copy()
+            sum_image = np.zeros(shape, float)
+            sum_variance = np.zeros(shape, float)
+            n_good = np.zeros(shape, np.uint16)
+            quality = np.zeros(shape, np.uint16)
+        else:
+            if frame.ccd != ccd:
+                raise ValueError("Cannot combine calibration frames from different CCDs")
+            if frame.readout_mode != readout_mode:
+                raise ValueError("Cannot combine calibration frames with different readout modes")
+            if frame.image.shape != shape:
+                raise ValueError("Cannot combine calibration frames with different image shapes")
+
+        image = np.asarray(frame.image, float)
+        variance = np.asarray(frame.variance, float)
+        good = np.isfinite(image) & np.isfinite(variance) & (variance >= 0)
+        sum_image[good] += image[good]
+        sum_variance[good] += variance[good]
+        n_good[good] += 1
+        quality |= np.asarray(frame.quality_mask, np.uint16)
+        for key, value in frame.overscan_median.items():
+            overscan_median.setdefault(key, []).append(value)
+        for key, value in frame.overscan_rms.items():
+            overscan_rms.setdefault(key, []).append(value)
+        n_frames += 1
+
+    if n_frames == 0:
+        raise ValueError("No detector frames supplied for calibration block")
+    del frame, image, variance, good
+
+    # Reuse the accumulators for the final mean/variance to keep the peak memory
+    # close to one preprocessed detector frame plus four accumulator arrays.
+    np.divide(sum_image, n_good, out=sum_image, where=n_good > 0)
+    sum_image[n_good == 0] = np.nan
+    np.divide(sum_variance, n_good, out=sum_variance, where=n_good > 0)
+    np.divide(sum_variance, n_good, out=sum_variance, where=n_good > 0)
+    sum_variance[n_good == 0] = np.nan
+
+    header["NCOMBINE"] = n_frames
+    return DetectorFrame(
+        image=sum_image,
+        variance=sum_variance,
+        header=header,
+        ccd=ccd,
+        readout_mode=readout_mode,
+        overscan_median={key: float(np.nanmean(value)) for key, value in overscan_median.items()},
+        overscan_rms={key: float(np.nanmean(value)) for key, value in overscan_rms.items()},
+        quality_mask=quality,
     )
-    return reduction_input[mask]
+
+
+def _extract_calibration_block(
+    rows,
+    block,
+    kind,
+    ccd,
+    order_geometries,
+    fibre_geometries,
+    config,
+    *,
+    candidate_rows=None,
+):
+    """Combine accepted members of one block, extract them, and retain QA provenance."""
+    exptimes = np.asarray(rows["exptime"], float)
+    finite = exptimes[np.isfinite(exptimes)]
+    if kind != "SimLC" and len(finite) and np.nanmax(finite) - np.nanmin(finite) > 0.01:
+        raise ValueError(f"{block} CCD{ccd} contains mixed exposure times: {finite.tolist()}")
+
+    frame = _combine_detector_frames(
+        detector.preprocess_image(row[f"file_ccd{ccd}"], ccd, config)
+        for row in rows
+    )
+    region = _calibration_region(kind)
+    physical_orders, names = [], []
+    summed_flux, summed_variance = [], []
+    fibre_flux, fibre_variance = [], []
+
+    for geometry in orders.geometry_for_ccd(order_geometries, ccd):
+        if region in ("SimTh", "SimLC") and not geometry.available.get(region, False):
+            continue
+        order_matrix = orders.extract_order_matrix(frame, geometry)
+        summed = extract_summed_order(order_matrix, components=(region,))
+        physical_orders.append(geometry.order)
+        names.append(geometry.name)
+        summed_flux.append(summed.flux[:, 0])
+        summed_variance.append(summed.variance[:, 0])
+        if kind == "FibTh" and config.extraction_mode == "fibre":
+            fibre_result = extract_fibre_order(order_matrix, fibre_geometries[geometry.name])
+            science = fibre_result.select(SCIENCE_FIBRES)
+            fibre_flux.append(science.flux)
+            fibre_variance.append(science.variance)
+
+    if not physical_orders:
+        raise RuntimeError(f"No usable {kind} orders found for {block} CCD{ccd}")
+
+    base = ExtractionResult(
+        np.column_stack(summed_flux), np.column_stack(summed_variance),
+        tuple(physical_orders), "summed",
+    )
+    mjds = np.asarray(rows["mjd_mid"], float)
+    mjd_mid = float(np.nanmean(mjds)) if np.any(np.isfinite(mjds)) else np.nan
+    exptime = float(np.nanmean(finite)) if len(finite) else np.nan
+    exposure = ExtractedExposure(
+        run=str(rows["run"][0]), kind=kind, ccd=ccd,
+        mjd_mid=mjd_mid, exptime=exptime,
+        orders=np.asarray(physical_orders, dtype=np.int16), summed=base,
+        order_names=tuple(names),
+        fibre_flux=np.stack(fibre_flux, axis=1) if fibre_flux else None,
+        fibre_variance=np.stack(fibre_variance, axis=1) if fibre_variance else None,
+    )
+
+    candidate_rows = rows if candidate_rows is None else candidate_rows
+    used_runs = tuple(str(run) for run in rows["run"])
+    candidate_runs = tuple(str(run) for run in candidate_rows["run"])
+    used_set = set(used_runs)
+    exposure.block = str(block)
+    exposure.runs = used_runs
+    exposure.candidate_runs = candidate_runs
+    exposure.rejected_runs = tuple(run for run in candidate_runs if run not in used_set)
+    exposure.source_types = tuple(sorted(set(np.asarray(candidate_rows["type"]).astype(str))))
+    exposure.member_mjd_mid = tuple(float(value) for value in rows["mjd_mid"])
+    exposure.member_exptime = tuple(float(value) for value in rows["exptime"])
+    exposure.qa_rows = candidate_rows.copy()
+    return exposure
+
+
+def _accepted_block_rows(rows, kind):
+    """Filter CCD-specific block members using the image-based CCD3 QA."""
+    if not len(rows):
+        return rows
+    if kind == "SimLC":
+        if "simlc_signal" not in rows.colnames:
+            raise RuntimeError("SimLC signal QA has not been run")
+        return rows[np.asarray(rows["simlc_signal"], bool)]
+    if "signal_use" not in rows.colnames:
+        raise RuntimeError("Primary signal QA has not been run")
+    return rows[np.asarray(rows["signal_use"], bool)]
+
+
+def _print_extracted_calibration(exposure):
+    """Print the final members and mean time of one CCD calibration product."""
+    mjd = f"{float(exposure.mjd_mid):.6f}" if np.isfinite(exposure.mjd_mid) else "n/a"
+    runs = observations._format_runs(getattr(exposure, "runs", (exposure.run,)))
+    rejected = getattr(exposure, "rejected_runs", ())
+    suffix = f"  rejected {observations._format_runs(rejected)}" if rejected else ""
+    source = "/".join(getattr(exposure, "source_types", ()))
+    source = f"  source {source}" if source and source != exposure.kind else ""
+    print(f"  {exposure.block:<16} CCD{exposure.ccd}  MJD {mjd}  runs {runs}{suffix}{source}")
 
 
 def extract_calibration_exposures(reduction_input, order_geometries, fibre_geometries, config):
-    """Extract detector-coordinate calibration spectra without Flat-response correction."""
-    output = {kind: {ccd: [] for ccd in ("1", "2", "3")} for kind in ("SimLC", "SimTh", "FibTh")}
-    for kind in output:
-        region = _calibration_region(kind)
-        for obs in _calibration_rows(reduction_input, kind):
-            for ccd in ("1", "2", "3"):
-                if kind == "SimLC" and ccd == "1":
-                    continue
-                if not obs[f"use_ccd{ccd}"]:
-                    continue
-                frame = detector.preprocess_image(obs[f"file_ccd{ccd}"], ccd, config)
-                physical_orders, names = [], []
-                summed_flux, summed_variance = [], []
-                fibre_flux, fibre_variance = [], []
-                for geometry in orders.geometry_for_ccd(order_geometries, ccd):
-                    if region in ("SimTh", "SimLC") and not geometry.available.get(region, False):
-                        continue
-                    order_matrix = orders.extract_order_matrix(frame, geometry)
-                    summed = extract_summed_order(order_matrix, components=(region,))
-                    physical_orders.append(geometry.order)
-                    names.append(geometry.name)
-                    summed_flux.append(summed.flux[:, 0])
-                    summed_variance.append(summed.variance[:, 0])
-                    if kind == "FibTh" and config.extraction_mode == "fibre":
-                        fibre_result = extract_fibre_order(order_matrix, fibre_geometries[geometry.name])
-                        science = fibre_result.select(SCIENCE_FIBRES)
-                        fibre_flux.append(science.flux)
-                        fibre_variance.append(science.variance)
+    """Validate, combine, extract, and save calibration products block by block.
 
-                base = ExtractionResult(
-                    np.column_stack(summed_flux), np.column_stack(summed_variance),
-                    tuple(physical_orders), "summed",
-                )
-                exposure = ExtractedExposure(
-                    run=str(obs["run"]), kind=kind, ccd=ccd,
-                    mjd_mid=float(obs["mjd_mid"]), exptime=float(obs["exptime"]),
-                    orders=np.asarray(physical_orders, dtype=np.int16), summed=base, order_names=tuple(names),
-                    fibre_flux=np.stack(fibre_flux, axis=1) if fibre_flux else None,
-                    fibre_variance=np.stack(fibre_variance, axis=1) if fibre_variance else None,
+    CCD3 is inspected first for every relevant exposure. Failed Flat/FibTh/SimTh/
+    SimLC exposures are excluded from calibration products; Science exposures are
+    never rejected by this signal QA. SimLC presence is determined from the SimLC
+    region itself for Science, every 15-s SimTh, and dedicated SimLC candidates.
+
+    Accepted raw frames are averaged with equal weight before extraction and their
+    independent variances are propagated as ``sum(V_i) / N**2``. SimLC frames are
+    never exposure-time scaled: nominal exposure time is not correlated with comb
+    flux. Products are saved immediately after each block is completed.
+    """
+    inspect_ccd3_signals(reduction_input, order_geometries, config)
+    print("\nExtracted calibration products")
+
+    output = {
+        kind: {ccd: [] for ccd in ("1", "2", "3")}
+        for kind in ("SimLC", "SimTh", "FibTh")
+    }
+    directory = reduction_input.meta.get("calibration_directory")
+    if directory is None:
+        logger.warning(
+            "No calibration_directory metadata on reduction_input; "
+            "calibration products will not be saved automatically"
+        )
+
+    for kind in output:
+        block_lookup = dict(observations.calibration_blocks(reduction_input, kind))
+        for block in block_lookup:
+            block_output = {kind: {ccd: [] for ccd in ("1", "2", "3")}}
+            used_any = False
+            for ccd in ("1", "2", "3"):
+                candidate = dict(observations.calibration_blocks(reduction_input, kind, ccd)).get(block)
+                if candidate is None or not len(candidate):
+                    continue
+                rows = _accepted_block_rows(candidate, kind)
+                if not len(rows):
+                    continue
+                exposure = _extract_calibration_block(
+                    rows,
+                    block,
+                    kind,
+                    ccd,
+                    order_geometries,
+                    fibre_geometries,
+                    config,
+                    candidate_rows=candidate,
                 )
                 output[kind][ccd].append(exposure)
-    return output
+                block_output[kind][ccd].append(exposure)
+                _print_extracted_calibration(exposure)
+                used_any = True
 
+            if not used_any:
+                logger.info("Skipping %s: no members passed CCD3 signal QA", block)
+                continue
+            if directory is not None:
+                save_calibration_exposures(
+                    block_output,
+                    directory,
+                    config.night,
+                    overwrite=getattr(config, "overwrite", True),
+                )
+    return output
 
 def _metadata_hdus(exposure, mode):
     primary = fits.PrimaryHDU()
@@ -328,8 +741,63 @@ def _metadata_hdus(exposure, mode):
     primary.header["MJD-MID"] = exposure.mjd_mid
     primary.header["EXPTIME"] = exposure.exptime
     primary.header["EXTRMODE"] = mode
-    order_table = Table({"COLUMN": np.arange(len(exposure.orders), dtype=np.int16), "ORDER": np.asarray(exposure.orders,dtype=np.int16,)})
+
+    block = getattr(exposure, "block", "")
+    runs = tuple(getattr(exposure, "runs", (exposure.run,)))
+    candidates = tuple(getattr(exposure, "candidate_runs", runs))
+    rejected = tuple(getattr(exposure, "rejected_runs", ()))
+    source_types = tuple(getattr(exposure, "source_types", ()))
+    if block:
+        primary.header["BLOCK"] = block
+    primary.header["NRUNS"] = len(runs)
+    primary.header["NCAND"] = len(candidates)
+    primary.header["NREJECT"] = len(rejected)
+    primary.header["RUNFIRST"] = str(runs[0])
+    primary.header["RUNLAST"] = str(runs[-1])
+    member_exptime = np.asarray(getattr(exposure, "member_exptime", ()), float)
+    primary.header["TOTEXP"] = float(np.nansum(member_exptime)) if len(member_exptime) else float(exposure.exptime) * len(runs)
+    primary.header["COMBINE"] = "MEAN"
+    primary.header["WEIGHT"] = "EQUAL"
+    primary.header["SIGQA"] = "CCD3"
+    if source_types:
+        primary.header["SOURCE"] = ",".join(source_types)
+    run_text = ",".join(runs)
+    if len(run_text) <= 60:
+        primary.header["RUNS"] = run_text
+
+    order_table = Table({
+        "COLUMN": np.arange(len(exposure.orders), dtype=np.int16),
+        "ORDER": np.asarray(exposure.orders, dtype=np.int16),
+    })
     return primary, fits.BinTableHDU(order_table, name="ORDERS")
+
+
+def _qa_hdu(exposure):
+    """Return per-candidate signal QA and inclusion provenance for a product."""
+    rows = getattr(exposure, "qa_rows", None)
+    if rows is None or not len(rows):
+        return None
+    used = set(getattr(exposure, "runs", ()))
+    qa = Table()
+    qa["RUN"] = np.asarray(rows["run"]).astype("U8")
+    qa["TYPE"] = np.asarray(rows["type"]).astype("U12")
+    qa["MJD_MID"] = np.asarray(rows["mjd_mid"], float)
+    qa["EXPTIME"] = np.asarray(rows["exptime"], float)
+    qa["USED"] = np.array([str(run) in used for run in rows["run"]], bool)
+    for source, target in (
+        ("primary_signal_status", "PRIMARY"),
+        ("primary_signal_score", "PRIMSCORE"),
+        ("simlc_signal_status", "SIMLC"),
+        ("simlc_signal_score", "LCSCORE"),
+    ):
+        if source in rows.colnames:
+            qa[target] = rows[source]
+    return fits.BinTableHDU(qa, name="SIGNAL_QA")
+
+def _calibration_filename(exposure, directory, night, mode):
+    block = getattr(exposure, "block", "")
+    tag = block.lower() if block else f"run{int(exposure.run):04d}"
+    return Path(directory) / f"{exposure.kind.lower()}_{mode}_{night}_{tag}_ccd{exposure.ccd}.fits"
 
 
 def save_extracted_exposure(exposure, directory, night, overwrite=True):
@@ -339,12 +807,16 @@ def save_extracted_exposure(exposure, directory, night, overwrite=True):
     files = []
 
     primary, order_hdu = _metadata_hdus(exposure, "summed")
-    filename = directory / f"{exposure.kind.lower()}_summed_{night}_run{int(exposure.run):04d}_ccd{exposure.ccd}.fits"
-    fits.HDUList([
+    filename = _calibration_filename(exposure, directory, night, "summed")
+    hdus = [
         primary, order_hdu,
         fits.ImageHDU(np.asarray(exposure.summed.flux, np.float32), name="FLUX"),
         fits.ImageHDU(np.asarray(exposure.summed.variance, np.float32), name="VARIANCE"),
-    ]).writeto(filename, overwrite=overwrite)
+    ]
+    qa_hdu = _qa_hdu(exposure)
+    if qa_hdu is not None:
+        hdus.append(qa_hdu)
+    fits.HDUList(hdus).writeto(filename, overwrite=overwrite)
     files.append(filename)
 
     if exposure.fibre_flux is not None:
@@ -353,17 +825,22 @@ def save_extracted_exposure(exposure, directory, night, overwrite=True):
             "INDEX": np.arange(len(SCIENCE_FIBRES), dtype=np.int16),
             "FIBRE": np.array([str(f) for f in SCIENCE_FIBRES], dtype="U4"),
         })
-        filename = directory / f"{exposure.kind.lower()}_fibres_{night}_run{int(exposure.run):04d}_ccd{exposure.ccd}.fits"
-        fits.HDUList([
+        filename = _calibration_filename(exposure, directory, night, "fibres")
+        hdus = [
             primary, order_hdu, fits.BinTableHDU(fibre_table, name="FIBRES"),
             fits.ImageHDU(np.asarray(exposure.fibre_flux, np.float32), name="FLUX"),
             fits.ImageHDU(np.asarray(exposure.fibre_variance, np.float32), name="VARIANCE"),
-        ]).writeto(filename, overwrite=overwrite)
+        ]
+        qa_hdu = _qa_hdu(exposure)
+        if qa_hdu is not None:
+            hdus.append(qa_hdu)
+        fits.HDUList(hdus).writeto(filename, overwrite=overwrite)
         files.append(filename)
     return files
 
 
 def save_calibration_exposures(exposures, directory, night, overwrite=True):
+    """Save all extracted products in a calibration block."""
     files = []
     for kind in exposures.values():
         for ccd_exposures in kind.values():
