@@ -81,10 +81,8 @@ def combine_flat_frames(reduction_input, config):
             overscan_median=first.overscan_median, overscan_rms=first.overscan_rms,
             quality_mask=quality,
         )
-        logger.info(
-            "CCD%s combined Flat:\n%d exposures (%s);\ninput 95th-percentile scale median %.1f ADU",
-            ccd, len(images), ",".join(runs), np.nanmedian(scales),
-        )
+        logger.info("CCD%s combined Flat %d exposures with input 95th-percentile scale median %.1f ADU:",ccd, len(images), np.nanmedian(scales))
+        logger.info("%s", ",".join(runs))
     return combined
 
 

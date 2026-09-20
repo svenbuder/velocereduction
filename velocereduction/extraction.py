@@ -690,7 +690,6 @@ def extract_calibration_exposures(reduction_input, order_geometries, fibre_geome
     inspect_ccd3_signals(reduction_input, order_geometries, config)
     blocks = observations.get_calibration_blocks(reduction_input)
     observations.update_calibration_blocks_from_qa(reduction_input, blocks)
-    print("\nExtracted calibration products")
 
     # Preserve the existing returned-product layout for downstream code while
     # using the nested block dictionary as the single source of membership.
@@ -706,6 +705,8 @@ def extract_calibration_exposures(reduction_input, order_geometries, fibre_geome
         )
 
     for kind in output:
+        logger.info("Extracting %s calibration products", kind)
+
         # Process a logical block once, collecting any CCD-specific products.
         block_ids = []
         for ccd_blocks in blocks.get(kind, {}).values():
@@ -752,7 +753,7 @@ def extract_calibration_exposures(reduction_input, order_geometries, fibre_geome
                 used_any = True
 
             if not used_any:
-                logger.info("Skipping %s: no members passed calibration QA", block)
+                logger.info("    -> Skipping %s: no members passed calibration QA", block)
                 continue
             if directory is not None:
                 save_calibration_exposures(

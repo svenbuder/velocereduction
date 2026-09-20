@@ -808,10 +808,15 @@ def plot_order_matrix_examples(combined_flats, geometries, filename):
 
         axes[1, column].set_xlabel("Relative cross-dispersion pixel")
 
+        axes[0, column].set_xlim(-1,81)
+        axes[0, column].set_xticks([0, 20, 40, 60, 80],[-40, -20, 0, 20, 40])
+        axes[1, column].set_xlim(-41,41)
+        axes[1, column].set_xticks([-40, -20, 0, 20, 40])
+
         if column == 0:
             axes[0, column].set_ylabel("Dispersion pixel")
             axes[1, column].set_ylabel("Median Flat counts")
-
+        
     axes[1, 0].legend(fontsize=7, ncol=2)
     fig.suptitle("Representative OrderMatrix products")
     return _save(fig, filename)
@@ -889,8 +894,6 @@ def plot_fibre_profile_summary(geometries, flat_order_matrices, filename):
         axes[0, column].legend(fontsize=8)
         axes[1, column].set_xlabel("Relative cross-dispersion pixel")
 
-        axes[0, column].set_xlim(-1,81)
-        axes[0, column].set_xticks([0, 20, 40, 60, 80],[-40, -20, 0, 20, 40])
         axes[1, column].set_xlim(-41,41)
         axes[1, column].set_xticks([-40, -20, 0, 20, 40])
 
@@ -921,6 +924,72 @@ def plot_fibre_geometry_order(geometry, order_matrix, filename):
     return _save(fig, filename)
 
 
+def plot_summed_response_image(products, filename):
+    """Display summed Flat response versus dispersion pixel and order."""
+    fig, axes = plt.subplots(
+        1, 3,
+        figsize=(13, 4),
+        constrained_layout=True,
+    )
+
+    image = None
+
+    for column, ccd in enumerate(("1", "2", "3")):
+        subset = sorted(
+            [p for p in products.values() if p.ccd == ccd],
+            key=lambda p: p.order,
+        )
+
+        if not subset:
+            axes[column].axis("off")
+            continue
+
+        response = np.stack([
+            p.summed_response
+            for p in subset
+        ])
+
+        physical_orders = np.array([
+            p.order for p in subset
+        ])
+
+        image = axes[column].imshow(
+            response,
+            origin="lower",
+            cmap="Greys",
+            aspect="auto",
+            interpolation="none",
+            vmin=0.9,
+            vmax=1.1,
+            extent=(
+                -0.5,
+                response.shape[1] - 0.5,
+                physical_orders[0] - 0.5,
+                physical_orders[-1] + 0.5,
+            ),
+        )
+
+        axes[column].set(
+            title=f"CCD{ccd}",
+            xlabel="Dispersion pixel",
+        )
+
+        if column == 0:
+            axes[column].set_ylabel("Echelle order")
+
+    if image is not None:
+        cbar = fig.colorbar(
+            image,
+            ax=axes,
+            pad=0.02,
+            fraction=0.025,
+        )
+        cbar.set_label(
+            r"$F_{\rm flat}/\widetilde{F}_{\rm flat}$"
+        )
+
+    fig.suptitle("Summed Flat response")
+    return _save(fig, filename)
 
 
 def _native_order_coordinates(order_matrix):
