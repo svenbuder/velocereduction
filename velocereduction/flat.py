@@ -43,7 +43,12 @@ def combine_flat_frames(reduction_input, config):
     combined = {}
     for ccd in ("1", "2", "3"):
         images, variances, masks, scales, runs, frames = [], [], [], [], [], []
-        for row in observations.select(reduction_input, "Flat", ccd):
+        selected_flat_exposures = observations.select(reduction_input, "Flat", ccd)
+        logger.info(
+            "Combining CCD%s Flat frames from %d exposures: %s",
+            ccd, len(selected_flat_exposures), ",".join([str(row["run"]) for row in selected_flat_exposures])
+        )
+        for row in selected_flat_exposures:
             frame = detector.preprocess_image(row[f"file_ccd{ccd}"], ccd, config)
             if np.nanpercentile(frame.image, 99) < 5000:
                 logger.warning("CCD%s Flat %s rejected as too faint", ccd, row["run"])
@@ -77,7 +82,7 @@ def combine_flat_frames(reduction_input, config):
             quality_mask=quality,
         )
         logger.info(
-            "CCD%s combined Flat: %d exposures (%s); input 95th-percentile scale median %.1f ADU",
+            "CCD%s combined Flat:\n%d exposures (%s);\ninput 95th-percentile scale median %.1f ADU",
             ccd, len(images), ",".join(runs), np.nanmedian(scales),
         )
     return combined

@@ -641,6 +641,13 @@ def measure_detector_shifts(reduction_input, config, paths):
     for ccd in ("1", "2", "3"):
         measurements = []
         candidates = _registration_candidates(reduction_input, ccd)
+        logger.info(
+            "Measuring CCD%s detector shift from %d SimTh exposures: %s",
+            ccd,
+            len(candidates),
+            ",".join([str(row["run"]) for row in candidates]),
+        )
+
         if len(candidates):
             reference = _reference_registration_image(paths, ccd)
             for row in candidates:
