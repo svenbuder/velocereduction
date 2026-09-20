@@ -327,30 +327,154 @@ def assign_calibration_blocks(table, gap_minutes=20.0, merged_reference=False):
     table["calibration_block"] = primary
     return table
 
-def calibration_blocks(table, kind, ccd=None):
-    """Return ``(block_id, rows)`` for one calibration type, optionally one CCD."""
-    column = f"block_{kind}"
-    if column not in table.colnames:
-        raise KeyError(f"{column} is missing; call assign_calibration_blocks first")
-    labels = np.asarray(table[column]).astype(str)
-    seen, result = set(), []
-    for label in labels:
-        if not label or label in seen:
+def build_calibration_blocks(table):
+    """Build the editable ``kind -> CCD -> block`` calibration structure.
+
+    Flat/FibTh/SimTh membership is split by the CCD-specific exposure times
+    encoded in ``use_ccd*``. SimLC has no useful exposure-time selection, so
+    CCD2/3 receive the same candidate runs when the corresponding raw file is
+    present. The structure is intentionally plain dictionaries/lists so it can
+    be inspected or edited interactively before extraction.
+    """
+    blocks = {
+        kind: {ccd: {} for ccd in ("1", "2", "3")}
+        for kind in ("Flat", "FibTh", "SimTh", "SimLC")
+    }
+
+    for kind, ccd_blocks in blocks.items():
+        column = f"block_{kind}"
+        if column not in table.colnames:
             continue
-        seen.add(label)
-        rows = table[labels == label]
-        if ccd is not None:
-            ccd = str(ccd)
+        labels = np.asarray(table[column]).astype(str)
+        ordered_labels = list(dict.fromkeys(label for label in labels if label))
+
+        for ccd in ccd_blocks:
             if ccd not in EXPECTED_CCDS.get(kind, ()):
-                rows = rows[:0]
-            elif kind == "SimLC":
-                rows = rows[np.asarray(rows[f"has_ccd{ccd}"], bool)]
-            else:
-                rows = rows[np.asarray(rows[f"use_ccd{ccd}"], bool)]
-        if len(rows):
-            result.append((label, rows))
+                continue
+            for label in ordered_labels:
+                rows = table[labels == label]
+                if kind == "SimLC":
+                    rows = rows[np.asarray(rows[f"has_ccd{ccd}"], bool)]
+                else:
+                    rows = rows[np.asarray(rows[f"use_ccd{ccd}"], bool)]
+                if not len(rows):
+                    continue
+
+                runs = [str(run) for run in rows["run"]]
+                mjd = np.asarray(rows["mjd_mid"], float)
+                exptime = np.asarray(rows["exptime"], float)
+                ccd_blocks[ccd][label] = {
+                    "kind": kind,
+                    "ccd": ccd,
+                    "candidate_runs": runs,
+                    "used_runs": list(runs),
+                    "rejected_runs": [],
+                    "manual_rejected_runs": [],
+                    "use": True,
+                    "mjd_mid": float(np.nanmean(mjd)) if np.any(np.isfinite(mjd)) else np.nan,
+                    "exptime": float(np.nanmean(exptime)) if np.any(np.isfinite(exptime)) else np.nan,
+                    "expected_exptime": CALIBRATION_EXPTIMES.get(kind, {}).get(ccd),
+                    "source_types": sorted(set(np.asarray(rows["type"]).astype(str))),
+                    "qa_applied": False,
+                }
+    return blocks
+
+
+def get_calibration_blocks(table):
+    """Return the editable nested calibration-block dictionary for ``table``."""
+    blocks = table.meta.get("calibration_blocks")
+    if blocks is None:
+        blocks = build_calibration_blocks(table)
+        table.meta["calibration_blocks"] = blocks
+    return blocks
+
+
+def _rows_for_runs(table, runs):
+    """Return table rows in the explicit run order supplied."""
+    if not runs:
+        return table[:0]
+    lookup = {str(run): i for i, run in enumerate(table["run"])}
+    indices = [lookup[str(run)] for run in runs if str(run) in lookup]
+    return table[indices]
+
+
+def calibration_blocks(table, kind=None, ccd=None):
+    """Access calibration blocks while retaining the previous helper interface.
+
+    With no ``kind`` this returns the full editable nested dictionary. With a
+    kind and CCD it returns ``[(block_id, rows), ...]`` using the current
+    ``candidate_runs`` lists, so manual edits to the dictionary are respected.
+    """
+    blocks = get_calibration_blocks(table)
+    if kind is None:
+        return blocks
+    if kind not in blocks:
+        return []
+    if ccd is not None:
+        ccd = str(ccd)
+        return [
+            (block, _rows_for_runs(table, info["candidate_runs"]))
+            for block, info in blocks[kind].get(ccd, {}).items()
+        ]
+
+    # Backward-compatible kind-level view: union candidate runs across CCDs.
+    ordered = []
+    for ccd_blocks in blocks[kind].values():
+        for block in ccd_blocks:
+            if block not in ordered:
+                ordered.append(block)
+    result = []
+    for block in ordered:
+        runs = []
+        for ccd_blocks in blocks[kind].values():
+            info = ccd_blocks.get(block)
+            if info is not None:
+                runs.extend(info["candidate_runs"])
+        runs = list(dict.fromkeys(runs))
+        result.append((block, _rows_for_runs(table, runs)))
     return result
 
+
+def update_calibration_blocks_from_qa(table, blocks=None):
+    """Apply image-based QA to the editable calibration-block structure.
+
+    Deleted blocks remain deleted. ``manual_rejected_runs`` are also preserved,
+    allowing interactive quality control without losing the original candidate
+    membership. SimLC acceptance always follows the CCD3 SimLC signal result and
+    is therefore propagated identically to CCD2 and CCD3.
+    """
+    blocks = get_calibration_blocks(table) if blocks is None else blocks
+    run_index = {str(run): i for i, run in enumerate(table["run"])}
+    have_primary = "signal_use" in table.colnames
+    have_simlc = "simlc_signal" in table.colnames
+
+    for kind, by_ccd in blocks.items():
+        for ccd_blocks in by_ccd.values():
+            for info in ccd_blocks.values():
+                candidates = [str(run) for run in info.get("candidate_runs", [])]
+                manual = {str(run) for run in info.get("manual_rejected_runs", [])}
+                used = []
+                for run in candidates:
+                    i = run_index.get(run)
+                    if i is None or run in manual or not info.get("use", True):
+                        continue
+                    if kind == "SimLC":
+                        accepted = bool(table["simlc_signal"][i]) if have_simlc else True
+                    else:
+                        accepted = bool(table["signal_use"][i]) if have_primary else True
+                    if accepted:
+                        used.append(run)
+
+                info["used_runs"] = used
+                info["rejected_runs"] = [run for run in candidates if run not in set(used)]
+                rows = _rows_for_runs(table, used)
+                if len(rows):
+                    mjd = np.asarray(rows["mjd_mid"], float)
+                    info["mjd_mid"] = float(np.nanmean(mjd)) if np.any(np.isfinite(mjd)) else np.nan
+                else:
+                    info["mjd_mid"] = np.nan
+                info["qa_applied"] = have_simlc if kind == "SimLC" else have_primary
+    return blocks
 
 def _format_runs(runs):
     values = [int(run) for run in runs]
@@ -370,7 +494,7 @@ def _format_runs(runs):
 
 
 def print_observation_summary(table):
-    """Print Science exposures and attempted calibration blocks."""
+    """Print Science exposures and CCD-specific attempted calibration blocks."""
     print("\nScience exposures")
     science = table[(table["type"] == "Science") & table["use"]]
     if not len(science):
@@ -379,29 +503,29 @@ def print_observation_summary(table):
         mjd = f"{float(row['mjd_mid']):.6f}" if np.isfinite(row["mjd_mid"]) else "n/a"
         print(f"  run {row['run']}  MJD {mjd}  object {row['object']}")
 
-    print("\nCalibration blocks")
+    print("\nCalibration blocks / LC candidates (before CCD3 signal QA)")
+    blocks = get_calibration_blocks(table)
     found = False
-    for kind in CALIBRATION_TYPES:
-        for block, rows in calibration_blocks(table, kind):
-            # Science LC candidates are checked individually from CCD3 later;
-            # they are already listed above and would otherwise dominate this summary.
-            if kind == "SimLC" and not np.any(np.asarray(rows["type"]).astype(str) == "SimLC"):
+    for kind, by_ccd in blocks.items():
+        for ccd, ccd_blocks in by_ccd.items():
+            printable = {
+                block: info for block, info in ccd_blocks.items()
+                if not (kind == "SimLC" and block.startswith("SimLC_run"))
+            }
+            if not printable:
                 continue
             found = True
-            mjd_values = np.asarray(rows["mjd_mid"], float)
-            mjd = np.nanmean(mjd_values) if np.any(np.isfinite(mjd_values)) else np.nan
-            mean_text = f"{mjd:.6f}" if np.isfinite(mjd) else "n/a"
-            ccd_runs = []
-            for ccd in EXPECTED_CCDS.get(kind, ()):
-                matches = dict(calibration_blocks(table, kind, ccd)).get(block)
-                if matches is not None and len(matches):
-                    ccd_runs.append(f"CCD{ccd}={_format_runs(matches['run'])}")
-            suffix = f"  [{' ; '.join(ccd_runs)}]" if ccd_runs else ""
-            context = ""
-            if kind == "SimLC" and len(rows):
-                types = sorted(set(np.asarray(rows["type"]).astype(str)))
-                context = f"  candidate from {'/'.join(types)}"
-            print(f"  {block:<10} MJD {mean_text}  runs {_format_runs(rows['run'])}{suffix}{context}")
+            print(f"  {kind} CCD{ccd}")
+            for block, info in printable.items():
+                mjd = info["mjd_mid"]
+                mean_text = f"{mjd:.6f}" if np.isfinite(mjd) else "n/a"
+                context = ""
+                if kind == "SimLC":
+                    context = f"  candidate from {'/'.join(info['source_types'])}"
+                print(
+                    f"    {block:<16} MJD {mean_text}  "
+                    f"runs {_format_runs(info['candidate_runs'])}{context}"
+                )
     if not found:
         print("  none")
     if len(science):
@@ -448,6 +572,7 @@ def identify_observations(config, paths):
     shutil.copy2(logs[0], paths.root / logs[0].name)
     table = build_observation_table(parse_observing_log(logs[0]), config, paths)
     assign_calibration_blocks(table, merged_reference=config.night == REFERENCE_NIGHT)
+    table.meta["calibration_blocks"] = build_calibration_blocks(table)
     table.meta["night"] = config.night
     table.meta["calibration_directory"] = str(paths.calibrations)
     write_reduction_input(table, config, paths)

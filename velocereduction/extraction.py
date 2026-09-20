@@ -8,7 +8,7 @@ from astropy.table import Table
 from scipy.special import ndtr
 
 from .constants import SCIENCE_FIBRES
-from .models import ExtractionResult, ExtractedExposure, OrderMatrix
+from .models import DetectorFrame, ExtractionResult, ExtractedExposure, OrderMatrix
 from . import detector, fibres, observations, orders
 
 logger = logging.getLogger(__name__)
@@ -396,6 +396,7 @@ def inspect_ccd3_signals(reduction_input, order_geometries, config, *, verbose=T
     """
     table = reduction_input
     if "primary_signal_status" in table.colnames and not force:
+        observations.update_calibration_blocks_from_qa(table)
         return table
 
     n = len(table)
@@ -418,6 +419,12 @@ def inspect_ccd3_signals(reduction_input, order_geometries, config, *, verbose=T
             continue
         if kind != "Science" and "calibration_use" in table.colnames and not bool(row["calibration_use"]):
             table["signal_use"][i] = False
+            continue
+        # Do not spend CCD3 QA time on calibration exposure times that are not
+        # candidates for any CCD product (e.g. the intermediate 10-s Flats).
+        if kind in ("Flat", "FibTh", "SimTh") and not any(
+            bool(row[f"use_ccd{ccd}"]) for ccd in ("1", "2", "3")
+        ):
             continue
 
         if not bool(row["has_ccd3"]):
@@ -461,6 +468,7 @@ def inspect_ccd3_signals(reduction_input, order_geometries, config, *, verbose=T
             logger.warning("CCD3 signal QA failed for run %s: %s", row["run"], exc)
 
     table.meta["signal_qa_done"] = True
+    observations.update_calibration_blocks_from_qa(table)
     if verbose:
         _print_signal_qa_summary(table)
     return table
@@ -499,7 +507,6 @@ def _print_signal_qa_summary(table):
     absent = candidates & ~detected & (np.asarray(table["simlc_signal_status"]).astype(str) == "absent")
     if np.any(absent):
         print(f"  SimLC candidates without detected signal: {observations._format_runs(table[absent]['run'])}")
-
 
 def _calibration_region(kind):
     return "Science" if kind == "FibTh" else kind
@@ -565,7 +572,6 @@ def _combine_detector_frames(frames):
         overscan_rms={key: float(np.nanmean(value)) for key, value in overscan_rms.items()},
         quality_mask=quality,
     )
-
 
 def _extract_calibration_block(
     rows,
@@ -669,19 +675,25 @@ def _print_extracted_calibration(exposure):
 def extract_calibration_exposures(reduction_input, order_geometries, fibre_geometries, config):
     """Validate, combine, extract, and save calibration products block by block.
 
-    CCD3 is inspected first for every relevant exposure. Failed Flat/FibTh/SimTh/
-    SimLC exposures are excluded from calibration products; Science exposures are
-    never rejected by this signal QA. SimLC presence is determined from the SimLC
-    region itself for Science, every 15-s SimTh, and dedicated SimLC candidates.
+    The editable block structure lives in
+    ``reduction_input.meta["calibration_blocks"]`` as
+    ``kind -> CCD -> block_id -> metadata``. Flat/FibTh/SimTh candidates are
+    already split by their CCD-specific exposure times; SimLC CCD2/3 candidates
+    share the image-based CCD3 LC decision.
 
-    Accepted raw frames are averaged with equal weight before extraction and their
-    independent variances are propagated as ``sum(V_i) / N**2``. SimLC frames are
-    never exposure-time scaled: nominal exposure time is not correlated with comb
-    flux. Products are saved immediately after each block is completed.
+    CCD3 signal QA updates ``used_runs`` and ``rejected_runs`` in place. Deleted
+    block keys and ``manual_rejected_runs`` are respected. Accepted raw frames
+    are averaged with equal weight before extraction, with independent variance
+    propagated as ``sum(V_i) / N**2``. SimLC frames are never exposure-time
+    scaled. Products are saved immediately after each logical block.
     """
     inspect_ccd3_signals(reduction_input, order_geometries, config)
+    blocks = observations.get_calibration_blocks(reduction_input)
+    observations.update_calibration_blocks_from_qa(reduction_input, blocks)
     print("\nExtracted calibration products")
 
+    # Preserve the existing returned-product layout for downstream code while
+    # using the nested block dictionary as the single source of membership.
     output = {
         kind: {ccd: [] for ccd in ("1", "2", "3")}
         for kind in ("SimLC", "SimTh", "FibTh")
@@ -694,17 +706,30 @@ def extract_calibration_exposures(reduction_input, order_geometries, fibre_geome
         )
 
     for kind in output:
-        block_lookup = dict(observations.calibration_blocks(reduction_input, kind))
-        for block in block_lookup:
+        # Process a logical block once, collecting any CCD-specific products.
+        block_ids = []
+        for ccd_blocks in blocks.get(kind, {}).values():
+            for block in ccd_blocks:
+                if block not in block_ids:
+                    block_ids.append(block)
+
+        for block in block_ids:
             block_output = {kind: {ccd: [] for ccd in ("1", "2", "3")}}
             used_any = False
             for ccd in ("1", "2", "3"):
-                candidate = dict(observations.calibration_blocks(reduction_input, kind, ccd)).get(block)
-                if candidate is None or not len(candidate):
+                info = blocks.get(kind, {}).get(ccd, {}).get(block)
+                if info is None or not info.get("use", True):
                     continue
-                rows = _accepted_block_rows(candidate, kind)
+
+                candidate_rows = observations._rows_for_runs(
+                    reduction_input, info.get("candidate_runs", [])
+                )
+                rows = observations._rows_for_runs(
+                    reduction_input, info.get("used_runs", [])
+                )
                 if not len(rows):
                     continue
+
                 exposure = _extract_calibration_block(
                     rows,
                     block,
@@ -713,15 +738,21 @@ def extract_calibration_exposures(reduction_input, order_geometries, fibre_geome
                     order_geometries,
                     fibre_geometries,
                     config,
-                    candidate_rows=candidate,
+                    candidate_rows=candidate_rows,
                 )
+                # Use the editable block provenance verbatim. This preserves
+                # manual rejections as well as automatic CCD3 QA decisions.
+                exposure.candidate_runs = tuple(info.get("candidate_runs", ()))
+                exposure.runs = tuple(info.get("used_runs", ()))
+                exposure.rejected_runs = tuple(info.get("rejected_runs", ()))
+
                 output[kind][ccd].append(exposure)
                 block_output[kind][ccd].append(exposure)
                 _print_extracted_calibration(exposure)
                 used_any = True
 
             if not used_any:
-                logger.info("Skipping %s: no members passed CCD3 signal QA", block)
+                logger.info("Skipping %s: no members passed calibration QA", block)
                 continue
             if directory is not None:
                 save_calibration_exposures(
